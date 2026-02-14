@@ -220,6 +220,7 @@ export class StartMenu {
   private readonly rankingsStatusHeadline: HTMLDivElement;
   private readonly rankingsStatusDetail: HTMLPreElement;
   private readonly rankingsRefreshButton: HTMLButtonElement;
+  private readonly localModeOptionsLabel: HTMLDivElement;
   private readonly localModeButton: HTMLButtonElement;
   private readonly p1CharacterButton: HTMLButtonElement;
   private readonly p2CharacterButton: HTMLButtonElement;
@@ -516,6 +517,8 @@ export class StartMenu {
       this.refreshLocalRows();
     });
     this.localModeButton = localModeRow.button;
+    this.localModeOptionsLabel = document.createElement('div');
+    this.localModeOptionsLabel.className = 'start-mode-options';
 
     const localP1Row = this.createActionRow('', () => {
       this.shiftCharacter('P1', 1);
@@ -537,7 +540,15 @@ export class StartMenu {
       this.setScreen('main');
     });
 
-    this.localPanel.append(localModeRow.row, localP1Row.row, localP2Row.row, this.localCharacterList, localStartRow.row, localBackRow.row);
+    this.localPanel.append(
+      localModeRow.row,
+      this.localModeOptionsLabel,
+      localP1Row.row,
+      localP2Row.row,
+      this.localCharacterList,
+      localStartRow.row,
+      localBackRow.row,
+    );
     this.registerRows('local', [localModeRow.row, localP1Row.row, localP2Row.row, localStartRow.row, localBackRow.row]);
 
     const replayStatusPanel = this.createStatusPanel('Replay Archive');
@@ -937,6 +948,9 @@ export class StartMenu {
 
   private refreshLocalRows(): void {
     this.localModeButton.textContent = `Mode: ${MODE_LABELS[this.currentMode]}`;
+    this.localModeOptionsLabel.textContent = this.enabledModes
+      .map((mode) => mode === this.currentMode ? `[${MODE_LABELS[mode]}]` : MODE_LABELS[mode])
+      .join('  |  ');
 
     const p1 = CHARACTER_BY_ID[this.currentLoadout.P1];
     const p2 = CHARACTER_BY_ID[this.currentLoadout.P2];

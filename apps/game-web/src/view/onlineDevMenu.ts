@@ -1,4 +1,4 @@
-type OnlineDevSectionId = 'matchmaking' | 'rooms' | 'replay' | 'ranked';
+type OnlineDevSectionId = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
 type QueueType = 'unranked' | 'ranked';
 type RegionId = 'us-east' | 'us-west' | 'eu-west' | 'ap-southeast';
 type ConnectionPath = 'direct' | 'relay' | 'unknown';
@@ -215,6 +215,87 @@ interface RankedProgressionView {
   recentDeltas: RankedMatchDeltaView[];
 }
 
+interface AccountIdentityView {
+  provider: 'web' | 'steam' | string;
+  provider_user_id: string;
+  created_at: string;
+}
+
+interface AccountView {
+  id: string;
+  status: string;
+  identities: AccountIdentityView[];
+}
+
+interface ProfileView {
+  account_id: string;
+  display_name: string | null;
+  settings_json: Record<string, unknown>;
+  updated_at: string;
+}
+
+interface FriendPresenceView {
+  accountId: string;
+  displayName: string | null;
+  status: 'online' | 'away' | 'offline' | string;
+  activity: {
+    type: string;
+    queueType?: 'ranked' | 'unranked';
+    inRoom?: boolean;
+  };
+  updatedAt: string | null;
+  isOnline: boolean;
+}
+
+interface FriendPresenceResponseView {
+  friends: FriendPresenceView[];
+  count: number;
+}
+
+interface FriendRequestView {
+  request_id: number;
+  requester_account_id: string;
+  target_account_id: string;
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'blocked' | string;
+  direction: 'incoming' | 'outgoing' | string;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+  responded_at: string | null;
+}
+
+interface FriendRequestsResponseView {
+  requests: FriendRequestView[];
+  count: number;
+}
+
+interface FriendInviteView {
+  inviteId: string;
+  fromAccountId: string;
+  toAccountId: string;
+  context: {
+    type: 'queue' | 'room';
+    queueType?: 'ranked' | 'unranked';
+    roomCode?: string;
+  };
+  payload: {
+    roomCode: string | null;
+    queueType: 'ranked' | 'unranked' | null;
+    deepLinks: {
+      web: string;
+      steam: string;
+    };
+  };
+  createdAt: string;
+  expiresAt: string;
+  fromDisplayName?: string | null;
+}
+
+interface FriendInvitesResponseView {
+  invites: FriendInviteView[];
+  count: number;
+}
+
 const QUEUE_TYPES: QueueType[] = ['unranked', 'ranked'];
 const REGION_IDS: RegionId[] = ['us-east', 'us-west', 'eu-west', 'ap-southeast'];
 
@@ -242,6 +323,12 @@ const SECTIONS: OnlineDevSection[] = [
     title: 'Ranked',
     summary: 'Inspect ranked progression and recent result deltas from API or profile fallback.',
     status: 'S2.25 ready',
+  },
+  {
+    id: 'social',
+    title: 'Social',
+    summary: 'Inspect account identity state, friends, requests, and friend invite actions in one panel.',
+    status: 'S2.31 ready',
   },
 ];
 
@@ -348,6 +435,28 @@ export class OnlineDevMenu {
   private readonly rankedErrorElement: HTMLDivElement;
   private readonly rankedProgressOutput: HTMLPreElement;
   private readonly rankedDeltaOutput: HTMLPreElement;
+  private readonly socialPanel: HTMLDivElement;
+  private readonly socialRequestTargetInput: HTMLInputElement;
+  private readonly socialRequestIdInput: HTMLInputElement;
+  private readonly socialRequestFilterSelect: HTMLSelectElement;
+  private readonly socialInviteTargetInput: HTMLInputElement;
+  private readonly socialInviteContextSelect: HTMLSelectElement;
+  private readonly socialInviteQueueSelect: HTMLSelectElement;
+  private readonly socialInviteRoomCodeInput: HTMLInputElement;
+  private readonly socialInviteIdInput: HTMLInputElement;
+  private readonly socialRefreshButton: HTMLButtonElement;
+  private readonly socialSendRequestButton: HTMLButtonElement;
+  private readonly socialAcceptRequestButton: HTMLButtonElement;
+  private readonly socialDeclineRequestButton: HTMLButtonElement;
+  private readonly socialCancelRequestButton: HTMLButtonElement;
+  private readonly socialSendInviteButton: HTMLButtonElement;
+  private readonly socialCancelInviteButton: HTMLButtonElement;
+  private readonly socialStatusElement: HTMLDivElement;
+  private readonly socialErrorElement: HTMLDivElement;
+  private readonly socialAccountOutput: HTMLPreElement;
+  private readonly socialFriendsOutput: HTMLPreElement;
+  private readonly socialRequestsOutput: HTMLPreElement;
+  private readonly socialInvitesOutput: HTMLPreElement;
   private selectedIndex = 0;
   private rafId = 0;
   private pollIntervalId: number | null = null;
@@ -355,6 +464,7 @@ export class OnlineDevMenu {
   private pendingRoomRequest = false;
   private pendingReplayRequest = false;
   private pendingRankedRequest = false;
+  private pendingSocialRequest = false;
   private ticket: QueueTicketView | null = null;
   private session: MatchSessionView | null = null;
   private room: RoomView | null = null;
@@ -362,6 +472,11 @@ export class OnlineDevMenu {
   private replayNextCursor: string | null = null;
   private replayActiveFilters: ReplaySearchFiltersInput | null = null;
   private rankedProgression: RankedProgressionView | null = null;
+  private socialAccount: AccountView | null = null;
+  private socialProfile: ProfileView | null = null;
+  private socialFriends: FriendPresenceView[] = [];
+  private socialRequests: FriendRequestView[] = [];
+  private socialInvites: FriendInviteView[] = [];
   private invitePreview: { web: RoomInviteView | null; steam: RoomInviteView | null } = {
     web: null,
     steam: null,
@@ -918,7 +1033,216 @@ export class OnlineDevMenu {
     this.rankedDeltaOutput = rankedDeltaPanel.output;
     rankedOutputs.appendChild(rankedDeltaPanel.root);
 
-    this.sectionBody.append(this.matchmakingPanel, this.roomsPanel, this.replayPanel, this.rankedPanel);
+    this.socialPanel = document.createElement('div');
+    this.socialPanel.className = 'online-dev-social';
+    this.socialPanel.hidden = true;
+
+    const socialControlGrid = document.createElement('div');
+    socialControlGrid.className = 'online-dev-controls';
+    this.socialPanel.appendChild(socialControlGrid);
+
+    const socialRequestTargetLabel = document.createElement('label');
+    socialRequestTargetLabel.className = 'online-dev-control';
+    socialRequestTargetLabel.textContent = 'Friend target account id';
+    this.socialRequestTargetInput = document.createElement('input');
+    this.socialRequestTargetInput.type = 'text';
+    this.socialRequestTargetInput.placeholder = 'UUID for request/invite actions';
+    this.socialRequestTargetInput.addEventListener('input', () => {
+      this.updateSocialControlState();
+    });
+    socialRequestTargetLabel.appendChild(this.socialRequestTargetInput);
+    socialControlGrid.appendChild(socialRequestTargetLabel);
+
+    const socialRequestIdLabel = document.createElement('label');
+    socialRequestIdLabel.className = 'online-dev-control';
+    socialRequestIdLabel.textContent = 'Friend request id';
+    this.socialRequestIdInput = document.createElement('input');
+    this.socialRequestIdInput.type = 'text';
+    this.socialRequestIdInput.placeholder = 'Use with accept/decline/cancel request';
+    this.socialRequestIdInput.addEventListener('input', () => {
+      this.updateSocialControlState();
+    });
+    socialRequestIdLabel.appendChild(this.socialRequestIdInput);
+    socialControlGrid.appendChild(socialRequestIdLabel);
+
+    const socialRequestFilterLabel = document.createElement('label');
+    socialRequestFilterLabel.className = 'online-dev-control';
+    socialRequestFilterLabel.textContent = 'Request history filter';
+    this.socialRequestFilterSelect = document.createElement('select');
+    for (const optionValue of ['', 'pending', 'accepted', 'declined', 'cancelled', 'blocked']) {
+      const option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionValue || 'all statuses';
+      this.socialRequestFilterSelect.appendChild(option);
+    }
+    socialRequestFilterLabel.appendChild(this.socialRequestFilterSelect);
+    socialControlGrid.appendChild(socialRequestFilterLabel);
+
+    const socialInviteTargetLabel = document.createElement('label');
+    socialInviteTargetLabel.className = 'online-dev-control';
+    socialInviteTargetLabel.textContent = 'Invite target account id';
+    this.socialInviteTargetInput = document.createElement('input');
+    this.socialInviteTargetInput.type = 'text';
+    this.socialInviteTargetInput.placeholder = 'Friend account UUID';
+    this.socialInviteTargetInput.addEventListener('input', () => {
+      this.updateSocialControlState();
+    });
+    socialInviteTargetLabel.appendChild(this.socialInviteTargetInput);
+    socialControlGrid.appendChild(socialInviteTargetLabel);
+
+    const socialInviteContextLabel = document.createElement('label');
+    socialInviteContextLabel.className = 'online-dev-control';
+    socialInviteContextLabel.textContent = 'Invite context';
+    this.socialInviteContextSelect = document.createElement('select');
+    for (const optionValue of ['queue', 'room'] as const) {
+      const option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionValue;
+      this.socialInviteContextSelect.appendChild(option);
+    }
+    this.socialInviteContextSelect.addEventListener('change', () => {
+      this.updateSocialControlState();
+    });
+    socialInviteContextLabel.appendChild(this.socialInviteContextSelect);
+    socialControlGrid.appendChild(socialInviteContextLabel);
+
+    const socialInviteQueueLabel = document.createElement('label');
+    socialInviteQueueLabel.className = 'online-dev-control';
+    socialInviteQueueLabel.textContent = 'Queue type (queue invite)';
+    this.socialInviteQueueSelect = document.createElement('select');
+    for (const queueType of QUEUE_TYPES) {
+      const option = document.createElement('option');
+      option.value = queueType;
+      option.textContent = queueType;
+      this.socialInviteQueueSelect.appendChild(option);
+    }
+    socialInviteQueueLabel.appendChild(this.socialInviteQueueSelect);
+    socialControlGrid.appendChild(socialInviteQueueLabel);
+
+    const socialInviteRoomCodeLabel = document.createElement('label');
+    socialInviteRoomCodeLabel.className = 'online-dev-control';
+    socialInviteRoomCodeLabel.textContent = 'Room code (room invite)';
+    this.socialInviteRoomCodeInput = document.createElement('input');
+    this.socialInviteRoomCodeInput.type = 'text';
+    this.socialInviteRoomCodeInput.maxLength = 12;
+    this.socialInviteRoomCodeInput.placeholder = 'AB12CD';
+    this.socialInviteRoomCodeInput.addEventListener('input', () => {
+      this.updateSocialControlState();
+    });
+    socialInviteRoomCodeLabel.appendChild(this.socialInviteRoomCodeInput);
+    socialControlGrid.appendChild(socialInviteRoomCodeLabel);
+
+    const socialInviteIdLabel = document.createElement('label');
+    socialInviteIdLabel.className = 'online-dev-control';
+    socialInviteIdLabel.textContent = 'Invite id';
+    this.socialInviteIdInput = document.createElement('input');
+    this.socialInviteIdInput.type = 'text';
+    this.socialInviteIdInput.placeholder = 'Use for cancel invite';
+    this.socialInviteIdInput.addEventListener('input', () => {
+      this.updateSocialControlState();
+    });
+    socialInviteIdLabel.appendChild(this.socialInviteIdInput);
+    socialControlGrid.appendChild(socialInviteIdLabel);
+
+    const socialActions = document.createElement('div');
+    socialActions.className = 'online-dev-actions';
+
+    this.socialRefreshButton = document.createElement('button');
+    this.socialRefreshButton.type = 'button';
+    this.socialRefreshButton.className = 'online-dev-action';
+    this.socialRefreshButton.textContent = 'Refresh Social Snapshot';
+    this.socialRefreshButton.addEventListener('click', () => {
+      void this.refreshSocialSnapshot();
+    });
+    socialActions.appendChild(this.socialRefreshButton);
+
+    this.socialSendRequestButton = document.createElement('button');
+    this.socialSendRequestButton.type = 'button';
+    this.socialSendRequestButton.className = 'online-dev-action';
+    this.socialSendRequestButton.textContent = 'Send Friend Request';
+    this.socialSendRequestButton.addEventListener('click', () => {
+      void this.sendFriendRequest();
+    });
+    socialActions.appendChild(this.socialSendRequestButton);
+
+    this.socialAcceptRequestButton = document.createElement('button');
+    this.socialAcceptRequestButton.type = 'button';
+    this.socialAcceptRequestButton.className = 'online-dev-action';
+    this.socialAcceptRequestButton.textContent = 'Accept Request';
+    this.socialAcceptRequestButton.addEventListener('click', () => {
+      void this.acceptFriendRequest();
+    });
+    socialActions.appendChild(this.socialAcceptRequestButton);
+
+    this.socialDeclineRequestButton = document.createElement('button');
+    this.socialDeclineRequestButton.type = 'button';
+    this.socialDeclineRequestButton.className = 'online-dev-action';
+    this.socialDeclineRequestButton.textContent = 'Decline Request';
+    this.socialDeclineRequestButton.addEventListener('click', () => {
+      void this.declineFriendRequest();
+    });
+    socialActions.appendChild(this.socialDeclineRequestButton);
+
+    this.socialCancelRequestButton = document.createElement('button');
+    this.socialCancelRequestButton.type = 'button';
+    this.socialCancelRequestButton.className = 'online-dev-action';
+    this.socialCancelRequestButton.textContent = 'Cancel Request';
+    this.socialCancelRequestButton.addEventListener('click', () => {
+      void this.cancelFriendRequest();
+    });
+    socialActions.appendChild(this.socialCancelRequestButton);
+
+    this.socialSendInviteButton = document.createElement('button');
+    this.socialSendInviteButton.type = 'button';
+    this.socialSendInviteButton.className = 'online-dev-action';
+    this.socialSendInviteButton.textContent = 'Send Friend Invite';
+    this.socialSendInviteButton.addEventListener('click', () => {
+      void this.sendFriendInvite();
+    });
+    socialActions.appendChild(this.socialSendInviteButton);
+
+    this.socialCancelInviteButton = document.createElement('button');
+    this.socialCancelInviteButton.type = 'button';
+    this.socialCancelInviteButton.className = 'online-dev-action';
+    this.socialCancelInviteButton.textContent = 'Cancel Invite';
+    this.socialCancelInviteButton.addEventListener('click', () => {
+      void this.cancelFriendInvite();
+    });
+    socialActions.appendChild(this.socialCancelInviteButton);
+
+    this.socialPanel.appendChild(socialActions);
+
+    this.socialStatusElement = document.createElement('div');
+    this.socialStatusElement.className = 'online-dev-status';
+    this.socialStatusElement.textContent = 'Ready. Load social snapshot.';
+    this.socialPanel.appendChild(this.socialStatusElement);
+
+    this.socialErrorElement = document.createElement('div');
+    this.socialErrorElement.className = 'online-dev-error';
+    this.socialErrorElement.hidden = true;
+    this.socialPanel.appendChild(this.socialErrorElement);
+
+    const socialOutputs = document.createElement('div');
+    socialOutputs.className = 'online-dev-outputs';
+    this.socialPanel.appendChild(socialOutputs);
+
+    const socialAccountPanel = this.createOutputPanel('Account and identities');
+    this.socialAccountOutput = socialAccountPanel.output;
+    socialOutputs.appendChild(socialAccountPanel.root);
+
+    const socialFriendsPanel = this.createOutputPanel('Friends and presence');
+    this.socialFriendsOutput = socialFriendsPanel.output;
+    socialOutputs.appendChild(socialFriendsPanel.root);
+
+    const socialRequestsPanel = this.createOutputPanel('Friend requests');
+    this.socialRequestsOutput = socialRequestsPanel.output;
+    socialOutputs.appendChild(socialRequestsPanel.root);
+
+    const socialInvitesPanel = this.createOutputPanel('Incoming invites');
+    this.socialInvitesOutput = socialInvitesPanel.output;
+    socialOutputs.appendChild(socialInvitesPanel.root);
+
+    this.sectionBody.append(this.matchmakingPanel, this.roomsPanel, this.replayPanel, this.rankedPanel, this.socialPanel);
 
     const hint = document.createElement('p');
     hint.className = 'online-dev-hint';
@@ -946,6 +1270,8 @@ export class OnlineDevMenu {
     this.updateRoomControlState();
     this.updateReplayControlState();
     this.updateRankedControlState();
+    this.renderSocialData();
+    this.updateSocialControlState();
     window.addEventListener('keydown', this.keydownHandler);
     this.pollGamepads();
   }
@@ -957,6 +1283,9 @@ export class OnlineDevMenu {
     this.setSelectedIndex(this.selectedIndex);
     this.ensurePolling();
     this.emitDiagnosticsUpdate();
+    if (!this.socialAccount && !this.pendingSocialRequest) {
+      void this.refreshSocialSnapshot();
+    }
   }
 
   public hide(): void {
@@ -1012,6 +1341,7 @@ export class OnlineDevMenu {
     this.roomsPanel.hidden = section.id !== 'rooms';
     this.replayPanel.hidden = section.id !== 'replay';
     this.rankedPanel.hidden = section.id !== 'ranked';
+    this.socialPanel.hidden = section.id !== 'social';
   }
 
   private getSelectedRegions(): RegionId[] {
@@ -1099,6 +1429,33 @@ export class OnlineDevMenu {
     this.rankedStatusElement.textContent = message;
   }
 
+  private setSocialError(message: string | null): void {
+    if (!message) {
+      this.socialErrorElement.hidden = true;
+      this.socialErrorElement.textContent = '';
+      return;
+    }
+    this.socialErrorElement.hidden = false;
+    this.socialErrorElement.textContent = message;
+  }
+
+  private setSocialStatus(message: string): void {
+    this.socialStatusElement.textContent = message;
+  }
+
+  private resolveRequestIdInput(): number | null {
+    const value = this.socialRequestIdInput.value.trim();
+    if (!value) {
+      return null;
+    }
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  private resolveInviteContextType(): 'queue' | 'room' {
+    return this.socialInviteContextSelect.value === 'room' ? 'room' : 'queue';
+  }
+
   private updateControlState(): void {
     const hasTicket = this.ticket !== null;
     this.joinButton.disabled = this.pendingMatchmakingRequest;
@@ -1154,6 +1511,37 @@ export class OnlineDevMenu {
     const busy = this.pendingRankedRequest;
     this.rankedSeasonInput.disabled = busy;
     this.rankedRefreshButton.disabled = busy;
+  }
+
+  private updateSocialControlState(): void {
+    const busy = this.pendingSocialRequest;
+    const contextType = this.resolveInviteContextType();
+    const requestId = this.resolveRequestIdInput();
+    const inviteId = this.socialInviteIdInput.value.trim();
+    const requestTarget = this.socialRequestTargetInput.value.trim();
+    const inviteTarget = this.socialInviteTargetInput.value.trim() || requestTarget;
+    const inviteRoomCode = this.socialInviteRoomCodeInput.value.trim()
+      || this.resolveRoomCode()
+      || this.room?.roomCode
+      || '';
+    const canSendInvite = inviteTarget.length > 0 && (contextType === 'queue' || inviteRoomCode.length > 0);
+
+    this.socialRequestTargetInput.disabled = busy;
+    this.socialRequestIdInput.disabled = busy;
+    this.socialRequestFilterSelect.disabled = busy;
+    this.socialInviteTargetInput.disabled = busy;
+    this.socialInviteContextSelect.disabled = busy;
+    this.socialInviteQueueSelect.disabled = busy || contextType !== 'queue';
+    this.socialInviteRoomCodeInput.disabled = busy || contextType !== 'room';
+    this.socialInviteIdInput.disabled = busy;
+
+    this.socialRefreshButton.disabled = busy;
+    this.socialSendRequestButton.disabled = busy || requestTarget.length === 0;
+    this.socialAcceptRequestButton.disabled = busy || requestId === null;
+    this.socialDeclineRequestButton.disabled = busy || requestId === null;
+    this.socialCancelRequestButton.disabled = busy || requestId === null;
+    this.socialSendInviteButton.disabled = busy || !canSendInvite;
+    this.socialCancelInviteButton.disabled = busy || inviteId.length === 0;
   }
 
   private renderMatchmakingData(): void {
@@ -1311,6 +1699,43 @@ export class OnlineDevMenu {
     );
   }
 
+  private renderSocialData(): void {
+    if (!this.socialAccount) {
+      this.socialAccountOutput.textContent = stableStringify({
+        message: 'No social snapshot loaded. Click "Refresh Social Snapshot".',
+      });
+    } else {
+      const identities = this.socialAccount.identities ?? [];
+      const providers = [...new Set(identities.map((identity) => identity.provider))];
+      this.socialAccountOutput.textContent = stableStringify({
+        accountId: this.socialAccount.id,
+        accountStatus: this.socialAccount.status,
+        signInState: providers.length > 0 ? 'authenticated' : 'guest',
+        linkedProviders: providers,
+        displayName: this.socialProfile?.display_name ?? null,
+        identities: identities.length > 0
+          ? identities
+          : [{ message: 'No linked identities. Use home menu Account action to sign in.' }],
+      });
+    }
+
+    this.socialFriendsOutput.textContent = stableStringify(
+      this.socialFriends.length > 0
+        ? this.socialFriends
+        : [{ message: 'No friends yet. Send a friend request by account id to get started.' }],
+    );
+    this.socialRequestsOutput.textContent = stableStringify(
+      this.socialRequests.length > 0
+        ? this.socialRequests
+        : [{ message: 'No friend requests in the selected filter.' }],
+    );
+    this.socialInvitesOutput.textContent = stableStringify(
+      this.socialInvites.length > 0
+        ? this.socialInvites
+        : [{ message: 'No incoming invites. Ask a friend to send a queue or room invite.' }],
+    );
+  }
+
   private async runMatchmakingAction(action: () => Promise<void>): Promise<void> {
     if (this.pendingMatchmakingRequest) {
       return;
@@ -1385,6 +1810,25 @@ export class OnlineDevMenu {
       this.pendingRankedRequest = false;
       this.updateRankedControlState();
       this.renderRankedData();
+    }
+  }
+
+  private async runSocialAction(action: () => Promise<void>): Promise<void> {
+    if (this.pendingSocialRequest) {
+      return;
+    }
+    this.pendingSocialRequest = true;
+    this.setSocialError(null);
+    this.updateSocialControlState();
+    try {
+      await action();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected request failure.';
+      this.setSocialError(message);
+    } finally {
+      this.pendingSocialRequest = false;
+      this.updateSocialControlState();
+      this.renderSocialData();
     }
   }
 
@@ -2078,6 +2522,168 @@ export class OnlineDevMenu {
     });
   }
 
+  private async refreshSocialSnapshot(): Promise<void> {
+    await this.runSocialAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setSocialError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      await this.refreshSocialSnapshotInternal(accountId);
+    });
+  }
+
+  private async refreshSocialSnapshotInternal(accountId: string): Promise<void> {
+    this.setSocialStatus('Loading social snapshot...');
+    const requestFilter = OnlineDevMenu.valueOrNull(this.socialRequestFilterSelect.value);
+    const requestPath = requestFilter
+      ? `/friends/requests?status=${encodeURIComponent(requestFilter)}`
+      : '/friends/requests';
+
+    const [account, profile, friendsPresence, requests, invites] = await Promise.all([
+      this.requestJson<AccountView>('GET', `/accounts/${accountId}`, accountId),
+      this.requestJson<ProfileView>('GET', '/profile', accountId),
+      this.requestJson<FriendPresenceResponseView>('GET', '/friends/presence', accountId),
+      this.requestJson<FriendRequestsResponseView>('GET', requestPath, accountId),
+      this.requestJson<FriendInvitesResponseView>('GET', '/friends/invites', accountId),
+    ]);
+
+    this.socialAccount = account;
+    this.socialProfile = profile;
+    this.socialFriends = Array.isArray(friendsPresence.friends) ? friendsPresence.friends : [];
+    this.socialRequests = Array.isArray(requests.requests) ? requests.requests : [];
+    this.socialInvites = Array.isArray(invites.invites) ? invites.invites : [];
+    this.setSocialStatus(
+      `Loaded social snapshot (${this.socialFriends.length} friends, ${this.socialRequests.length} requests, ${this.socialInvites.length} invites).`,
+    );
+  }
+
+  private async sendFriendRequest(): Promise<void> {
+    await this.runSocialAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setSocialError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      const targetAccountId = this.socialRequestTargetInput.value.trim();
+      if (!targetAccountId) {
+        throw new Error('Friend target account id is required.');
+      }
+      await this.requestJson<unknown>(
+        'POST',
+        '/friends/requests/send',
+        accountId,
+        {
+          targetAccountId,
+        },
+      );
+      this.socialInviteTargetInput.value = targetAccountId;
+      this.setSocialStatus('Friend request sent.');
+      await this.refreshSocialSnapshotInternal(accountId);
+    });
+  }
+
+  private async acceptFriendRequest(): Promise<void> {
+    await this.updateFriendRequestStatus('accept');
+  }
+
+  private async declineFriendRequest(): Promise<void> {
+    await this.updateFriendRequestStatus('decline');
+  }
+
+  private async cancelFriendRequest(): Promise<void> {
+    await this.updateFriendRequestStatus('cancel');
+  }
+
+  private async updateFriendRequestStatus(action: 'accept' | 'decline' | 'cancel'): Promise<void> {
+    await this.runSocialAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setSocialError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      const requestId = this.resolveRequestIdInput();
+      if (requestId === null) {
+        throw new Error('Friend request id must be a positive integer.');
+      }
+      await this.requestJson<unknown>(
+        'POST',
+        `/friends/requests/${requestId}/${action}`,
+        accountId,
+      );
+      const actionLabel = action === 'accept'
+        ? 'accepted'
+        : action === 'decline'
+          ? 'declined'
+          : 'cancelled';
+      this.setSocialStatus(`Friend request ${requestId} ${actionLabel}.`);
+      await this.refreshSocialSnapshotInternal(accountId);
+    });
+  }
+
+  private async sendFriendInvite(): Promise<void> {
+    await this.runSocialAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setSocialError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      const targetAccountId = this.socialInviteTargetInput.value.trim() || this.socialRequestTargetInput.value.trim();
+      if (!targetAccountId) {
+        throw new Error('Invite target account id is required.');
+      }
+      const contextType = this.resolveInviteContextType();
+      const body: Record<string, unknown> = {
+        targetAccountId,
+        contextType,
+      };
+      if (contextType === 'queue') {
+        body.queueType = this.socialInviteQueueSelect.value;
+      } else {
+        const roomCode = this.socialInviteRoomCodeInput.value.trim().toUpperCase()
+          || this.resolveRoomCode()
+          || this.room?.roomCode
+          || '';
+        if (!roomCode) {
+          throw new Error('Room code is required for room invites.');
+        }
+        body.roomCode = roomCode;
+        this.socialInviteRoomCodeInput.value = roomCode;
+      }
+
+      const invite = await this.requestJson<FriendInviteView>(
+        'POST',
+        '/friends/invites/send',
+        accountId,
+        body,
+      );
+      this.socialInviteIdInput.value = invite.inviteId;
+      this.setSocialStatus(`Sent ${contextType} invite ${invite.inviteId}.`);
+      await this.refreshSocialSnapshotInternal(accountId);
+    });
+  }
+
+  private async cancelFriendInvite(): Promise<void> {
+    await this.runSocialAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setSocialError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      const inviteId = this.socialInviteIdInput.value.trim();
+      if (!inviteId) {
+        throw new Error('Invite id is required to cancel invite.');
+      }
+      await this.requestJson<unknown>(
+        'POST',
+        `/friends/invites/${inviteId}/cancel`,
+        accountId,
+      );
+      this.setSocialStatus(`Cancelled invite ${inviteId}.`);
+      await this.refreshSocialSnapshotInternal(accountId);
+    });
+  }
+
   private wasPressed(padIndex: number, state: PadState, key: keyof PadState): boolean {
     const previous = this.prevPadStateByIndex.get(padIndex);
     return state[key] && !previous?.[key];
@@ -2115,3 +2721,6 @@ export class OnlineDevMenu {
 export function createOnlineDevMenu(options: OnlineDevMenuOptions): OnlineDevMenu {
   return new OnlineDevMenu(options);
 }
+    this.socialRequestFilterSelect.addEventListener('change', () => {
+      this.updateSocialControlState();
+    });

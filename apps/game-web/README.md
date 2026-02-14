@@ -48,11 +48,12 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 ## Online Dev menu shell
 
 - `VITE_FEATURE_ONLINE_DEV_MENU=true` enables an in-game Online Dev shell menu in web dev/staging builds.
-- The shell provides keyboard/controller section navigation for `Matchmaking`, `Rooms`, `Replay`, and `Ranked`.
+- The shell provides keyboard/controller section navigation for `Matchmaking`, `Rooms`, `Replay`, `Ranked`, and `Social`.
 - Matchmaking panel supports queue join/leave and live ticket/session polling with reconnect debug fields.
 - Rooms panel supports create/join/refresh/lock/spectator/start/rematch/close flows with invite payload previews and room phase/history inspection.
 - Replay panel supports player/opponent/character/matchup/queue/date/patch filters, cursor-paginated search, and direct replay payload launch into replay review.
 - Ranked panel supports progression snapshot inspection (rating/league/LP/MR/provisional) with recent pre/post delta rows and profile-settings fallback when ranked APIs are unavailable.
+- Social panel supports account sign-in state and linked identities, friend presence list, request history/actions, and queue/room invite send/cancel actions with explicit empty-state guidance.
 - `VITE_FEATURE_ONLINE_DIAGNOSTICS=true` enables a live diagnostics overlay with rollback/network/session counters and `Export JSON` capture.
 
 ## Web auth flow (prototype)

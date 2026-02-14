@@ -441,7 +441,8 @@ html, body {
 .online-dev-matchmaking,
 .online-dev-rooms,
 .online-dev-replay,
-.online-dev-ranked {
+.online-dev-ranked,
+.online-dev-social {
   display: flex;
   flex-direction: column;
   gap: 10px;

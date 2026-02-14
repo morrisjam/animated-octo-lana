@@ -105,6 +105,13 @@ interface MatchStartPayload {
   queueType: QueueType;
   region: RegionId;
   createdAt: string;
+  diagnostics?: {
+    skillTrack?: 'unranked' | 'rating' | 'master';
+    expectedGap?: number | null;
+    matchedGap?: number | null;
+    waitSeconds?: number;
+    regionConstraintRelaxed?: boolean;
+  };
 }
 
 interface QueueTicketView {
@@ -179,6 +186,21 @@ interface RankedProgressionView {
   leaguePoints: number | null;
   mrPoints: number | null;
   provisional: boolean | null;
+  placement: {
+    calibrationMatchesPlayed: number | null;
+    calibrationMatchesRequired: number | null;
+    calibrationMatchesRemaining: number | null;
+  } | null;
+  recentDeltas: Array<{
+    result: string | null;
+    preRating: number | null;
+    postRating: number | null;
+    preLeaguePoints: number | null;
+    postLeaguePoints: number | null;
+    preMrPoints: number | null;
+    postMrPoints: number | null;
+    occurredAt: string | null;
+  }>;
   updatedAt: string | null;
 }
 
@@ -346,9 +368,13 @@ function toRankedViewState(ticket: QueueTicketView | null, session: MatchSession
     const participantLine = session?.participants?.length
       ? `Participants: ${session.participants.map((item) => item.accountId).join(', ')}`
       : 'Participants: pending';
+    const diagnostics = ticket.matchStart?.diagnostics;
+    const diagnosticsLine = diagnostics
+      ? `Band: ${diagnostics.skillTrack ?? 'n/a'} | Gap: ${diagnostics.matchedGap ?? 'n/a'} / ${diagnostics.expectedGap ?? 'n/a'}`
+      : 'Band: pending';
     return {
       headline: 'Match found',
-      detail: `Ticket: ${ticket.ticketId}\nSession: ${ticket.matchStart?.sessionId ?? session?.sessionId ?? 'pending'}\n${participantLine}`,
+      detail: `Ticket: ${ticket.ticketId}\nSession: ${ticket.matchStart?.sessionId ?? session?.sessionId ?? 'pending'}\n${participantLine}\n${diagnosticsLine}`,
     };
   }
   return {
@@ -570,12 +596,106 @@ function booleanOrNull(value: unknown): boolean | null {
   return null;
 }
 
+function parseRankedDelta(payload: unknown): RankedProgressionView['recentDeltas'][number] | null {
+  const row = asRecord(payload);
+  if (!row) {
+    return null;
+  }
+  return {
+    result: stringOrNull(row.result),
+    preRating: numberOrNull(row.preRating) ?? numberOrNull(row.ratingBefore),
+    postRating: numberOrNull(row.postRating) ?? numberOrNull(row.ratingAfter),
+    preLeaguePoints: numberOrNull(row.preLeaguePoints) ?? numberOrNull(row.leaguePointsBefore),
+    postLeaguePoints: numberOrNull(row.postLeaguePoints) ?? numberOrNull(row.leaguePointsAfter),
+    preMrPoints: numberOrNull(row.preMrPoints) ?? numberOrNull(row.mrPointsBefore),
+    postMrPoints: numberOrNull(row.postMrPoints) ?? numberOrNull(row.mrPointsAfter),
+    occurredAt: stringOrNull(row.occurredAt),
+  };
+}
+
+function formatSigned(value: number | null): string {
+  if (value === null) {
+    return 'n/a';
+  }
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function buildRankedTrendLine(snapshot: RankedProgressionView): string {
+  if (snapshot.recentDeltas.length === 0) {
+    return 'Trend: no recent ranked deltas yet.';
+  }
+  let wins = 0;
+  let losses = 0;
+  let draws = 0;
+  let forfeits = 0;
+  let ratingDeltaTotal = 0;
+  let ratingSamples = 0;
+  let mrDeltaTotal = 0;
+  let mrSamples = 0;
+  for (const delta of snapshot.recentDeltas) {
+    if (delta.result === 'win') {
+      wins += 1;
+    } else if (delta.result === 'loss') {
+      losses += 1;
+    } else if (delta.result === 'draw') {
+      draws += 1;
+    } else if (delta.result === 'forfeit') {
+      forfeits += 1;
+    }
+    if (delta.preRating !== null && delta.postRating !== null) {
+      ratingDeltaTotal += delta.postRating - delta.preRating;
+      ratingSamples += 1;
+    }
+    if (delta.preMrPoints !== null && delta.postMrPoints !== null) {
+      mrDeltaTotal += delta.postMrPoints - delta.preMrPoints;
+      mrSamples += 1;
+    }
+  }
+  const ratingDeltaLabel = ratingSamples > 0 ? formatSigned(ratingDeltaTotal) : 'n/a';
+  const mrDeltaLabel = mrSamples > 0 ? formatSigned(mrDeltaTotal) : 'n/a';
+  return `Trend (last ${snapshot.recentDeltas.length}): ${wins}W-${losses}L-${draws}D-${forfeits}F | Rating ${ratingDeltaLabel} | MR ${mrDeltaLabel}`;
+}
+
+function buildPromotionLine(snapshot: RankedProgressionView): string {
+  const tier = snapshot.leagueTier;
+  if (!tier) {
+    const placement = snapshot.placement;
+    if (!placement || placement.calibrationMatchesRequired === null || placement.calibrationMatchesPlayed === null) {
+      return 'Placement: calibration in progress.';
+    }
+    return `Placement: ${placement.calibrationMatchesPlayed}/${placement.calibrationMatchesRequired} calibration matches complete.`;
+  }
+  if (tier === 'Platinum') {
+    return snapshot.mrPoints !== null
+      ? `Master Track: active at MR ${snapshot.mrPoints}.`
+      : 'Master Track: reach master entry threshold to unlock MR.';
+  }
+  const points = snapshot.leaguePoints ?? 0;
+  const pointsToPromotion = Math.max(1, 100 - points);
+  const nextTierByTier: Record<string, string> = {
+    Iron: 'Bronze',
+    Bronze: 'Silver',
+    Silver: 'Gold',
+    Gold: 'Platinum',
+  };
+  const nextTier = nextTierByTier[tier] ?? 'next tier';
+  return `Promotion: ${pointsToPromotion} LP to ${nextTier}.`;
+}
+
 function parseRankedProgression(payload: unknown): RankedProgressionView | null {
   const root = asRecord(payload);
   if (!root) {
     return null;
   }
   const current = asRecord(root.current) ?? root;
+  const placementRoot = asRecord(current.placement) ?? asRecord(root.placement);
+  const recentRaw = Array.isArray(root.recentDeltas)
+    ? root.recentDeltas
+    : Array.isArray(root.recentResults)
+      ? root.recentResults
+      : Array.isArray(current.recentDeltas)
+        ? current.recentDeltas
+        : [];
   return {
     seasonId: stringOrNull(current.seasonId) ?? stringOrNull(root.seasonId),
     rating: numberOrNull(current.rating),
@@ -583,6 +703,16 @@ function parseRankedProgression(payload: unknown): RankedProgressionView | null 
     leaguePoints: numberOrNull(current.leaguePoints),
     mrPoints: numberOrNull(current.mrPoints),
     provisional: booleanOrNull(current.provisional),
+    placement: placementRoot
+      ? {
+        calibrationMatchesPlayed: numberOrNull(placementRoot.calibrationMatchesPlayed),
+        calibrationMatchesRequired: numberOrNull(placementRoot.calibrationMatchesRequired),
+        calibrationMatchesRemaining: numberOrNull(placementRoot.calibrationMatchesRemaining),
+      }
+      : null,
+    recentDeltas: recentRaw
+      .map((entry) => parseRankedDelta(entry))
+      .filter((entry): entry is RankedProgressionView['recentDeltas'][number] => entry !== null),
     updatedAt: stringOrNull(current.updatedAt) ?? stringOrNull(root.updatedAt),
   };
 }
@@ -595,9 +725,18 @@ function toRankedSnapshotViewState(snapshot: RankedProgressionView | null, sourc
     };
   }
   const sourceLabel = source === 'api' ? 'Ranked API' : 'Profile fallback';
+  const statusLine = snapshot.provisional
+    ? 'Status: Provisional placement period active.'
+    : 'Status: Placement complete.';
+  const placement = snapshot.placement;
+  const placementLine = placement && placement.calibrationMatchesRequired !== null && placement.calibrationMatchesPlayed !== null
+    ? `Calibration: ${placement.calibrationMatchesPlayed}/${placement.calibrationMatchesRequired} (${placement.calibrationMatchesRemaining ?? 'n/a'} remaining)`
+    : 'Calibration: n/a';
+  const trendLine = buildRankedTrendLine(snapshot);
+  const promotionLine = buildPromotionLine(snapshot);
   return {
-    headline: `${snapshot.leagueTier ?? 'Unranked'} | Rating ${snapshot.rating ?? 'n/a'}`,
-    detail: `Source: ${sourceLabel}\nSeason: ${snapshot.seasonId ?? 'current'}\nLeague Points: ${snapshot.leaguePoints ?? 'n/a'}\nMR Points: ${snapshot.mrPoints ?? 'n/a'}\nProvisional: ${snapshot.provisional ?? false}\nUpdated: ${snapshot.updatedAt ?? 'unknown'}`,
+    headline: `${snapshot.leagueTier ?? 'Placement'} | Rating ${snapshot.rating ?? 'n/a'}`,
+    detail: `Source: ${sourceLabel}\nSeason: ${snapshot.seasonId ?? 'current'}\n${statusLine}\n${placementLine}\nLeague Points: ${snapshot.leaguePoints ?? 'n/a'}\nMR Points: ${snapshot.mrPoints ?? 'n/a'}\n${promotionLine}\n${trendLine}\nUpdated: ${snapshot.updatedAt ?? 'unknown'}`,
   };
 }
 

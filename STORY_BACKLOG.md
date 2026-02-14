@@ -7,9 +7,9 @@
 
 ## Status snapshot (2026-02-14)
 - Tracker source: `JIRA_STORY_BACKLOG.csv`.
-- Stories marked `Done`: `30`.
-- Stories marked `Backlog`: `9`.
-- Recent status sync marked these as done: `S1.3`, `S1.10`, `S2.21`, `S2.22`, `S2.23`, `S2.24`, `S2.25`, `S2.26`, `S2.29`, `S2.30`, `S2.31`, `S2.32`, `S2.9`, `S2.7`, `S2.8`, `S2.17`, `S2.18`, `S2.19`.
+- Stories marked `Done`: `31`.
+- Stories marked `Backlog`: `8`.
+- Recent status sync marked these as done: `S1.3`, `S1.10`, `S2.21`, `S2.22`, `S2.23`, `S2.24`, `S2.25`, `S2.26`, `S2.29`, `S2.30`, `S2.31`, `S2.32`, `S2.9`, `S2.7`, `S2.8`, `S2.17`, `S2.18`, `S2.19`, `S2.20`.
 
 ## Next epic slice (recommended)
 - Epic: `E2.3 Ranked and progression`.

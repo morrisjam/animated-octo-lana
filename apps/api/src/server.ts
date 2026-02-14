@@ -50,6 +50,7 @@ import {
   getEnforcementActionState,
   type EnforcementActionType,
 } from './social/enforcementPolicy';
+import { deriveSloSummary, evaluateSloAlerts } from './ops/sloPolicy';
 import {
   evaluateRankedResultSubmission,
   type RankedResultSuspiciousReason,
@@ -83,6 +84,39 @@ app.register(cors, {
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['content-type', 'x-account-id', 'x-admin-key', 'x-admin-actor'],
+});
+
+app.addHook('onRequest', async (request) => {
+  (request as { _sloRequestStartAt?: bigint })._sloRequestStartAt = process.hrtime.bigint();
+});
+
+app.addHook('onResponse', async (request, reply) => {
+  const startedAt = (request as { _sloRequestStartAt?: bigint })._sloRequestStartAt;
+  if (!startedAt) {
+    return;
+  }
+  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+  const routePath = String(
+    (request as { routeOptions?: { url?: string } }).routeOptions?.url
+    ?? request.url.split('?')[0]
+    ?? 'unknown',
+  ).slice(0, 160);
+  try {
+    await db.query(
+      `
+      INSERT INTO service_slo_request_samples(method, route, status_code, latency_ms)
+      VALUES ($1, $2, $3, $4)
+      `,
+      [
+        request.method.toUpperCase(),
+        routePath,
+        reply.statusCode,
+        Math.max(0, Math.round(elapsedMs)),
+      ],
+    );
+  } catch (error) {
+    request.log.warn({ err: error }, 'Failed to record SLO request sample.');
+  }
 });
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -139,6 +173,10 @@ const rankedAnomalyRatingJumpThreshold = parsePositiveIntegerEnv(process.env.RAN
 const rankedAnomalyMrJumpThreshold = parsePositiveIntegerEnv(process.env.RANKED_ANOMALY_MR_JUMP_THRESHOLD) ?? 80;
 const rankedAnomalyAdminKey = process.env.RANKED_ANOMALY_ADMIN_KEY;
 const enforcementAdminKey = process.env.ENFORCEMENT_ADMIN_KEY;
+const sloAdminKey = process.env.SLO_ADMIN_KEY;
+const sloAvailabilityTargetPercent = parsePercentageEnv(process.env.SLO_AVAILABILITY_TARGET_PERCENT) ?? 99.5;
+const sloErrorRateTargetPercent = parsePercentageEnv(process.env.SLO_ERROR_RATE_TARGET_PERCENT) ?? 1;
+const sloLatencyP95TargetMs = parsePositiveIntegerEnv(process.env.SLO_LATENCY_P95_TARGET_MS) ?? 350;
 
 interface LinkIdentityBody {
   provider?: string;
@@ -387,6 +425,10 @@ interface PlayerCreateEnforcementAppealBody {
   note?: string;
 }
 
+interface SloSummaryQuery {
+  windowHours?: string;
+}
+
 function isUuid(value: string | undefined): boolean {
   if (!value) {
     return false;
@@ -419,6 +461,14 @@ function parsePositiveNumberEnv(value: string | undefined): number | undefined {
   }
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function parsePercentageEnv(value: string | undefined): number | undefined {
+  const parsed = parsePositiveNumberEnv(value);
+  if (parsed === undefined || parsed > 100) {
     return undefined;
   }
   return parsed;
@@ -4517,6 +4567,99 @@ app.get('/ranked/leaderboard', async (request, reply) => {
         mrPoints: entry.mr_points,
         provisional: entry.provisional,
         updatedAt: entry.updated_at,
+      };
+    }),
+  };
+});
+
+app.get('/ops/slo/summary', async (request, reply) => {
+  if (!sloAdminKey) {
+    reply.code(501);
+    return { error: 'SLO summary is not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (adminKey !== sloAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+
+  const query = (request.query ?? {}) as SloSummaryQuery;
+  const windowHours = parsePositiveInteger(query.windowHours) ?? (24 * 7);
+  if (windowHours > 24 * 30) {
+    reply.code(400);
+    return { error: 'windowHours must be 720 or less.' };
+  }
+  const summaryResult = await db.query(
+    `
+    SELECT
+      COUNT(*)::bigint AS total_requests,
+      COUNT(*) FILTER (WHERE status_code < 500)::bigint AS success_requests,
+      COUNT(*) FILTER (WHERE status_code >= 500)::bigint AS error_requests,
+      PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) AS latency_p95_ms
+    FROM service_slo_request_samples
+    WHERE sampled_at >= NOW() - make_interval(hours => $1::int)
+    `,
+    [windowHours],
+  );
+  const summaryRow = summaryResult.rows[0] as {
+    total_requests: string;
+    success_requests: string;
+    error_requests: string;
+    latency_p95_ms: number | string | null;
+  };
+  const summary = deriveSloSummary(
+    Number(summaryRow.total_requests ?? '0'),
+    Number(summaryRow.success_requests ?? '0'),
+    Number(summaryRow.error_requests ?? '0'),
+    summaryRow.latency_p95_ms === null ? null : Number(summaryRow.latency_p95_ms),
+  );
+  const targets = {
+    availabilityPercent: sloAvailabilityTargetPercent,
+    errorRatePercent: sloErrorRateTargetPercent,
+    latencyP95Ms: sloLatencyP95TargetMs,
+  };
+  const alerts = evaluateSloAlerts(summary, targets);
+  const routeRows = await db.query(
+    `
+    SELECT
+      method,
+      route,
+      COUNT(*)::bigint AS total_requests,
+      COUNT(*) FILTER (WHERE status_code >= 500)::bigint AS error_requests,
+      PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) AS latency_p95_ms
+    FROM service_slo_request_samples
+    WHERE sampled_at >= NOW() - make_interval(hours => $1::int)
+    GROUP BY method, route
+    ORDER BY total_requests DESC
+    LIMIT 10
+    `,
+    [windowHours],
+  );
+
+  return {
+    windowHours,
+    sampledSince: new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString(),
+    targets,
+    summary,
+    alerts,
+    escalationPolicy: {
+      on_call_immediate: 'Page primary on-call and incident channel immediately.',
+      business_hours: 'Create ops ticket and review in next operations standup.',
+    },
+    topRoutes: routeRows.rows.map((row) => {
+      const entry = row as {
+        method: string;
+        route: string;
+        total_requests: string;
+        error_requests: string;
+        latency_p95_ms: number | string | null;
+      };
+      return {
+        method: entry.method,
+        route: entry.route,
+        totalRequests: Number(entry.total_requests ?? '0'),
+        errorRequests: Number(entry.error_requests ?? '0'),
+        latencyP95Ms: entry.latency_p95_ms === null ? null : Math.round(Number(entry.latency_p95_ms)),
       };
     }),
   };

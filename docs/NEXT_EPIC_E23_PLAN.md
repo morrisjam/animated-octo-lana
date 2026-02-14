@@ -1,7 +1,7 @@
 # Next Epic Plan: E2.3 Ranked And Progression
 
 Date: 2026-02-14
-Status: in progress (`S2.9`, `S2.7`, `S2.8` complete)
+Status: in progress (`S2.9`, `S2.7`, `S2.8`, `S2.17` complete)
 
 ## Scope
 - `S2.7` Rating engine service.
@@ -35,4 +35,4 @@ Status: in progress (`S2.9`, `S2.7`, `S2.8` complete)
 - Add anti-smurf ops heuristics documentation and escalation rules.
 
 ## First concrete story to start now
-- Next start with `S2.17` (league ladder model), now that season and leaderboard APIs are in place.
+- Next start with `S2.18` (Master rating track), now that league ladder progression is in place.

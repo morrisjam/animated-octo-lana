@@ -165,7 +165,8 @@ export async function runRankedSeasonReset(
     `
       INSERT INTO ranked_season_standings(
         season_id, account_id, region, rank_position,
-        rating, matches_played, wins, losses, draws, forfeits, captured_at
+        rating, matches_played, wins, losses, draws, forfeits,
+        league_tier, league_points, provisional, captured_at
       )
       SELECT
         $1 AS season_id,
@@ -180,9 +181,13 @@ export async function runRankedSeasonReset(
         r.losses,
         r.draws,
         r.forfeits,
+        l.league_tier,
+        l.league_points,
+        CASE WHEN l.placed_at IS NULL THEN TRUE ELSE FALSE END AS provisional,
         NOW() AS captured_at
       FROM ranked_player_ratings r
       LEFT JOIN profiles p ON p.account_id = r.account_id
+      LEFT JOIN ranked_league_progression l ON l.account_id = r.account_id
       ON CONFLICT (season_id, account_id) DO UPDATE SET
         region = EXCLUDED.region,
         rank_position = EXCLUDED.rank_position,
@@ -192,6 +197,9 @@ export async function runRankedSeasonReset(
         losses = EXCLUDED.losses,
         draws = EXCLUDED.draws,
         forfeits = EXCLUDED.forfeits,
+        league_tier = EXCLUDED.league_tier,
+        league_points = EXCLUDED.league_points,
+        provisional = EXCLUDED.provisional,
         captured_at = EXCLUDED.captured_at
     `,
     [expiredSeason.seasonId],

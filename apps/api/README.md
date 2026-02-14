@@ -39,6 +39,7 @@ Optional:
 - `REPLAY_RETENTION_DAYS_CASUAL` defaults to `90`.
 - `RANKED_SEASON_DURATION_DAYS` defaults to `90`.
 - `RANKED_SEASON_RESET_ADMIN_KEY` optional admin key required by `POST /ranked/seasons/reset`.
+- `RANKED_CALIBRATION_MATCHES` defaults to `5` (matches before initial league placement).
 
 API scripts auto-load `.env` from repo root. Create it once:
 
@@ -301,6 +302,8 @@ Ranked result submission:
 - Accepted ranked results persist per-player pre/post rating deltas in `ranked_match_rating_deltas`.
 - Ranked seasons have explicit start/end windows (`ranked_seasons`) and archived snapshots (`ranked_season_standings`).
 - Season reset job archives standings, stamps historical matches by season, and creates the next active season window.
+- League ladder progression tracks `Iron`, `Bronze`, `Silver`, `Gold`, `Platinum` with league-point promotion and demotion.
+- Placement flow assigns the initial league tier after configurable calibration matches.
 - Reconnect grace window is configurable in queue service configuration.
 - NAT config uses STUN and optional TURN relay servers from environment values.
 - Telemetry endpoint tracks direct vs relay connection outcomes by region.

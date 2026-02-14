@@ -503,11 +503,7 @@ function formatAccountSummary(session: PlatformAuthSession): string {
 }
 
 function getEnabledModes(): GameMode[] {
-  const modes: GameMode[] = ['endless', 'best_of_3'];
-  if (runtimeConfig.features.trainingModeEnabled) {
-    modes.push('training');
-  }
-  return modes;
+  return ['endless', 'best_of_3', 'training'];
 }
 
 function getRulesForMode(mode: GameMode): { allowDunkWin: boolean } {

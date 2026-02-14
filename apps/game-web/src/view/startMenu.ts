@@ -178,6 +178,8 @@ export class StartMenu {
 
   private readonly accountSummaryLabel: HTMLDivElement;
   private readonly loginAccountSummaryLabel: HTMLDivElement;
+  private readonly settingsAccountSummaryLabel: HTMLDivElement;
+  private readonly settingsAuthStateLabel: HTMLDivElement;
   private readonly authStatusLabel: HTMLDivElement;
   private readonly authEmailInput: HTMLInputElement;
   private readonly authPasswordInput: HTMLInputElement;
@@ -186,6 +188,8 @@ export class StartMenu {
   private readonly signInButton: HTMLButtonElement;
   private readonly signUpButton: HTMLButtonElement;
   private readonly signOutButton: HTMLButtonElement;
+  private readonly continueButton: HTMLButtonElement;
+  private readonly settingsSignOutButton: HTMLButtonElement;
   private readonly rankedStatusHeadline: HTMLDivElement;
   private readonly rankedStatusDetail: HTMLPreElement;
   private readonly roomStatusHeadline: HTMLDivElement;
@@ -366,6 +370,7 @@ export class StartMenu {
     const guestRow = this.createActionRow('Continue as Guest', () => {
       this.setScreen('main');
     });
+    this.continueButton = guestRow.button;
     const loginBackRow = this.createActionRow('Back', () => {
       this.setScreen('title');
     });
@@ -536,17 +541,32 @@ export class StartMenu {
     this.rankingsPanel.append(rankingsSnapshotRow.row, rankingsBackRow.row);
     this.registerRows('rankings', [rankingsSnapshotRow.row, rankingsBackRow.row]);
 
-    const settingsAccountRow = this.createActionRow('Account', () => {
+    const settingsSessionRow = document.createElement('div');
+    settingsSessionRow.className = 'start-menu-row';
+    this.settingsAccountSummaryLabel = document.createElement('div');
+    this.settingsAccountSummaryLabel.className = 'start-row-label';
+    this.settingsAccountSummaryLabel.textContent = this.accountSummary;
+    this.settingsAuthStateLabel = document.createElement('div');
+    this.settingsAuthStateLabel.className = 'start-status-headline';
+    this.settingsAuthStateLabel.textContent = 'Guest session';
+    settingsSessionRow.append(this.settingsAccountSummaryLabel, this.settingsAuthStateLabel);
+    this.settingsPanel.appendChild(settingsSessionRow);
+
+    const settingsAccountRow = this.createActionRow('Manage Account', () => {
       this.setScreen('login');
     });
+    const settingsSignOutRow = this.createActionRow('Sign Out', async () => {
+      await this.handleAuthAction('signout');
+    });
+    this.settingsSignOutButton = settingsSignOutRow.button;
     const settingsSocialRow = this.createActionRow('Social', () => {
       this.options.onOpenOnlineDevMenu?.('social');
     });
     const settingsBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
-    this.settingsPanel.append(settingsAccountRow.row, settingsSocialRow.row, settingsBackRow.row);
-    this.registerRows('settings', [settingsAccountRow.row, settingsSocialRow.row, settingsBackRow.row]);
+    this.settingsPanel.append(settingsAccountRow.row, settingsSignOutRow.row, settingsSocialRow.row, settingsBackRow.row);
+    this.registerRows('settings', [settingsAccountRow.row, settingsSignOutRow.row, settingsSocialRow.row, settingsBackRow.row]);
 
     const padHint = document.createElement('p');
     padHint.className = 'start-pad-hint';
@@ -675,11 +695,15 @@ export class StartMenu {
     this.accountSummary = summary;
     this.accountSummaryLabel.textContent = summary;
     this.loginAccountSummaryLabel.textContent = summary;
+    this.settingsAccountSummaryLabel.textContent = summary;
   }
 
   public setAuthState(isAuthenticated: boolean): void {
     this.isAuthenticated = isAuthenticated;
     this.signOutButton.disabled = !this.isAuthenticated || this.authBusy;
+    this.settingsSignOutButton.disabled = !this.isAuthenticated || this.authBusy;
+    this.continueButton.textContent = this.isAuthenticated ? 'Continue' : 'Continue as Guest';
+    this.settingsAuthStateLabel.textContent = this.isAuthenticated ? 'Authenticated session' : 'Guest session';
     if (isAuthenticated) {
       this.authStatusLabel.textContent = '';
       this.authStatusLabel.classList.remove('error');
@@ -926,6 +950,7 @@ export class StartMenu {
     this.signInButton.disabled = busy;
     this.signUpButton.disabled = busy;
     this.signOutButton.disabled = busy || !this.isAuthenticated;
+    this.settingsSignOutButton.disabled = busy || !this.isAuthenticated;
   }
 
   private async handleAuthAction(action: WebAuthMenuAction): Promise<void> {

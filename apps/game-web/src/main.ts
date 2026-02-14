@@ -766,8 +766,12 @@ function onRoundWin(winner: PlayerId): void {
 }
 
 window.addEventListener('keydown', (event) => {
+  const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+  if (!key) {
+    return;
+  }
   if (appPhase === 'replay_review') {
-    if (event.key.toLowerCase() === 'escape') {
+    if (key === 'escape') {
       event.preventDefault();
       exitReplayReview();
     }
@@ -775,20 +779,20 @@ window.addEventListener('keydown', (event) => {
   }
 
   if (appPhase === 'online_dev') {
-    if (event.key.toLowerCase() === 'escape') {
+    if (key === 'escape') {
       event.preventDefault();
       closeOnlineDevMenu();
     }
     return;
   }
 
-  if (selectedMode === 'training' && appPhase === 'playing' && event.key.toLowerCase() === 'n') {
+  if (selectedMode === 'training' && appPhase === 'playing' && key === 'n') {
     event.preventDefault();
     restartTrainingRound();
     return;
   }
 
-  if (event.key.toLowerCase() === 'escape') {
+  if (key === 'escape') {
     if (appPhase !== 'playing' && appPhase !== 'round_transition') {
       return;
     }

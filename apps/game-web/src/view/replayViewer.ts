@@ -138,7 +138,10 @@ export class ReplayViewer implements ReplayViewerController {
       if (!this.visible) {
         return;
       }
-      const key = event.key.toLowerCase();
+      const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+      if (!key) {
+        return;
+      }
       if (key === 'escape') {
         event.preventDefault();
         this.options.onExit();

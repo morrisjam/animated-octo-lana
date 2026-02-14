@@ -49,11 +49,19 @@ export class KeyboardInput {
   private readonly frameInput = createEmptyFrameInput();
 
   private onKeyDown = (event: KeyboardEvent): void => {
-    this.keys.add(event.key.toLowerCase());
+    const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+    if (!key) {
+      return;
+    }
+    this.keys.add(key);
   };
 
   private onKeyUp = (event: KeyboardEvent): void => {
-    this.keys.delete(event.key.toLowerCase());
+    const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+    if (!key) {
+      return;
+    }
+    this.keys.delete(key);
   };
 
   constructor() {

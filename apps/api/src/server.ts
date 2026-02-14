@@ -46,6 +46,10 @@ import {
   type PresenceActivityInput,
   type PresenceStatus,
 } from './social/presenceInviteService';
+import {
+  evaluateRankedResultSubmission,
+  type RankedResultSuspiciousReason,
+} from './ranked/resultValidation';
 
 const app = Fastify({ logger: true });
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
@@ -266,6 +270,17 @@ interface SendFriendInviteBody {
   queueType?: string;
   roomCode?: string;
 }
+
+interface RankedResultSubmitBody {
+  sessionId?: string;
+  sessionToken?: string;
+  matchId?: string;
+  participantAccountIds?: string[];
+  winnerAccountId?: string | null;
+  outcome?: string;
+}
+
+type RankedResultOutcome = 'p1_win' | 'p2_win' | 'draw' | 'forfeit';
 
 function isUuid(value: string | undefined): boolean {
   if (!value) {
@@ -499,6 +514,17 @@ function normaliseReplayOutcome(value: string | undefined): string | null {
   }
   const normalised = value.trim().toLowerCase();
   return normalised.length > 0 ? normalised : null;
+}
+
+function parseRankedOutcome(value: string | undefined): RankedResultOutcome | null {
+  if (!value) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'p1_win' || normalised === 'p2_win' || normalised === 'draw' || normalised === 'forfeit') {
+    return normalised;
+  }
+  return null;
 }
 
 function normaliseDisplayName(value: unknown): string | null {
@@ -3000,6 +3026,145 @@ app.post('/matchmaking/sessions/reconnect', async (request, reply) => {
     return { error: result.error.message, code: result.error.code };
   }
   return result.value;
+});
+
+app.post('/ranked/results', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (!await ensureAccountExists(accountId)) {
+    reply.code(404);
+    return { error: 'Account not found.' };
+  }
+
+  const body = (request.body ?? {}) as RankedResultSubmitBody;
+  if (!isUuid(body.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  if (!isUuid(body.matchId)) {
+    reply.code(400);
+    return { error: 'matchId is required and must be a UUID.' };
+  }
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+  const outcome = parseRankedOutcome(body.outcome);
+  if (!outcome) {
+    reply.code(400);
+    return { error: 'outcome must be one of: p1_win, p2_win, draw, forfeit.' };
+  }
+  const submittedParticipantsRaw = Array.isArray(body.participantAccountIds) ? body.participantAccountIds : [];
+  const submittedParticipants = [...new Set(submittedParticipantsRaw.map((value) => String(value).trim()))].sort();
+  if (submittedParticipants.length !== 2 || !submittedParticipants.every((participantAccountId) => isUuid(participantAccountId))) {
+    reply.code(400);
+    return { error: 'participantAccountIds must contain exactly two distinct UUID values.' };
+  }
+  const winnerAccountIdRaw = body.winnerAccountId === undefined || body.winnerAccountId === null
+    ? null
+    : String(body.winnerAccountId).trim();
+  if (winnerAccountIdRaw !== null && !isUuid(winnerAccountIdRaw)) {
+    reply.code(400);
+    return { error: 'winnerAccountId must be a UUID when provided.' };
+  }
+
+  const sessionValidation = matchmakingQueueService.validateSessionToken(body.sessionId, accountId, sessionToken);
+  if (!sessionValidation.ok) {
+    reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
+    return { error: sessionValidation.error.message, code: sessionValidation.error.code };
+  }
+  if (sessionValidation.value.queueType !== 'ranked') {
+    reply.code(409);
+    return { error: 'Session is not a ranked queue session.' };
+  }
+
+  const expectedParticipants = [...new Set(sessionValidation.value.participants.map((participant) => participant.accountId))].sort();
+  const evaluation = evaluateRankedResultSubmission(
+    {
+      sessionId: body.sessionId,
+      participantAccountIds: expectedParticipants,
+    },
+    {
+      submittedByAccountId: accountId,
+      matchId: body.matchId,
+      participantAccountIds: submittedParticipants,
+      winnerAccountId: winnerAccountIdRaw,
+    },
+  );
+  const suspiciousReasons: RankedResultSuspiciousReason[] = [...evaluation.reasons];
+  const winnerAccountId = winnerAccountIdRaw && expectedParticipants.includes(winnerAccountIdRaw) ? winnerAccountIdRaw : null;
+  const reviewStatus = evaluation.suspicious ? 'pending' : 'none';
+
+  try {
+    const submission = await db.query(
+      `
+        INSERT INTO ranked_result_submissions(
+          session_id, match_id, queue_type, submitted_by_account_id,
+          session_participants, submitted_participants, winner_account_id,
+          outcome, valid_session_token, suspicious, suspicious_reasons,
+          review_status, payload_json
+        )
+        VALUES (
+          $1, $2, 'ranked', $3,
+          $4::uuid[], $5::uuid[], $6,
+          $7, TRUE, $8, $9::text[],
+          $10, $11::jsonb
+        )
+        RETURNING submission_id, created_at
+      `,
+      [
+        body.sessionId,
+        body.matchId,
+        accountId,
+        expectedParticipants,
+        submittedParticipants,
+        winnerAccountId,
+        outcome,
+        evaluation.suspicious,
+        suspiciousReasons,
+        reviewStatus,
+        JSON.stringify({
+          outcome,
+          winnerAccountIdSubmitted: winnerAccountIdRaw,
+        }),
+      ],
+    );
+
+    const row = submission.rows[0] as { submission_id: string; created_at: string };
+    if (evaluation.suspicious) {
+      reply.code(202);
+      return {
+        submissionId: row.submission_id,
+        createdAt: row.created_at,
+        status: 'flagged_for_review',
+        suspicious: true,
+        suspiciousReasons,
+        reviewStatus,
+      };
+    }
+
+    reply.code(201);
+    return {
+      submissionId: row.submission_id,
+      createdAt: row.created_at,
+      status: 'accepted',
+      suspicious: false,
+      suspiciousReasons: [],
+      reviewStatus,
+    };
+  } catch (error: unknown) {
+    const code = (error as { code?: string } | undefined)?.code;
+    const message = error instanceof Error ? error.message : '';
+    if (code === '23505' && message.includes('ranked_result_submissions_session_id_submitted_by_account_id_key')) {
+      reply.code(409);
+      return { error: 'Ranked result was already submitted for this session by this account.' };
+    }
+    throw error;
+  }
 });
 
 app.post('/matchmaking/network/connection-telemetry', async (request, reply) => {

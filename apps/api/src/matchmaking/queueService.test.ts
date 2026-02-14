@@ -187,6 +187,57 @@ test('reconnect requires valid token and enforces one-time reconnect attempt id'
   assert.equal(replayedAttempt.error.code, 'replayed_attempt');
 });
 
+test('validateSessionToken allows ranked participants with active matching token', () => {
+  const queue = createMatchmakingQueueService();
+  queue.join({
+    accountId: ACCOUNT_1,
+    queueType: 'ranked',
+    regionPreferences: ['us-east'],
+  });
+  const matched = expectMatched(queue.join({
+    accountId: ACCOUNT_2,
+    queueType: 'ranked',
+    regionPreferences: ['us-east'],
+  }));
+
+  const result = queue.validateSessionToken(
+    matched.matchStart.sessionId,
+    ACCOUNT_2,
+    matched.matchStart.sessionToken,
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) {
+    throw new Error('Expected token validation success');
+  }
+  assert.equal(result.value.queueType, 'ranked');
+  assert.equal(result.value.participants.length, 2);
+});
+
+test('validateSessionToken rejects invalid token', () => {
+  const queue = createMatchmakingQueueService();
+  queue.join({
+    accountId: ACCOUNT_1,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  });
+  const matched = expectMatched(queue.join({
+    accountId: ACCOUNT_2,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  }));
+
+  const result = queue.validateSessionToken(
+    matched.matchStart.sessionId,
+    ACCOUNT_2,
+    'invalid-token',
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) {
+    throw new Error('Expected invalid token error');
+  }
+  assert.equal(result.error.code, 'invalid_token');
+});
+
 test('reconnect attempt fails when session token expires', () => {
   let nowMs = 1_000_000;
   const queue = createMatchmakingQueueService({

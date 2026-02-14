@@ -1,7 +1,7 @@
 # Next Epic Plan: E2.3 Ranked And Progression
 
 Date: 2026-02-14
-Status: ready to execute
+Status: in progress (`S2.9` complete)
 
 ## Scope
 - `S2.7` Rating engine service.
@@ -35,4 +35,4 @@ Status: ready to execute
 - Add anti-smurf ops heuristics documentation and escalation rules.
 
 ## First concrete story to start now
-- Start with `S2.9` (match result validation), because it is a hard dependency for trustworthy ranked updates.
+- Next start with `S2.7` (rating engine service), now that `S2.9` validation is in place.

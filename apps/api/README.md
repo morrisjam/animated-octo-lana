@@ -110,6 +110,7 @@ npm run api:test
 - `GET /matchmaking/sessions/:sessionId` read session state for an active or resolved match session.
 - `POST /matchmaking/sessions/disconnect` mark local session participant as disconnected and start reconnect grace window.
 - `POST /matchmaking/sessions/reconnect` reconnect with session token and one-time reconnect attempt id.
+- `POST /ranked/results` submit ranked match result with session token validation and suspicious review flagging.
 - `POST /matchmaking/network/connection-telemetry` store direct or relay path telemetry by region.
 - `GET /matchmaking/network/connection-telemetry/summary` read telemetry summary with optional `region` and `queueType` filters.
 - `GET /rooms/config` read private room lifecycle configuration.
@@ -247,6 +248,22 @@ Social mute target:
 }
 ```
 
+Ranked result submission:
+
+```json
+{
+  "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "sessionToken": "replace_with_match_session_token",
+  "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "participantAccountIds": [
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222"
+  ],
+  "winnerAccountId": "11111111-1111-4111-8111-111111111111",
+  "outcome": "p1_win"
+}
+```
+
 ## Notes
 
 - Valid providers are `steam` and `web`.
@@ -269,6 +286,7 @@ Social mute target:
 - Supported queue regions are `us-east`, `us-west`, `eu-west`, and `ap-southeast`.
 - Queue match payload includes session token and peer metadata for handshake bootstrapping.
 - Session tokens expire and reconnect attempts use one-time ids for replay protection.
+- Ranked result submissions require a valid session token; mismatched participant/match payloads are stored and flagged with `review_status = pending`.
 - Reconnect grace window is configurable in queue service configuration.
 - NAT config uses STUN and optional TURN relay servers from environment values.
 - Telemetry endpoint tracks direct vs relay connection outcomes by region.

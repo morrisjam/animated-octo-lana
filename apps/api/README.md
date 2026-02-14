@@ -89,9 +89,11 @@ npm run api:test
 - `POST /accounts` create account.
 - `GET /accounts/:accountId` fetch account and linked identities.
 - `POST /accounts/:accountId/identities` link provider identity.
+- `DELETE /accounts/:accountId/identities/:provider` unlink provider identity (`web` or `steam`) for authenticated account owner.
 - `GET /identities/:provider/:providerUserId` resolve linked account.
 - `POST /auth/web/signup` create web credential identity, with optional guest account upgrade.
 - `POST /auth/web/signin` authenticate a web credential account.
+- `POST /auth/steam/exchange` exchange Steam ticket and link to existing account or create one on first Steam sign-in.
 - `GET /profile` read profile (requires `x-account-id` header).
 - `PUT /profile` update profile (requires `x-account-id` header).
 - `GET /matchmaking/queue/config` read queue types, regions, and TTL config.
@@ -164,6 +166,16 @@ Sign in:
 }
 ```
 
+Steam exchange:
+
+```json
+{
+  "steamTicket": "dev-steam:76561198012345678",
+  "mergeAccountId": "11111111-1111-4111-8111-111111111111",
+  "displayName": "Steam Player"
+}
+```
+
 ## Notes
 
 - Valid providers are `steam` and `web`.
@@ -171,6 +183,9 @@ Sign in:
 - Web sign-up supports `upgradeAccountId` for guest-to-account upgrade when `x-account-id` matches.
 - Web auth recovery/error flows include explicit responses for invalid credentials, duplicate email, and disabled accounts.
 - Web auth events are tracked in `account_auth_events` for signup/signin success and failures.
+- Steam exchange supports `mergeAccountId` when `x-account-id` matches authenticated account.
+- Merge policy: when Steam identity already belongs to a different account, provided guest/web account is merged into Steam-linked account, source account is disabled, and transferable web credentials/profile data are preserved when safe.
+- Audit coverage: `identity_link_events` capture link/unlink actions, and `account_merge_events` capture account merge operations.
 - Supported queue regions are `us-east`, `us-west`, `eu-west`, and `ap-southeast`.
 - Queue match payload includes session token and peer metadata for handshake bootstrapping.
 - Session tokens expire and reconnect attempts use one-time ids for replay protection.

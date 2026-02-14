@@ -40,6 +40,7 @@ import {
   validateWebPassword,
   verifyWebPassword,
 } from './auth/webAuth';
+import { validateSteamExchangeTicket } from './auth/steamAuth';
 
 const app = Fastify({ logger: true });
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
@@ -102,6 +103,12 @@ interface WebSignupBody {
 interface WebSigninBody {
   email?: string;
   password?: string;
+}
+
+interface SteamExchangeBody {
+  steamTicket?: string;
+  mergeAccountId?: string;
+  displayName?: string | null;
 }
 
 interface MatchmakingQueueJoinBody {
@@ -463,6 +470,234 @@ async function logAccountAuthEvent(
   }
 }
 
+interface SqlClient {
+  query(text: string, values?: unknown[]): Promise<{ rowCount: number | null; rows: unknown[] }>;
+}
+
+async function logIdentityLinkEvent(
+  client: SqlClient,
+  event: {
+    accountId: string;
+    provider: 'web' | 'steam';
+    providerUserId: string;
+    eventType: 'linked' | 'link_failed' | 'unlinked';
+    actor: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO identity_link_events(account_id, provider, provider_user_id, event_type, actor, metadata)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+    `,
+    [
+      event.accountId,
+      event.provider,
+      event.providerUserId,
+      event.eventType,
+      event.actor,
+      JSON.stringify(event.metadata ?? {}),
+    ],
+  );
+}
+
+async function mergeAccountIntoTarget(
+  client: SqlClient,
+  sourceAccountId: string,
+  targetAccountId: string,
+  actorAccountId: string | null,
+): Promise<{ merged: boolean; transferredWebIdentity: boolean; transferredWebCredential: boolean; mergedProfile: boolean }> {
+  if (sourceAccountId === targetAccountId) {
+    return {
+      merged: false,
+      transferredWebIdentity: false,
+      transferredWebCredential: false,
+      mergedProfile: false,
+    };
+  }
+
+  const sourceAccountResult = await client.query(
+    'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE',
+    [sourceAccountId],
+  );
+  if (!sourceAccountResult.rowCount) {
+    throw new Error('Merge source account not found.');
+  }
+  const sourceAccount = sourceAccountResult.rows[0] as { id: string; status: string };
+  if (sourceAccount.status !== 'active') {
+    throw new Error('Merge source account is disabled.');
+  }
+
+  const targetAccountResult = await client.query(
+    'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE',
+    [targetAccountId],
+  );
+  if (!targetAccountResult.rowCount) {
+    throw new Error('Merge target account not found.');
+  }
+  const targetAccount = targetAccountResult.rows[0] as { id: string; status: string };
+  if (targetAccount.status !== 'active') {
+    throw new Error('Merge target account is disabled.');
+  }
+
+  let transferredWebIdentity = false;
+  let transferredWebCredential = false;
+  let mergedProfile = false;
+  const actor = actorAccountId ?? 'system';
+
+  const targetWebIdentityResult = await client.query(
+    `SELECT 1 FROM identities WHERE account_id = $1 AND provider = 'web' LIMIT 1`,
+    [targetAccountId],
+  );
+  const sourceWebIdentityResult = await client.query(
+    `
+      SELECT id, provider_user_id
+      FROM identities
+      WHERE account_id = $1 AND provider = 'web'
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [sourceAccountId],
+  );
+  if (sourceWebIdentityResult.rowCount) {
+    const sourceIdentity = sourceWebIdentityResult.rows[0] as { id: number; provider_user_id: string };
+    if (targetWebIdentityResult.rowCount) {
+      await client.query('DELETE FROM identities WHERE id = $1', [sourceIdentity.id]);
+      await logIdentityLinkEvent(client, {
+        accountId: sourceAccountId,
+        provider: 'web',
+        providerUserId: sourceIdentity.provider_user_id,
+        eventType: 'unlinked',
+        actor,
+        metadata: {
+          reason: 'merge_discard_duplicate_web_identity',
+          targetAccountId,
+        },
+      });
+    } else {
+      await client.query('UPDATE identities SET account_id = $1 WHERE id = $2', [targetAccountId, sourceIdentity.id]);
+      transferredWebIdentity = true;
+      await logIdentityLinkEvent(client, {
+        accountId: targetAccountId,
+        provider: 'web',
+        providerUserId: sourceIdentity.provider_user_id,
+        eventType: 'linked',
+        actor,
+        metadata: {
+          reason: 'merge_transfer_web_identity',
+          sourceAccountId,
+        },
+      });
+    }
+  }
+
+  const sourceOtherIdentities = await client.query(
+    `
+      SELECT id, provider, provider_user_id
+      FROM identities
+      WHERE account_id = $1 AND provider <> 'web'
+      FOR UPDATE
+    `,
+    [sourceAccountId],
+  );
+  for (const row of sourceOtherIdentities.rows as Array<{ id: number; provider: 'web' | 'steam'; provider_user_id: string }>) {
+    await client.query('DELETE FROM identities WHERE id = $1', [row.id]);
+    await logIdentityLinkEvent(client, {
+      accountId: sourceAccountId,
+      provider: row.provider,
+      providerUserId: row.provider_user_id,
+      eventType: 'unlinked',
+      actor,
+      metadata: {
+        reason: 'merge_discard_non_web_identity',
+        targetAccountId,
+      },
+    });
+  }
+
+  const targetCredentialsResult = await client.query(
+    'SELECT 1 FROM web_auth_credentials WHERE account_id = $1 LIMIT 1',
+    [targetAccountId],
+  );
+  const sourceCredentialsResult = await client.query(
+    'SELECT account_id FROM web_auth_credentials WHERE account_id = $1 LIMIT 1 FOR UPDATE',
+    [sourceAccountId],
+  );
+  if (sourceCredentialsResult.rowCount) {
+    if (targetCredentialsResult.rowCount) {
+      await client.query('DELETE FROM web_auth_credentials WHERE account_id = $1', [sourceAccountId]);
+    } else {
+      await client.query('UPDATE web_auth_credentials SET account_id = $1 WHERE account_id = $2', [targetAccountId, sourceAccountId]);
+      transferredWebCredential = true;
+    }
+  }
+
+  const sourceProfileResult = await client.query(
+    'SELECT display_name, settings_json FROM profiles WHERE account_id = $1 LIMIT 1 FOR UPDATE',
+    [sourceAccountId],
+  );
+  if (sourceProfileResult.rowCount) {
+    const sourceProfile = sourceProfileResult.rows[0] as {
+      display_name: string | null;
+      settings_json: Record<string, unknown>;
+    };
+    const targetProfileResult = await client.query(
+      'SELECT account_id, display_name, settings_json FROM profiles WHERE account_id = $1 LIMIT 1 FOR UPDATE',
+      [targetAccountId],
+    );
+    if (targetProfileResult.rowCount) {
+      await client.query(
+        `
+          UPDATE profiles
+          SET
+            display_name = COALESCE(NULLIF(display_name, ''), $2),
+            settings_json = COALESCE($3::jsonb, '{}'::jsonb) || COALESCE(settings_json, '{}'::jsonb),
+            updated_at = NOW()
+          WHERE account_id = $1
+        `,
+        [targetAccountId, sourceProfile.display_name, JSON.stringify(sourceProfile.settings_json ?? {})],
+      );
+      await client.query('DELETE FROM profiles WHERE account_id = $1', [sourceAccountId]);
+    } else {
+      await client.query('UPDATE profiles SET account_id = $1 WHERE account_id = $2', [targetAccountId, sourceAccountId]);
+    }
+    mergedProfile = true;
+  }
+
+  await client.query(
+    `
+      UPDATE accounts
+      SET status = 'disabled', updated_at = NOW()
+      WHERE id = $1
+    `,
+    [sourceAccountId],
+  );
+  await client.query(
+    `
+      INSERT INTO account_merge_events(source_account_id, target_account_id, actor_account_id, reason, metadata)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+    `,
+    [
+      sourceAccountId,
+      targetAccountId,
+      actorAccountId,
+      'steam_link_merge',
+      JSON.stringify({
+        transferredWebIdentity,
+        transferredWebCredential,
+        mergedProfile,
+      }),
+    ],
+  );
+
+  return {
+    merged: true,
+    transferredWebIdentity,
+    transferredWebCredential,
+    mergedProfile,
+  };
+}
+
 app.get('/health', async () => ({ ok: true }));
 
 app.post('/accounts', async (request, reply) => {
@@ -569,6 +804,71 @@ app.post('/accounts/:accountId/identities', async (request, reply) => {
       reply.code(409);
       return { error: 'This account already has a linked identity for this provider.' };
     }
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/accounts/:accountId/identities/:provider', async (request, reply) => {
+  const params = request.params as { accountId?: string; provider?: string };
+  if (!isUuid(params.accountId)) {
+    reply.code(400);
+    return { error: 'Invalid account id.' };
+  }
+  const provider = normaliseProvider(params.provider);
+  if (!provider) {
+    reply.code(400);
+    return { error: 'provider must be one of: steam, web.' };
+  }
+
+  const actorAccountId = getAuthenticatedAccountId(request);
+  if (!actorAccountId || actorAccountId !== params.accountId) {
+    reply.code(403);
+    return { error: 'Only the authenticated account can unlink its own identities.' };
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query(
+      `
+        SELECT id, provider, provider_user_id
+        FROM identities
+        WHERE account_id = $1 AND provider = $2
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [params.accountId, provider],
+    );
+    if (!existing.rowCount) {
+      await client.query('ROLLBACK');
+      reply.code(404);
+      return { error: 'Identity not found for account.' };
+    }
+    const row = existing.rows[0] as { id: number; provider: 'steam' | 'web'; provider_user_id: string };
+    await client.query('DELETE FROM identities WHERE id = $1', [row.id]);
+    if (provider === 'web') {
+      await client.query('DELETE FROM web_auth_credentials WHERE account_id = $1', [params.accountId]);
+    }
+    await logIdentityLinkEvent(client, {
+      accountId: params.accountId,
+      provider: row.provider,
+      providerUserId: row.provider_user_id,
+      eventType: 'unlinked',
+      actor: actorAccountId,
+      metadata: {
+        reason: 'user_request',
+      },
+    });
+    await client.query('COMMIT');
+    return {
+      accountId: params.accountId,
+      provider,
+      unlinked: true,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
@@ -878,6 +1178,187 @@ app.post('/auth/web/signin', async (request, reply) => {
     provider: 'web',
     isAuthenticated: true,
   };
+});
+
+app.post('/auth/steam/exchange', async (request, reply) => {
+  const body = (request.body ?? {}) as SteamExchangeBody;
+  const ticketValidation = validateSteamExchangeTicket(body.steamTicket);
+  if (!ticketValidation.ok) {
+    reply.code(401);
+    return {
+      error: ticketValidation.error,
+      recovery: 'Retry Steam sign-in and submit a fresh ticket.',
+    };
+  }
+  const steamUserId = ticketValidation.steamUserId;
+
+  const mergeAccountIdRaw = String(body.mergeAccountId ?? '').trim();
+  const mergeAccountId = mergeAccountIdRaw || null;
+  if (mergeAccountId && !isUuid(mergeAccountId)) {
+    reply.code(400);
+    return { error: 'mergeAccountId must be a UUID when provided.' };
+  }
+
+  const authenticatedAccountId = getAuthenticatedAccountId(request);
+  if (mergeAccountId && authenticatedAccountId !== mergeAccountId) {
+    reply.code(403);
+    return { error: 'mergeAccountId must match authenticated x-account-id header.' };
+  }
+
+  const preferredLinkAccountId = mergeAccountId ?? authenticatedAccountId ?? null;
+  const displayName = normaliseDisplayName(body.displayName);
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+
+    const existingSteamIdentity = await client.query(
+      `
+        SELECT i.account_id, a.status
+        FROM identities i
+        JOIN accounts a ON a.id = i.account_id
+        WHERE i.provider = 'steam' AND i.provider_user_id = $1
+        LIMIT 1
+      `,
+      [steamUserId],
+    );
+
+    let accountId: string;
+    let createdAccount = false;
+    let mergedFromAccountId: string | null = null;
+
+    if (existingSteamIdentity.rowCount) {
+      const existing = existingSteamIdentity.rows[0] as { account_id: string; status: string };
+      if (existing.status !== 'active') {
+        await client.query('ROLLBACK');
+        reply.code(403);
+        return {
+          error: 'Steam-linked account is disabled.',
+          recovery: 'Contact support to restore account access.',
+        };
+      }
+      accountId = existing.account_id;
+      if (preferredLinkAccountId && preferredLinkAccountId !== accountId) {
+        await mergeAccountIntoTarget(client, preferredLinkAccountId, accountId, authenticatedAccountId);
+        mergedFromAccountId = preferredLinkAccountId;
+      }
+    } else if (preferredLinkAccountId) {
+      const accountResult = await client.query(
+        'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE',
+        [preferredLinkAccountId],
+      );
+      if (!accountResult.rowCount) {
+        await client.query('ROLLBACK');
+        reply.code(404);
+        return { error: 'Merge account not found.' };
+      }
+      const accountRow = accountResult.rows[0] as { id: string; status: string };
+      if (accountRow.status !== 'active') {
+        await client.query('ROLLBACK');
+        reply.code(409);
+        return {
+          error: 'Merge account is disabled.',
+          recovery: 'Contact support to re-enable account access.',
+        };
+      }
+      accountId = accountRow.id;
+    } else {
+      const createdAccountResult = await client.query(
+        'INSERT INTO accounts(status) VALUES ($1) RETURNING id',
+        ['active'],
+      );
+      accountId = (createdAccountResult.rows[0] as { id: string }).id;
+      createdAccount = true;
+    }
+
+    if (!existingSteamIdentity.rowCount) {
+      await client.query(
+        `
+          INSERT INTO identities(account_id, provider, provider_user_id)
+          VALUES ($1, 'steam', $2)
+        `,
+        [accountId, steamUserId],
+      );
+      await logIdentityLinkEvent(client, {
+        accountId,
+        provider: 'steam',
+        providerUserId: steamUserId,
+        eventType: 'linked',
+        actor: authenticatedAccountId ?? 'steam_exchange',
+        metadata: {
+          reason: preferredLinkAccountId ? 'steam_link_existing_account' : 'steam_first_signin_create_account',
+        },
+      });
+    }
+
+    if (displayName) {
+      await client.query(
+        `
+          INSERT INTO profiles(account_id, display_name, settings_json)
+          VALUES ($1, $2, '{}'::jsonb)
+          ON CONFLICT (account_id)
+          DO UPDATE SET
+            display_name = COALESCE(NULLIF(profiles.display_name, ''), EXCLUDED.display_name),
+            updated_at = NOW()
+        `,
+        [accountId, displayName],
+      );
+    }
+
+    await client.query('COMMIT');
+
+    await logAccountAuthEvent({
+      accountId,
+      provider: 'steam',
+      eventType: mergedFromAccountId ? 'upgrade' : (createdAccount ? 'signup' : 'signin'),
+      emailNormalised: `steam:${steamUserId}`,
+      reason: mergedFromAccountId ? `merged_from:${mergedFromAccountId}` : null,
+    });
+
+    return {
+      accountId,
+      provider: 'steam',
+      steamUserId,
+      createdAccount,
+      mergedFromAccountId,
+      isAuthenticated: true,
+    };
+  } catch (error: unknown) {
+    await client.query('ROLLBACK');
+    const message = error instanceof Error ? error.message : 'Steam token exchange failed.';
+    await logAccountAuthEvent({
+      accountId: preferredLinkAccountId,
+      provider: 'steam',
+      eventType: 'signin_failed',
+      emailNormalised: `steam:${steamUserId}`,
+      reason: message,
+    });
+    if (message.includes('identities_provider_provider_user_id_key')) {
+      reply.code(409);
+      return {
+        error: 'Steam identity is already linked to another account.',
+        recovery: 'Retry sign-in and allow merge with your authenticated account if prompted.',
+      };
+    }
+    if (message.includes('identities_account_id_provider_key')) {
+      reply.code(409);
+      return { error: 'This account already has a linked steam identity.' };
+    }
+    if (message === 'Merge source account not found.') {
+      reply.code(404);
+      return { error: 'Merge account not found.' };
+    }
+    if (message === 'Merge source account is disabled.') {
+      reply.code(409);
+      return {
+        error: 'Merge account is disabled.',
+        recovery: 'Contact support to re-enable account access.',
+      };
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 app.get('/matchmaking/queue/config', async () => matchmakingQueueService.getConfig());

@@ -27,6 +27,12 @@ Optional:
 - `ROOM_MAX_HISTORY_ENTRIES` defaults to `20`.
 - `ROOM_WEB_INVITE_BASE_URL` defaults to `http://localhost:5173`.
 - `STEAM_APP_ID` defaults to `0` for steam invite payload generation.
+- `PRESENCE_TTL_MS` defaults to `300000` (5 minutes).
+- `PRESENCE_RATE_WINDOW_MS` defaults to `30000` (30 seconds).
+- `PRESENCE_MAX_UPDATES_PER_WINDOW` defaults to `12`.
+- `FRIEND_INVITE_TTL_MS` defaults to `90000` (90 seconds).
+- `FRIEND_INVITE_RATE_WINDOW_MS` defaults to `60000` (60 seconds).
+- `FRIEND_INVITE_MAX_PER_WINDOW` defaults to `5`.
 - `REPLAY_BLOB_PROVIDER` defaults to `local`.
 - `REPLAY_BLOB_DIR` defaults to `./data/replay-blobs`.
 - `REPLAY_RETENTION_DAYS_RANKED` defaults to `365`.
@@ -131,6 +137,11 @@ npm run api:test
 - `POST /friends/block` block account (`blocked`) and cancel pending requests.
 - `GET /friends/list` list accepted friend edges for authenticated account.
 - `GET /friends/requests` list friend request history with optional `status` filter.
+- `POST /presence` update authenticated account presence status and activity.
+- `GET /friends/presence` list friend presence with privacy-safe activity fields.
+- `POST /friends/invites/send` send friend invite for room or queue context.
+- `GET /friends/invites` list active incoming friend invites.
+- `POST /friends/invites/:inviteId/cancel` cancel invite as sender or target.
 
 ## Matchmaking queue request example
 
@@ -192,6 +203,26 @@ Friend request send:
 }
 ```
 
+Presence update:
+
+```json
+{
+  "status": "online",
+  "activityType": "queue",
+  "queueType": "ranked"
+}
+```
+
+Friend invite send (room):
+
+```json
+{
+  "targetAccountId": "22222222-2222-4222-8222-222222222222",
+  "contextType": "room",
+  "roomCode": "ABCD42"
+}
+```
+
 ## Notes
 
 - Valid providers are `steam` and `web`.
@@ -205,6 +236,9 @@ Friend request send:
 - Friend graph schema uses `friend_requests` (states: pending, accepted, declined, cancelled, blocked) and `friendships` (accepted edges).
 - Friend workflows supported by API: send, accept, decline, cancel, remove, block, and list.
 - Friend request and friendship queries are index-backed for requester, target, status, and pair lookups.
+- Presence endpoint exposes privacy-safe activity fields (`queueType` or in-room boolean, not room code) for friend presence views.
+- Friend invite payload includes context plus web and Steam deep links for queue and room invites.
+- Presence and invite flows are rate-limited and audited in `presence_invite_events`.
 - Supported queue regions are `us-east`, `us-west`, `eu-west`, and `ap-southeast`.
 - Queue match payload includes session token and peer metadata for handshake bootstrapping.
 - Session tokens expire and reconnect attempts use one-time ids for replay protection.

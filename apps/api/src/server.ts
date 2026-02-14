@@ -41,6 +41,11 @@ import {
   verifyWebPassword,
 } from './auth/webAuth';
 import { validateSteamExchangeTicket } from './auth/steamAuth';
+import {
+  createPresenceInviteService,
+  type PresenceActivityInput,
+  type PresenceStatus,
+} from './social/presenceInviteService';
 
 const app = Fastify({ logger: true });
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
@@ -75,6 +80,16 @@ const roomService = createRoomService({
   maxParticipants: parsePositiveIntegerEnv(process.env.ROOM_MAX_PARTICIPANTS),
   maxSpectators: parsePositiveIntegerEnv(process.env.ROOM_MAX_SPECTATORS),
   maxHistoryEntries: parsePositiveIntegerEnv(process.env.ROOM_MAX_HISTORY_ENTRIES),
+  webInviteBaseUrl: process.env.ROOM_WEB_INVITE_BASE_URL,
+  steamAppId: process.env.STEAM_APP_ID,
+});
+const presenceInviteService = createPresenceInviteService({
+  presenceTtlMs: parsePositiveIntegerEnv(process.env.PRESENCE_TTL_MS),
+  inviteTtlMs: parsePositiveIntegerEnv(process.env.FRIEND_INVITE_TTL_MS),
+  inviteRateWindowMs: parsePositiveIntegerEnv(process.env.FRIEND_INVITE_RATE_WINDOW_MS),
+  maxInvitesPerWindow: parsePositiveIntegerEnv(process.env.FRIEND_INVITE_MAX_PER_WINDOW),
+  presenceRateWindowMs: parsePositiveIntegerEnv(process.env.PRESENCE_RATE_WINDOW_MS),
+  maxPresenceUpdatesPerWindow: parsePositiveIntegerEnv(process.env.PRESENCE_MAX_UPDATES_PER_WINDOW),
   webInviteBaseUrl: process.env.ROOM_WEB_INVITE_BASE_URL,
   steamAppId: process.env.STEAM_APP_ID,
 });
@@ -226,6 +241,20 @@ interface FriendRemoveBody {
 
 interface FriendRequestsQuery {
   status?: string;
+}
+
+interface PresenceUpdateBody {
+  status?: string;
+  activityType?: string;
+  queueType?: string;
+  roomCode?: string;
+}
+
+interface SendFriendInviteBody {
+  targetAccountId?: string;
+  contextType?: string;
+  queueType?: string;
+  roomCode?: string;
 }
 
 function isUuid(value: string | undefined): boolean {
@@ -411,6 +440,20 @@ async function ensureAccountExists(accountId: string): Promise<boolean> {
   return Boolean(accountExists.rowCount);
 }
 
+async function areFriends(accountId: string, targetAccountId: string): Promise<boolean> {
+  const pair = orderAccountPair(accountId, targetAccountId);
+  const friendship = await db.query(
+    `
+      SELECT 1
+      FROM friendships
+      WHERE account_id_low = $1 AND account_id_high = $2
+      LIMIT 1
+    `,
+    [pair.low, pair.high],
+  );
+  return Boolean(friendship.rowCount);
+}
+
 function parseIsoDate(value: string | undefined): Date | null {
   if (!value) {
     return null;
@@ -474,6 +517,84 @@ function parsePositiveInteger(value: string | undefined): number | null {
     return null;
   }
   return parsed;
+}
+
+function parsePresenceStatus(value: string | undefined): PresenceStatus | null {
+  if (!value) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'online' || normalised === 'away' || normalised === 'offline') {
+    return normalised;
+  }
+  return null;
+}
+
+function parsePresenceActivity(
+  activityType: string | undefined,
+  queueTypeRaw: string | undefined,
+  roomCodeRaw: string | undefined,
+): PresenceActivityInput | null {
+  if (!activityType) {
+    return null;
+  }
+  const type = activityType.trim().toLowerCase();
+  if (type === 'queue') {
+    const queueType = queueTypeRaw?.trim().toLowerCase();
+    if (queueType !== 'ranked' && queueType !== 'unranked') {
+      return null;
+    }
+    return {
+      type: 'queue',
+      queueType,
+    };
+  }
+  if (type === 'room') {
+    const roomCode = roomCodeRaw?.trim().toUpperCase();
+    if (!roomCode || roomCode.length < 4 || roomCode.length > 12) {
+      return null;
+    }
+    return {
+      type: 'room',
+      roomCode,
+    };
+  }
+  if (type === 'home' || type === 'match' || type === 'offline') {
+    return { type };
+  }
+  return null;
+}
+
+async function logPresenceInviteEvent(
+  event: {
+    accountId: string | null;
+    targetAccountId?: string | null;
+    eventType:
+      | 'presence_updated'
+      | 'presence_rate_limited'
+      | 'invite_sent'
+      | 'invite_cancelled'
+      | 'invite_rate_limited'
+      | 'invite_rejected';
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  try {
+    await db.query(
+      `
+        INSERT INTO presence_invite_events(account_id, target_account_id, event_type, metadata)
+        VALUES ($1, $2, $3, $4::jsonb)
+      `,
+      [
+        event.accountId,
+        event.targetAccountId ?? null,
+        event.eventType,
+        JSON.stringify(event.metadata ?? {}),
+      ],
+    );
+  } catch {
+    // Presence/invite audit logging must not fail request handling in prototype stage.
+  }
 }
 
 async function logAccountAuthEvent(
@@ -1393,6 +1514,309 @@ app.post('/auth/steam/exchange', async (request, reply) => {
   } finally {
     client.release();
   }
+});
+
+app.post('/presence', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (!await ensureAccountExists(accountId)) {
+    reply.code(404);
+    return { error: 'Account not found.' };
+  }
+
+  const body = (request.body ?? {}) as PresenceUpdateBody;
+  const rawStatus = typeof body.status === 'string' ? body.status : undefined;
+  const explicitStatus = parsePresenceStatus(rawStatus);
+  if (rawStatus && !explicitStatus) {
+    reply.code(400);
+    return { error: 'status must be online, away, or offline when provided.' };
+  }
+  const status = explicitStatus ?? 'online';
+  const activity = parsePresenceActivity(
+    typeof body.activityType === 'string' ? body.activityType : (status === 'offline' ? 'offline' : 'home'),
+    typeof body.queueType === 'string' ? body.queueType : undefined,
+    typeof body.roomCode === 'string' ? body.roomCode : undefined,
+  );
+  if (!activity) {
+    reply.code(400);
+    return { error: 'Presence activity is invalid for the requested context.' };
+  }
+
+  const updateResult = presenceInviteService.setPresence(accountId, status, activity);
+  if (!updateResult.ok) {
+    if (updateResult.code === 'rate_limited') {
+      await logPresenceInviteEvent({
+        accountId,
+        eventType: 'presence_rate_limited',
+        metadata: {
+          status,
+          activityType: activity.type,
+          reason: updateResult.message,
+        },
+      });
+    }
+    reply.code(updateResult.code === 'rate_limited' ? 429 : 400);
+    return { error: updateResult.message, code: updateResult.code };
+  }
+
+  await logPresenceInviteEvent({
+    accountId,
+    eventType: 'presence_updated',
+    metadata: {
+      status,
+      activityType: activity.type,
+      queueType: activity.type === 'queue' ? activity.queueType : null,
+      hasRoomContext: activity.type === 'room',
+    },
+  });
+
+  return updateResult.presence;
+});
+
+app.get('/friends/presence', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const rows = await db.query(
+    `
+      SELECT
+        CASE
+          WHEN f.account_id_low = $1 THEN f.account_id_high
+          ELSE f.account_id_low
+        END AS friend_account_id,
+        p.display_name,
+        f.created_at
+      FROM friendships f
+      LEFT JOIN profiles p ON p.account_id = (
+        CASE
+          WHEN f.account_id_low = $1 THEN f.account_id_high
+          ELSE f.account_id_low
+        END
+      )
+      WHERE f.account_id_low = $1 OR f.account_id_high = $1
+      ORDER BY f.created_at DESC
+    `,
+    [accountId],
+  );
+
+  const friendRows = rows.rows as Array<{
+    friend_account_id: string;
+    display_name: string | null;
+    created_at: unknown;
+  }>;
+  const presenceEntries = presenceInviteService.listPresence(friendRows.map((row) => row.friend_account_id));
+  const presenceByAccountId = new Map(presenceEntries.map((entry) => [entry.accountId, entry]));
+
+  return {
+    friends: friendRows.map((row) => {
+      const presence = presenceByAccountId.get(row.friend_account_id);
+      return {
+        accountId: row.friend_account_id,
+        displayName: row.display_name,
+        status: presence?.status ?? 'offline',
+        activity: presence?.activity ?? { type: 'offline' },
+        updatedAt: presence?.updatedAt ?? null,
+        isOnline: presence ? presence.status !== 'offline' : false,
+      };
+    }),
+    count: friendRows.length,
+  };
+});
+
+app.post('/friends/invites/send', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const body = (request.body ?? {}) as SendFriendInviteBody;
+  const targetAccountId = String(body.targetAccountId ?? '').trim();
+  if (!isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID.' };
+  }
+  if (targetAccountId === accountId) {
+    reply.code(400);
+    return { error: 'Cannot invite yourself.' };
+  }
+  if (!await ensureAccountExists(targetAccountId)) {
+    reply.code(404);
+    return { error: 'Target account not found.' };
+  }
+  if (!await areFriends(accountId, targetAccountId)) {
+    await logPresenceInviteEvent({
+      accountId,
+      targetAccountId,
+      eventType: 'invite_rejected',
+      metadata: { reason: 'not_friends' },
+    });
+    reply.code(403);
+    return { error: 'Invites are only allowed between friends.' };
+  }
+
+  const contextType = String(body.contextType ?? '').trim().toLowerCase();
+  let inviteContext: { type: 'queue'; queueType: 'ranked' | 'unranked' } | { type: 'room'; roomCode: string };
+  if (contextType === 'queue') {
+    const queueType = String(body.queueType ?? '').trim().toLowerCase();
+    if (queueType !== 'ranked' && queueType !== 'unranked') {
+      reply.code(400);
+      return { error: 'queueType must be ranked or unranked for queue invites.' };
+    }
+    inviteContext = {
+      type: 'queue',
+      queueType,
+    };
+  } else if (contextType === 'room') {
+    const roomCode = String(body.roomCode ?? '').trim().toUpperCase();
+    if (!roomCode) {
+      reply.code(400);
+      return { error: 'roomCode is required for room invites.' };
+    }
+    const accessCheck = roomService.getInvite(roomCode, accountId, 'web');
+    if (!accessCheck.ok) {
+      reply.code(mapRoomErrorToHttp(accessCheck.error.code));
+      return { error: accessCheck.error.message, code: accessCheck.error.code };
+    }
+    inviteContext = {
+      type: 'room',
+      roomCode,
+    };
+  } else {
+    reply.code(400);
+    return { error: 'contextType must be queue or room.' };
+  }
+
+  const inviteResult = presenceInviteService.sendInvite({
+    fromAccountId: accountId,
+    toAccountId: targetAccountId,
+    context: inviteContext,
+  });
+  if (!inviteResult.ok) {
+    await logPresenceInviteEvent({
+      accountId,
+      targetAccountId,
+      eventType: inviteResult.code === 'rate_limited' ? 'invite_rate_limited' : 'invite_rejected',
+      metadata: {
+        contextType,
+        code: inviteResult.code,
+        reason: inviteResult.message,
+      },
+    });
+    reply.code(inviteResult.code === 'rate_limited' ? 429 : 400);
+    return { error: inviteResult.message, code: inviteResult.code };
+  }
+
+  await logPresenceInviteEvent({
+    accountId,
+    targetAccountId,
+    eventType: 'invite_sent',
+    metadata: {
+      inviteId: inviteResult.invite.inviteId,
+      contextType: inviteResult.invite.context.type,
+      roomCode: inviteResult.invite.payload.roomCode,
+      queueType: inviteResult.invite.payload.queueType,
+    },
+  });
+
+  reply.code(201);
+  return inviteResult.invite;
+});
+
+app.get('/friends/invites', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const invites = presenceInviteService.listInvitesForTarget(accountId);
+  if (invites.length === 0) {
+    return {
+      invites: [],
+      count: 0,
+    };
+  }
+
+  const fromAccountIds = [...new Set(invites.map((invite) => invite.fromAccountId))];
+  const visibleRows = await db.query(
+    `
+      SELECT
+        CASE
+          WHEN f.account_id_low = $1 THEN f.account_id_high
+          ELSE f.account_id_low
+        END AS friend_account_id,
+        p.display_name
+      FROM friendships f
+      LEFT JOIN profiles p ON p.account_id = (
+        CASE
+          WHEN f.account_id_low = $1 THEN f.account_id_high
+          ELSE f.account_id_low
+        END
+      )
+      WHERE (
+        f.account_id_low = $1 AND f.account_id_high = ANY($2::uuid[])
+      )
+      OR (
+        f.account_id_high = $1 AND f.account_id_low = ANY($2::uuid[])
+      )
+    `,
+    [accountId, fromAccountIds],
+  );
+
+  const visibleByAccountId = new Map(
+    (visibleRows.rows as Array<{ friend_account_id: string; display_name: string | null }>).map((row) => [
+      row.friend_account_id,
+      row.display_name,
+    ]),
+  );
+  const filtered = invites.filter((invite) => visibleByAccountId.has(invite.fromAccountId));
+
+  return {
+    invites: filtered.map((invite) => ({
+      ...invite,
+      fromDisplayName: visibleByAccountId.get(invite.fromAccountId) ?? null,
+    })),
+    count: filtered.length,
+  };
+});
+
+app.post('/friends/invites/:inviteId/cancel', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const params = request.params as { inviteId?: string };
+  const inviteId = String(params.inviteId ?? '').trim();
+  if (!isUuid(inviteId)) {
+    reply.code(400);
+    return { error: 'inviteId must be a UUID.' };
+  }
+
+  const cancelled = presenceInviteService.cancelInvite(inviteId, accountId);
+  if (!cancelled) {
+    reply.code(404);
+    return { error: 'Invite not found or cannot be cancelled by this account.' };
+  }
+
+  await logPresenceInviteEvent({
+    accountId,
+    eventType: 'invite_cancelled',
+    metadata: { inviteId },
+  });
+
+  return {
+    inviteId,
+    cancelled: true,
+  };
 });
 
 app.post('/friends/requests/send', async (request, reply) => {

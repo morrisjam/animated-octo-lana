@@ -1,0 +1,25 @@
+{
+  "name": "gravity-well-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/game-web",
+    "apps/api"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @gravity-well/game-web",
+    "build": "npm run build --workspace @gravity-well/game-web",
+    "preview": "npm run preview --workspace @gravity-well/game-web",
+    "test": "npm run test --workspace @gravity-well/game-web",
+    "replay:run": "npm run replay:run --workspace @gravity-well/game-web --",
+    "replay:check": "npm run replay:check --workspace @gravity-well/game-web",
+    "verify": "npm run verify --workspace @gravity-well/game-web",
+    "api:dev": "npm run dev --workspace @gravity-well/api",
+    "api:test": "npm run test --workspace @gravity-well/api",
+    "api:migrate": "npm run migrate --workspace @gravity-well/api",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f postgres",
+    "api:local": "npm run db:up && npm run api:migrate && npm run api:dev"
+  }
+}

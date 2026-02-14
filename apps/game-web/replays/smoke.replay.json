@@ -1,0 +1,24 @@
+{
+  "header": {
+    "payloadVersion": 1,
+    "rulesetVersion": "prototype-2026.02",
+    "simBuildHash": "dev-local",
+    "seed": 20260214,
+    "fixedDt": 0.016666666666666666,
+    "advanceRngPerFrame": true
+  },
+  "inputTimeline": [
+    { "p1": { "moveX": 1 }, "p2": { "moveX": -1 } },
+    { "p1": { "moveY": 1, "boost": true }, "p2": { "moveY": -1 } },
+    { "p1": { "special": true }, "p2": { "parry": true } },
+    { "p1": { "moveX": 1, "moveY": 1 }, "p2": { "moveX": -1, "moveY": -1 } },
+    { "p1": { "launch": true }, "p2": { "breakLaunch": true } },
+    { "p1": { "moveX": -1 }, "p2": { "moveX": 1 } },
+    { "p1": { "superBoost": true }, "p2": { "moveY": 1 } },
+    { "p1": { "superBoost": true, "dunk": true }, "p2": { "parry": true } },
+    { "p1": { "moveY": -1 }, "p2": { "moveY": 1, "boost": true } },
+    { "p1": { "special": true }, "p2": { "special": true } },
+    { "p1": { "launch": true }, "p2": { "launch": true } },
+    { "p1": { "moveX": -1, "moveY": 1 }, "p2": { "moveX": 1, "moveY": -1 } }
+  ]
+}

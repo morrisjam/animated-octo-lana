@@ -1,0 +1,341 @@
+import { describe, expect, test } from 'vitest';
+import { CHARACTER_BY_ID } from './characters';
+import { computeStateChecksum } from './checksum';
+import { framesToSeconds } from './moveData';
+import type { FrameInput } from './types';
+import {
+  createInitialState,
+  createStateSnapshot,
+  deserialiseState,
+  nextDeterministicRandom,
+  restoreStateFromSnapshot,
+  serialiseState,
+  step,
+} from './sim';
+import { CHAIN_WINDOW_SECONDS } from './constants';
+
+const FIXED_DT = 1 / 60;
+const VANGUARD_LAUNCH = CHARACTER_BY_ID.vanguard.moves.launch;
+const VANGUARD_DUNK = CHARACTER_BY_ID.vanguard.moves.dunk;
+const LAUNCH_RESOLVE_STEPS = VANGUARD_LAUNCH.startupFrames + VANGUARD_LAUNCH.activeFrames + 3;
+const DUNK_RESOLVE_STEPS = VANGUARD_DUNK.startupFrames + VANGUARD_DUNK.activeFrames + 3;
+
+function neutralInput(): FrameInput {
+  return {
+    p1: {
+      moveX: 0,
+      moveY: 0,
+      boost: false,
+      superBoost: false,
+      special: false,
+      launch: false,
+      dunk: false,
+      parry: false,
+      breakLaunch: false,
+    },
+    p2: {
+      moveX: 0,
+      moveY: 0,
+      boost: false,
+      superBoost: false,
+      special: false,
+      launch: false,
+      dunk: false,
+      parry: false,
+      breakLaunch: false,
+    },
+  };
+}
+
+function runSteps(state: ReturnType<typeof createInitialState>, input: FrameInput, stepCount: number): void {
+  for (let i = 0; i < stepCount; i += 1) {
+    step(state, input, FIXED_DT);
+  }
+}
+
+function scriptedInputForFrame(frame: number): FrameInput {
+  const input = neutralInput();
+  if (frame % 15 < 5) {
+    input.p1.moveX = 1;
+  } else if (frame % 15 < 10) {
+    input.p1.moveX = -1;
+  }
+  if (frame % 20 < 10) {
+    input.p2.moveY = 1;
+  } else {
+    input.p2.moveY = -1;
+  }
+  if (frame % 30 === 0) {
+    input.p1.boost = true;
+  }
+  if (frame % 45 === 0) {
+    input.p2.parry = true;
+  }
+  if (frame % 50 === 0) {
+    input.p1.special = true;
+  }
+  return input;
+}
+
+describe('chain reset rules', () => {
+  test('resets chain after chain window without follow-up launch', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: 20, y: 0 };
+    state.players.P2.pos = { x: 24, y: 0 };
+
+    const input = neutralInput();
+    input.p1.launch = true;
+    step(state, input, FIXED_DT);
+    runSteps(state, neutralInput(), LAUNCH_RESOLVE_STEPS);
+    expect(state.players.P1.chain).toBe(1);
+
+    // Keep target in helpless long enough so this test exercises chain timeout.
+    state.players.P2.helpless = 10;
+    state.players.P2.lastLaunchedBy = 'P1';
+
+    const neutral = neutralInput();
+    const timeoutSteps = Math.ceil((CHAIN_WINDOW_SECONDS + 0.05) / FIXED_DT);
+    runSteps(state, neutral, timeoutSteps);
+
+    expect(state.players.P1.chain).toBe(0);
+  });
+
+  test('resets chain when attacker is parried and stunned', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: 20, y: 0 };
+    state.players.P2.pos = { x: 24, y: 0 };
+    state.players.P1.chain = 2;
+    state.players.P1.chainTimer = 0.8;
+    state.players.P2.parry = 0.2;
+
+    const input = neutralInput();
+    input.p1.launch = true;
+    step(state, input, FIXED_DT);
+    runSteps(state, neutralInput(), LAUNCH_RESOLVE_STEPS);
+
+    expect(state.players.P1.stunned).toBeGreaterThan(0);
+    expect(state.players.P1.chain).toBe(0);
+  });
+
+  test('launch whiff applies vulnerable recovery end lag', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: -30, y: 0 };
+    state.players.P2.pos = { x: 30, y: 0 };
+
+    const input = neutralInput();
+    input.p1.launch = true;
+    step(state, input, FIXED_DT);
+    runSteps(state, neutralInput(), LAUNCH_RESOLVE_STEPS);
+
+    const expectedRecovery = framesToSeconds(VANGUARD_LAUNCH.recoveryOnWhiffFrames);
+    expect(state.players.P1.endLag).toBeGreaterThan(expectedRecovery - 0.2);
+
+    const relaunch = neutralInput();
+    relaunch.p1.launch = true;
+    step(state, relaunch, FIXED_DT);
+    expect(state.players.P1.launchStartup).toBe(0);
+  });
+});
+
+describe('dunk move rules', () => {
+  test('dunk can be attempted at zero fuel and connect against a neutral opponent', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 5, y: 0 };
+    state.players.P1.fuel = 0;
+    state.players.P2.helpless = 0;
+
+    const input = neutralInput();
+    input.p1.dunk = true;
+    step(state, input, FIXED_DT);
+    runSteps(state, neutralInput(), DUNK_RESOLVE_STEPS);
+
+    expect(state.players.P2.recovering).toBeGreaterThan(0);
+    expect(state.players.P1.fuel).toBe(0);
+  });
+
+  test('dunk whiff applies large recovery end lag', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: -40, y: 0 };
+    state.players.P2.pos = { x: 40, y: 0 };
+
+    const input = neutralInput();
+    input.p1.dunk = true;
+    step(state, input, FIXED_DT);
+    runSteps(state, neutralInput(), DUNK_RESOLVE_STEPS);
+
+    const expectedRecovery = framesToSeconds(VANGUARD_DUNK.recoveryOnWhiffFrames);
+    expect(state.players.P1.endLag).toBeGreaterThan(expectedRecovery - 0.25);
+
+    const reDunk = neutralInput();
+    reDunk.p1.dunk = true;
+    step(state, reDunk, FIXED_DT);
+    expect(state.players.P1.dunkStartup).toBe(0);
+  });
+});
+
+describe('special move rules', () => {
+  test('default special still spawns a projectile placeholder', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 30, y: 0 };
+
+    const input = neutralInput();
+    input.p1.special = true;
+    step(state, input, FIXED_DT);
+
+    expect(state.projectiles.length).toBe(1);
+    expect(state.players.P1.specialFlash).toBeGreaterThan(0);
+  });
+
+  test('special respects cooldown and cannot be spammed instantly', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 30, y: 0 };
+
+    const input = neutralInput();
+    input.p1.special = true;
+    step(state, input, FIXED_DT);
+    step(state, input, FIXED_DT);
+
+    expect(state.projectiles.length).toBe(1);
+  });
+});
+
+describe('super boost commit tracking', () => {
+  test('applies non-commit penalty only when launch or dunk was not attempted', () => {
+    const noCommitState = createInitialState();
+    const commitState = createInitialState();
+
+    const startSuper = neutralInput();
+    startSuper.p1.superBoost = true;
+    startSuper.p1.moveX = 1;
+    step(noCommitState, startSuper, FIXED_DT);
+    step(commitState, startSuper, FIXED_DT);
+
+    const noCommitInput = neutralInput();
+    const commitInput = neutralInput();
+    commitInput.p1.superBoost = true;
+    commitInput.p1.moveX = 1;
+    commitInput.p1.launch = true;
+
+    // Attempt launch during active super boost, far from target, to set commit flag.
+    step(commitState, commitInput, FIXED_DT);
+    expect(commitState.players.P1.didCommitAttackDuringSuperBoost).toBe(true);
+
+    const settleSteps = Math.ceil(1.1 / FIXED_DT);
+    runSteps(noCommitState, noCommitInput, settleSteps);
+    runSteps(commitState, noCommitInput, settleSteps);
+
+    expect(noCommitState.players.P1.superBoost).toBe(0);
+    expect(commitState.players.P1.superBoost).toBe(0);
+    expect(commitState.players.P1.fuel - noCommitState.players.P1.fuel).toBeGreaterThan(1.9);
+  });
+});
+
+describe('deterministic seed and rng', () => {
+  test('same seed produces identical deterministic random sequence', () => {
+    const stateA = createInitialState({ seed: 1337 });
+    const stateB = createInitialState({ seed: 1337 });
+    const sequenceLength = 12;
+
+    for (let i = 0; i < sequenceLength; i += 1) {
+      const randomA = nextDeterministicRandom(stateA);
+      const randomB = nextDeterministicRandom(stateB);
+      expect(randomA).toBe(randomB);
+    }
+  });
+
+  test('same seed and same inputs produce matching checksum sequence', () => {
+    const stateA = createInitialState({ seed: 424242 });
+    const stateB = createInitialState({ seed: 424242 });
+    const checksumSequenceA: number[] = [];
+    const checksumSequenceB: number[] = [];
+
+    for (let frame = 0; frame < 240; frame += 1) {
+      const input = scriptedInputForFrame(frame);
+
+      step(stateA, input, FIXED_DT);
+      step(stateB, input, FIXED_DT);
+
+      // Advance deterministic rng stream in lockstep to validate seed determinism.
+      nextDeterministicRandom(stateA);
+      nextDeterministicRandom(stateB);
+
+      checksumSequenceA.push(computeStateChecksum(stateA));
+      checksumSequenceB.push(computeStateChecksum(stateB));
+    }
+
+    expect(checksumSequenceA).toEqual(checksumSequenceB);
+  });
+});
+
+describe('state snapshot and restore', () => {
+  test('snapshot is a deep copy and stays stable after source mutation', () => {
+    const state = createInitialState({ seed: 1234 });
+    const snapshot = createStateSnapshot(state);
+
+    state.players.P1.pos.x += 10;
+    state.players.P1.cool.special = 9;
+    state.projectiles.push({
+      id: 999,
+      ownerId: 'P1',
+      pos: { x: 1, y: 2 },
+      vel: { x: 3, y: 4 },
+      life: 5,
+      hitRadius: 0.8,
+      stunSeconds: 0.7,
+      fuelDamage: 4,
+      visualId: 'default_orb',
+    });
+    state.loadout.P1 = 'ace';
+    state.tuning.playerMoveAccel += 5;
+    state.rngState = 42;
+
+    expect(snapshot.players.P1.pos.x).not.toBe(state.players.P1.pos.x);
+    expect(snapshot.players.P1.cool.special).not.toBe(state.players.P1.cool.special);
+    expect(snapshot.projectiles.length).toBe(0);
+    expect(snapshot.loadout.P1).toBe('vanguard');
+    expect(snapshot.tuning.playerMoveAccel).not.toBe(state.tuning.playerMoveAccel);
+    expect(snapshot.rngState).not.toBe(state.rngState);
+  });
+
+  test('restore then resume produces identical final checksum', () => {
+    const totalFrames = 240;
+    const rewindFrame = 120;
+    const state = createInitialState({ seed: 8675309 });
+    let snapshot = createStateSnapshot(state);
+
+    for (let frame = 0; frame < totalFrames; frame += 1) {
+      if (frame === rewindFrame) {
+        snapshot = createStateSnapshot(state);
+      }
+      const input = scriptedInputForFrame(frame);
+      step(state, input, FIXED_DT);
+      nextDeterministicRandom(state);
+    }
+    const expectedChecksum = computeStateChecksum(state);
+
+    const restored = restoreStateFromSnapshot(snapshot);
+    for (let frame = rewindFrame; frame < totalFrames; frame += 1) {
+      const input = scriptedInputForFrame(frame);
+      step(restored, input, FIXED_DT);
+      nextDeterministicRandom(restored);
+    }
+    const restoredChecksum = computeStateChecksum(restored);
+    expect(restoredChecksum).toBe(expectedChecksum);
+  });
+
+  test('serialise and deserialise round-trip keeps state checksum', () => {
+    const state = createInitialState({ seed: 9988 });
+    for (let frame = 0; frame < 90; frame += 1) {
+      const input = scriptedInputForFrame(frame);
+      step(state, input, FIXED_DT);
+      nextDeterministicRandom(state);
+    }
+
+    const serialised = serialiseState(state);
+    const roundTrip = deserialiseState(serialised);
+    expect(computeStateChecksum(roundTrip)).toBe(computeStateChecksum(state));
+  });
+});

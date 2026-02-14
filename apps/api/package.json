@@ -1,0 +1,19 @@
+{
+  "name": "@gravity-well/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "migrate": "tsx scripts/migrate.ts",
+    "test": "node --test --import tsx src/**/*.test.ts"
+  },
+  "dependencies": {
+    "dotenv": "16.6.1",
+    "fastify": "5.7.4",
+    "pg": "8.16.3"
+  },
+  "devDependencies": {
+    "tsx": "4.20.6"
+  }
+}

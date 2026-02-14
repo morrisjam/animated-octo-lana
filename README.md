@@ -1,34 +1,60 @@
-# Gravity Well (Three.js Prototype)
+# Gravity Well Monorepo
 
-A browser-playable local 1v1 prototype inspired by your Gravity Well design scope.
+This repository is now split into workspace apps so game and server code stay isolated.
 
-## Run locally
+## Repository layout
+
+- `apps/game-web`: browser game client (Vite + Three.js).
+- `apps/api`: backend API (Fastify + PostgreSQL).
+- `docs`: architecture, backlog, and operating docs.
+- `docker-compose.yml`: local PostgreSQL service for API development.
+
+## Root commands
+
+Run these from repo root:
 
 ```bash
-python3 -m http.server 4173
-# then open http://localhost:4173
+npm install
+npm run dev
+npm run build
+npm run preview
+npm run test
+npm run verify
 ```
 
-## Mechanics included
+API and database:
 
-- Gravity-well arena with orbital movement around a dangerous center.
-- Fuel as a shared combat resource for movement pressure, super boost, projectiles, and dunks.
-- Standard boost (fuel-free commit movement toward opponent).
-- Super boost (zig-zag burst that consumes fuel by distance + direction changes + non-commit penalty).
-- Projectile stun opener.
-- Close-range launch into helpless launch state.
-- Screen wrap on ring-out with fuel penalty.
-- Limited launch breaks.
-- Parry windows with mistime/end-lag risk.
-- Dunk finisher interaction and fuel-pressure win condition.
-- Dynamic camera follow + zoom to keep both players in view.
-- HUD for fuel, launch breaks, and combat state.
+```bash
+npm run db:up
+npm run api:migrate
+npm run api:test
+npm run api:dev
+```
 
-## Controls
+Or all API local setup at once:
 
-- **P1**: `WASD` move · `F` boost · `G` super boost · `R` projectile · `T` launch · `Y` dunk · `H` parry · `J` launch break
-- **P2**: `IJKL` move · `O` boost · `P` super boost · `[` projectile · `]` launch · `\` dunk · `'` parry · `;` launch break
+```bash
+npm run api:local
+```
 
-## Notes
+## Workspace direct commands
 
-This is intentionally a focused vertical slice/prototype rather than a full production game. It is built to prove the core combat loop and feel in Three.js quickly.
+```bash
+npm run dev -w @gravity-well/game-web
+npm run verify -w @gravity-well/game-web
+npm run dev -w @gravity-well/api
+npm run migrate -w @gravity-well/api
+```
+
+## Environment files
+
+- Create root `.env` from `.env.example` before running API scripts.
+- Root `.env` is used for API database configuration.
+- Root `.env.development`, `.env.staging`, and `.env.production` are used by the web app via Vite `envDir`.
+
+## Project docs
+
+- Structure guardrails: `docs/REPO_STRUCTURE.md`
+- Game architecture and kits: `docs/CHARACTER_KITS.md`
+- API usage: `apps/api/README.md`
+- Neon setup checklist: `docs/NEON_SETUP_ACTION.md`

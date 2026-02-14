@@ -1,0 +1,24 @@
+{
+  "name": "@gravity-well/game-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "replay:run": "tsx scripts/replay-runner.ts",
+    "replay:check": "tsx scripts/replay-runner.ts --input replays/smoke.replay.json --expected replays/smoke.expected.json",
+    "replay:size-check": "tsx scripts/replay-size-check.ts --dir replays --max-median-bytes 4096",
+    "verify": "npm run test && npm run replay:check && npm run replay:size-check && npm run build"
+  },
+  "dependencies": {
+    "three": "0.161.0"
+  },
+  "devDependencies": {
+    "tsx": "4.20.6",
+    "vite": "7.3.1",
+    "vitest": "4.0.18"
+  }
+}

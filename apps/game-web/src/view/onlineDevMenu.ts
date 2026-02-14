@@ -66,6 +66,64 @@ interface MatchSessionView {
   participants: MatchSessionParticipantView[];
 }
 
+interface RoomSettingsView {
+  locked: boolean;
+  allowSpectators: boolean;
+  requiredRegion: string | null;
+  requiredBuildVersion: string | null;
+}
+
+interface RoomParticipantView {
+  accountId: string;
+  platform: 'web' | 'steam';
+  role: 'player' | 'spectator';
+  joinedAt: string;
+}
+
+interface RoomActiveSessionView {
+  sessionId: string;
+  rematchIndex: number;
+  phase: 'character_select' | 'ready_check' | 'in_match' | 'completed';
+  startedAt: string;
+  players: Array<{
+    accountId: string;
+    characterId: string | null;
+    ready: boolean;
+  }>;
+}
+
+interface RoomHistoryEntryView {
+  matchId: string;
+  rematchIndex: number;
+  outcome: 'win' | 'draw' | 'forfeit';
+  winnerAccountId: string | null;
+  completedAt: string;
+  players: Array<{
+    accountId: string;
+    characterId: string | null;
+  }>;
+}
+
+interface RoomView {
+  roomCode: string;
+  hostAccountId: string;
+  status: 'open' | 'active' | 'closed';
+  createdAt: string;
+  updatedAt: string;
+  idleExpiresAt: string;
+  settings: RoomSettingsView;
+  participants: RoomParticipantView[];
+  activeSession?: RoomActiveSessionView;
+  history: RoomHistoryEntryView[];
+}
+
+interface RoomInviteView {
+  roomCode: string;
+  platform: 'web' | 'steam';
+  flow: 'web_friend' | 'steam_friend';
+  inviteValue: string;
+}
+
 const QUEUE_TYPES: QueueType[] = ['unranked', 'ranked'];
 const REGION_IDS: RegionId[] = ['us-east', 'us-west', 'eu-west', 'ap-southeast'];
 
@@ -79,8 +137,8 @@ const SECTIONS: OnlineDevSection[] = [
   {
     id: 'rooms',
     title: 'Rooms',
-    summary: 'Private room and lobby controls will appear here.',
-    status: 'S2.23 target',
+    summary: 'Create, join, and manage private room lifecycle from this panel.',
+    status: 'S2.23 ready',
   },
   {
     id: 'replay',
@@ -152,12 +210,39 @@ export class OnlineDevMenu {
   private readonly sessionOutput: HTMLPreElement;
   private readonly reconnectOutput: HTMLPreElement;
   private readonly matchmakingPanel: HTMLDivElement;
+  private readonly roomsPanel: HTMLDivElement;
+  private readonly roomCodeInput: HTMLInputElement;
+  private readonly roomRegionInput: HTMLInputElement;
+  private readonly roomBuildInput: HTMLInputElement;
+  private readonly roomAllowSpectatorsInput: HTMLInputElement;
+  private readonly roomJoinRoleSelect: HTMLSelectElement;
+  private readonly createRoomButton: HTMLButtonElement;
+  private readonly joinRoomButton: HTMLButtonElement;
+  private readonly refreshRoomButton: HTMLButtonElement;
+  private readonly toggleLockButton: HTMLButtonElement;
+  private readonly toggleSpectatorsButton: HTMLButtonElement;
+  private readonly startRoomButton: HTMLButtonElement;
+  private readonly rematchButton: HTMLButtonElement;
+  private readonly closeRoomButton: HTMLButtonElement;
+  private readonly inviteWebButton: HTMLButtonElement;
+  private readonly inviteSteamButton: HTMLButtonElement;
+  private readonly roomStatusElement: HTMLDivElement;
+  private readonly roomErrorElement: HTMLDivElement;
+  private readonly roomOutput: HTMLPreElement;
+  private readonly roomPhaseOutput: HTMLPreElement;
+  private readonly roomInviteOutput: HTMLPreElement;
   private selectedIndex = 0;
   private rafId = 0;
   private pollIntervalId: number | null = null;
   private pendingMatchmakingRequest = false;
+  private pendingRoomRequest = false;
   private ticket: QueueTicketView | null = null;
   private session: MatchSessionView | null = null;
+  private room: RoomView | null = null;
+  private invitePreview: { web: RoomInviteView | null; steam: RoomInviteView | null } = {
+    web: null,
+    steam: null,
+  };
   private readonly buildVersion = '0.1.0-web';
 
   private readonly keydownHandler = (event: KeyboardEvent): void => {
@@ -331,7 +416,153 @@ export class OnlineDevMenu {
     this.reconnectOutput = reconnectPanel.output;
     outputs.appendChild(reconnectPanel.root);
 
-    this.sectionBody.appendChild(this.matchmakingPanel);
+    this.roomsPanel = document.createElement('div');
+    this.roomsPanel.className = 'online-dev-rooms';
+    this.roomsPanel.hidden = true;
+
+    const roomsControlGrid = document.createElement('div');
+    roomsControlGrid.className = 'online-dev-controls';
+    this.roomsPanel.appendChild(roomsControlGrid);
+
+    const roomCodeLabel = document.createElement('label');
+    roomCodeLabel.className = 'online-dev-control';
+    roomCodeLabel.textContent = 'Room code';
+    this.roomCodeInput = document.createElement('input');
+    this.roomCodeInput.type = 'text';
+    this.roomCodeInput.placeholder = 'AB12CD';
+    this.roomCodeInput.maxLength = 12;
+    this.roomCodeInput.addEventListener('input', () => {
+      this.updateRoomControlState();
+    });
+    roomCodeLabel.appendChild(this.roomCodeInput);
+    roomsControlGrid.appendChild(roomCodeLabel);
+
+    const roomRegionLabel = document.createElement('label');
+    roomRegionLabel.className = 'online-dev-control';
+    roomRegionLabel.textContent = 'Region (create or join)';
+    this.roomRegionInput = document.createElement('input');
+    this.roomRegionInput.type = 'text';
+    this.roomRegionInput.placeholder = 'us-east';
+    roomRegionLabel.appendChild(this.roomRegionInput);
+    roomsControlGrid.appendChild(roomRegionLabel);
+
+    const roomBuildLabel = document.createElement('label');
+    roomBuildLabel.className = 'online-dev-control';
+    roomBuildLabel.textContent = 'Build version (create or join)';
+    this.roomBuildInput = document.createElement('input');
+    this.roomBuildInput.type = 'text';
+    this.roomBuildInput.value = this.buildVersion;
+    roomBuildLabel.appendChild(this.roomBuildInput);
+    roomsControlGrid.appendChild(roomBuildLabel);
+
+    const roomCreateSettingsLabel = document.createElement('label');
+    roomCreateSettingsLabel.className = 'online-dev-control';
+    roomCreateSettingsLabel.textContent = 'Create settings';
+    const roomCreateSettingsRow = document.createElement('div');
+    roomCreateSettingsRow.className = 'online-dev-inline';
+    this.roomAllowSpectatorsInput = document.createElement('input');
+    this.roomAllowSpectatorsInput.type = 'checkbox';
+    const allowSpectatorsText = document.createElement('span');
+    allowSpectatorsText.textContent = 'Allow spectators';
+    roomCreateSettingsRow.append(this.roomAllowSpectatorsInput, allowSpectatorsText);
+    roomCreateSettingsLabel.appendChild(roomCreateSettingsRow);
+    roomsControlGrid.appendChild(roomCreateSettingsLabel);
+
+    const roomJoinRoleLabel = document.createElement('label');
+    roomJoinRoleLabel.className = 'online-dev-control';
+    roomJoinRoleLabel.textContent = 'Join role';
+    this.roomJoinRoleSelect = document.createElement('select');
+    for (const role of ['player', 'spectator']) {
+      const option = document.createElement('option');
+      option.value = role;
+      option.textContent = role;
+      this.roomJoinRoleSelect.appendChild(option);
+    }
+    roomJoinRoleLabel.appendChild(this.roomJoinRoleSelect);
+    roomsControlGrid.appendChild(roomJoinRoleLabel);
+
+    const roomActions = document.createElement('div');
+    roomActions.className = 'online-dev-actions';
+
+    this.createRoomButton = this.createRoomActionButton('Create Room', () => {
+      void this.createRoom();
+    });
+    roomActions.appendChild(this.createRoomButton);
+
+    this.joinRoomButton = this.createRoomActionButton('Join Room', () => {
+      void this.joinRoom();
+    });
+    roomActions.appendChild(this.joinRoomButton);
+
+    this.refreshRoomButton = this.createRoomActionButton('Refresh', () => {
+      void this.refreshRoom();
+    });
+    roomActions.appendChild(this.refreshRoomButton);
+
+    this.toggleLockButton = this.createRoomActionButton('Toggle Lock', () => {
+      void this.toggleRoomLock();
+    });
+    roomActions.appendChild(this.toggleLockButton);
+
+    this.toggleSpectatorsButton = this.createRoomActionButton('Toggle Spectators', () => {
+      void this.toggleRoomSpectators();
+    });
+    roomActions.appendChild(this.toggleSpectatorsButton);
+
+    this.startRoomButton = this.createRoomActionButton('Start Session', () => {
+      void this.startRoomSession();
+    });
+    roomActions.appendChild(this.startRoomButton);
+
+    this.rematchButton = this.createRoomActionButton('Rematch', () => {
+      void this.startRoomRematch();
+    });
+    roomActions.appendChild(this.rematchButton);
+
+    this.closeRoomButton = this.createRoomActionButton('Close Room', () => {
+      void this.closeRoom();
+    });
+    roomActions.appendChild(this.closeRoomButton);
+
+    this.inviteWebButton = this.createRoomActionButton('Invite Preview (Web)', () => {
+      void this.fetchInvite('web');
+    });
+    roomActions.appendChild(this.inviteWebButton);
+
+    this.inviteSteamButton = this.createRoomActionButton('Invite Preview (Steam)', () => {
+      void this.fetchInvite('steam');
+    });
+    roomActions.appendChild(this.inviteSteamButton);
+
+    this.roomsPanel.appendChild(roomActions);
+
+    this.roomStatusElement = document.createElement('div');
+    this.roomStatusElement.className = 'online-dev-status';
+    this.roomStatusElement.textContent = 'Ready.';
+    this.roomsPanel.appendChild(this.roomStatusElement);
+
+    this.roomErrorElement = document.createElement('div');
+    this.roomErrorElement.className = 'online-dev-error';
+    this.roomErrorElement.hidden = true;
+    this.roomsPanel.appendChild(this.roomErrorElement);
+
+    const roomOutputs = document.createElement('div');
+    roomOutputs.className = 'online-dev-outputs';
+    this.roomsPanel.appendChild(roomOutputs);
+
+    const roomStatePanel = this.createOutputPanel('Room state');
+    this.roomOutput = roomStatePanel.output;
+    roomOutputs.appendChild(roomStatePanel.root);
+
+    const roomPhasePanel = this.createOutputPanel('Room phase and history');
+    this.roomPhaseOutput = roomPhasePanel.output;
+    roomOutputs.appendChild(roomPhasePanel.root);
+
+    const roomInvitePanel = this.createOutputPanel('Invite payload preview');
+    this.roomInviteOutput = roomInvitePanel.output;
+    roomOutputs.appendChild(roomInvitePanel.root);
+
+    this.sectionBody.append(this.matchmakingPanel, this.roomsPanel);
 
     const hint = document.createElement('p');
     hint.className = 'online-dev-hint';
@@ -348,6 +579,8 @@ export class OnlineDevMenu {
     document.body.appendChild(this.root);
     this.setSelectedIndex(0);
     this.renderMatchmakingData();
+    this.renderRoomData();
+    this.updateRoomControlState();
     window.addEventListener('keydown', this.keydownHandler);
     this.pollGamepads();
   }
@@ -385,6 +618,15 @@ export class OnlineDevMenu {
     return { root, output };
   }
 
+  private createRoomActionButton(label: string, handler: () => void): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'online-dev-action';
+    button.textContent = label;
+    button.addEventListener('click', handler);
+    return button;
+  }
+
   private setSelectedIndex(index: number): void {
     const max = SECTIONS.length - 1;
     const next = Math.max(0, Math.min(max, index));
@@ -399,6 +641,7 @@ export class OnlineDevMenu {
     this.detailSummary.textContent = section.summary;
     this.detailStatus.textContent = section.status;
     this.matchmakingPanel.hidden = section.id !== 'matchmaking';
+    this.roomsPanel.hidden = section.id !== 'rooms';
   }
 
   private getSelectedRegions(): RegionId[] {
@@ -434,6 +677,20 @@ export class OnlineDevMenu {
     this.statusElement.textContent = message;
   }
 
+  private setRoomError(message: string | null): void {
+    if (!message) {
+      this.roomErrorElement.hidden = true;
+      this.roomErrorElement.textContent = '';
+      return;
+    }
+    this.roomErrorElement.hidden = false;
+    this.roomErrorElement.textContent = message;
+  }
+
+  private setRoomStatus(message: string): void {
+    this.roomStatusElement.textContent = message;
+  }
+
   private updateControlState(): void {
     const hasTicket = this.ticket !== null;
     this.joinButton.disabled = this.pendingMatchmakingRequest;
@@ -443,6 +700,28 @@ export class OnlineDevMenu {
     for (const input of this.regionInputs.values()) {
       input.disabled = this.pendingMatchmakingRequest;
     }
+  }
+
+  private updateRoomControlState(): void {
+    const hasRoomCode = this.resolveRoomCode() !== null;
+    const hasRoom = this.room !== null;
+    const busy = this.pendingRoomRequest;
+    this.roomCodeInput.disabled = busy;
+    this.roomRegionInput.disabled = busy;
+    this.roomBuildInput.disabled = busy;
+    this.roomAllowSpectatorsInput.disabled = busy;
+    this.roomJoinRoleSelect.disabled = busy;
+
+    this.createRoomButton.disabled = busy;
+    this.joinRoomButton.disabled = busy || !hasRoomCode;
+    this.refreshRoomButton.disabled = busy || !hasRoomCode;
+    this.toggleLockButton.disabled = busy || !hasRoom;
+    this.toggleSpectatorsButton.disabled = busy || !hasRoom;
+    this.startRoomButton.disabled = busy || !hasRoomCode;
+    this.rematchButton.disabled = busy || !hasRoomCode;
+    this.closeRoomButton.disabled = busy || !hasRoomCode;
+    this.inviteWebButton.disabled = busy || !hasRoomCode;
+    this.inviteSteamButton.disabled = busy || !hasRoomCode;
   }
 
   private renderMatchmakingData(): void {
@@ -456,6 +735,20 @@ export class OnlineDevMenu {
       participantConnectionState: this.session?.participants ?? [],
     };
     this.reconnectOutput.textContent = stableStringify(reconnectData);
+  }
+
+  private renderRoomData(): void {
+    this.roomOutput.textContent = this.room ? stableStringify(this.room) : '-';
+    this.roomPhaseOutput.textContent = stableStringify({
+      status: this.room?.status ?? null,
+      activePhase: this.room?.activeSession?.phase ?? null,
+      rematchIndex: this.room?.activeSession?.rematchIndex ?? null,
+      history: this.room?.history ?? [],
+    });
+    this.roomInviteOutput.textContent = stableStringify(this.invitePreview);
+    if (this.room?.roomCode) {
+      this.roomCodeInput.value = this.room.roomCode;
+    }
   }
 
   private async runMatchmakingAction(action: () => Promise<void>): Promise<void> {
@@ -474,6 +767,25 @@ export class OnlineDevMenu {
       this.pendingMatchmakingRequest = false;
       this.updateControlState();
       this.renderMatchmakingData();
+    }
+  }
+
+  private async runRoomAction(action: () => Promise<void>): Promise<void> {
+    if (this.pendingRoomRequest) {
+      return;
+    }
+    this.pendingRoomRequest = true;
+    this.setRoomError(null);
+    this.updateRoomControlState();
+    try {
+      await action();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected request failure.';
+      this.setRoomError(message);
+    } finally {
+      this.pendingRoomRequest = false;
+      this.updateRoomControlState();
+      this.renderRoomData();
     }
   }
 
@@ -617,6 +929,206 @@ export class OnlineDevMenu {
     } else {
       this.ensurePolling();
     }
+  }
+
+  private resolveRoomCode(): string | null {
+    const raw = this.roomCodeInput.value.trim().toUpperCase();
+    return raw.length > 0 ? raw : null;
+  }
+
+  private resolveRoomRegion(): string | null {
+    const raw = this.roomRegionInput.value.trim().toLowerCase();
+    return raw.length > 0 ? raw : null;
+  }
+
+  private resolveBuildVersion(): string | null {
+    const raw = this.roomBuildInput.value.trim();
+    return raw.length > 0 ? raw : null;
+  }
+
+  private async createRoom(): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      const room = await this.requestJson<RoomView>(
+        'POST',
+        '/rooms',
+        accountId,
+        {
+          platform: 'web',
+          requiredRegion: this.resolveRoomRegion(),
+          buildVersion: this.resolveBuildVersion(),
+          allowSpectators: this.roomAllowSpectatorsInput.checked,
+        },
+      );
+      this.room = room;
+      this.invitePreview = { web: null, steam: null };
+      this.setRoomStatus(`Created room ${room.roomCode}.`);
+    });
+  }
+
+  private async joinRoom(): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      const roomCode = this.resolveRoomCode();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      if (!roomCode) {
+        throw new Error('Room code is required to join.');
+      }
+      const room = await this.requestJson<RoomView>(
+        'POST',
+        `/rooms/${roomCode}/join`,
+        accountId,
+        {
+          platform: 'web',
+          role: this.roomJoinRoleSelect.value,
+          region: this.resolveRoomRegion(),
+          buildVersion: this.resolveBuildVersion(),
+        },
+      );
+      this.room = room;
+      this.setRoomStatus(`Joined room ${roomCode} as ${this.roomJoinRoleSelect.value}.`);
+    });
+  }
+
+  private async refreshRoom(): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      const roomCode = this.resolveRoomCode();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      if (!roomCode) {
+        throw new Error('Room code is required to refresh.');
+      }
+      this.room = await this.requestJson<RoomView>('GET', `/rooms/${roomCode}`, accountId);
+      this.setRoomStatus(`Refreshed room ${roomCode}.`);
+    });
+  }
+
+  private async toggleRoomLock(): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      const roomCode = this.room?.roomCode ?? this.resolveRoomCode();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      if (!roomCode || !this.room) {
+        throw new Error('Load a room first before toggling lock.');
+      }
+      this.room = await this.requestJson<RoomView>(
+        'POST',
+        `/rooms/${roomCode}/settings`,
+        accountId,
+        {
+          locked: !this.room.settings.locked,
+        },
+      );
+      this.setRoomStatus(`Lock updated: ${this.room.settings.locked}.`);
+    });
+  }
+
+  private async toggleRoomSpectators(): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      const roomCode = this.room?.roomCode ?? this.resolveRoomCode();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      if (!roomCode || !this.room) {
+        throw new Error('Load a room first before toggling spectators.');
+      }
+      this.room = await this.requestJson<RoomView>(
+        'POST',
+        `/rooms/${roomCode}/settings`,
+        accountId,
+        {
+          allowSpectators: !this.room.settings.allowSpectators,
+        },
+      );
+      this.setRoomStatus(`Spectators updated: ${this.room.settings.allowSpectators}.`);
+    });
+  }
+
+  private async startRoomSession(): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      const roomCode = this.room?.roomCode ?? this.resolveRoomCode();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      if (!roomCode) {
+        throw new Error('Room code is required to start session.');
+      }
+      this.room = await this.requestJson<RoomView>('POST', `/rooms/${roomCode}/start`, accountId);
+      this.setRoomStatus(`Started room session for ${roomCode}.`);
+    });
+  }
+
+  private async startRoomRematch(): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      const roomCode = this.room?.roomCode ?? this.resolveRoomCode();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      if (!roomCode) {
+        throw new Error('Room code is required to start rematch.');
+      }
+      this.room = await this.requestJson<RoomView>('POST', `/rooms/${roomCode}/rematch`, accountId);
+      this.setRoomStatus(`Started rematch for ${roomCode}.`);
+    });
+  }
+
+  private async closeRoom(): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      const roomCode = this.room?.roomCode ?? this.resolveRoomCode();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      if (!roomCode) {
+        throw new Error('Room code is required to close room.');
+      }
+      this.room = await this.requestJson<RoomView>('POST', `/rooms/${roomCode}/close`, accountId);
+      this.setRoomStatus(`Closed room ${roomCode}.`);
+    });
+  }
+
+  private async fetchInvite(platform: 'web' | 'steam'): Promise<void> {
+    await this.runRoomAction(async () => {
+      const accountId = this.options.getAccountId();
+      const roomCode = this.room?.roomCode ?? this.resolveRoomCode();
+      if (!accountId) {
+        this.setRoomError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      if (!roomCode) {
+        throw new Error('Room code is required to fetch invite payload.');
+      }
+      const invite = await this.requestJson<RoomInviteView>(
+        'GET',
+        `/rooms/${roomCode}/invite?platform=${platform}`,
+        accountId,
+      );
+      this.invitePreview = {
+        ...this.invitePreview,
+        [platform]: invite,
+      };
+      this.setRoomStatus(`Fetched ${platform} invite payload for ${roomCode}.`);
+    });
   }
 
   private wasPressed(padIndex: number, state: PadState, key: keyof PadState): boolean {

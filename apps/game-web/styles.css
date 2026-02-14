@@ -461,12 +461,19 @@ html, body {
   color: #c7d8ff;
 }
 
-.online-dev-control select {
+.online-dev-control select,
+.online-dev-control input[type='text'] {
   border: 1px solid rgba(167, 195, 255, 0.3);
   background: rgba(7, 12, 26, 0.9);
   color: var(--text);
   border-radius: 6px;
   padding: 7px 8px;
+}
+
+.online-dev-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .online-dev-region-list {

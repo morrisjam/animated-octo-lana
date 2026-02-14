@@ -85,6 +85,13 @@ const matchmakingQueueService = createMatchmakingQueueService({
   sessionTokenTtlSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_SESSION_TOKEN_TTL_SECONDS),
   reconnectGraceSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_RECONNECT_GRACE_SECONDS),
   closedTicketRetentionSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_CLOSED_RETENTION_SECONDS),
+  rankedRatingInitialGap: parsePositiveIntegerEnv(process.env.MATCHMAKING_RANKED_INITIAL_GAP),
+  rankedRatingExpansionPerSecond: parsePositiveNumberEnv(process.env.MATCHMAKING_RANKED_GAP_EXPANSION_PER_SECOND),
+  rankedRatingMaxGap: parsePositiveIntegerEnv(process.env.MATCHMAKING_RANKED_MAX_GAP),
+  rankedMasterInitialGap: parsePositiveIntegerEnv(process.env.MATCHMAKING_MASTER_INITIAL_GAP),
+  rankedMasterExpansionPerSecond: parsePositiveNumberEnv(process.env.MATCHMAKING_MASTER_GAP_EXPANSION_PER_SECOND),
+  rankedMasterMaxGap: parsePositiveIntegerEnv(process.env.MATCHMAKING_MASTER_MAX_GAP),
+  rankedMasterStrictRegionSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_MASTER_STRICT_REGION_SECONDS),
 });
 const matchmakingNetworkConfig = createMatchmakingNetworkConfigFromEnv(process.env);
 const connectivityTelemetryStore = createConnectivityTelemetryStore({
@@ -2961,6 +2968,42 @@ app.post('/matchmaking/queue/join', async (request, reply) => {
   }
 
   const displayName = await getProfileDisplayName(accountId);
+  let rankedSnapshot: { rating: number | null; leagueTier: string | null; mrPoints: number | null } | undefined;
+  if (queueType === 'ranked') {
+    const activeSeason = await ensureActiveSeason(db, new Date(), rankedSeasonDurationDays);
+    const rankedResult = await db.query(
+      `
+        SELECT
+          r.rating,
+          l.league_tier,
+          m.mr_points
+        FROM ranked_player_ratings r
+        LEFT JOIN ranked_league_progression l ON l.account_id = r.account_id
+        LEFT JOIN ranked_master_ratings m ON m.account_id = r.account_id AND m.season_id = $2
+        WHERE r.account_id = $1
+        LIMIT 1
+      `,
+      [accountId, activeSeason.seasonId],
+    );
+    if (rankedResult.rowCount) {
+      const row = rankedResult.rows[0] as {
+        rating: number | null;
+        league_tier: string | null;
+        mr_points: number | null;
+      };
+      rankedSnapshot = {
+        rating: row.rating ?? 1200,
+        leagueTier: row.league_tier ?? null,
+        mrPoints: row.mr_points ?? null,
+      };
+    } else {
+      rankedSnapshot = {
+        rating: 1200,
+        leagueTier: null,
+        mrPoints: null,
+      };
+    }
+  }
   const ticket = matchmakingQueueService.join({
     accountId,
     queueType,
@@ -2969,6 +3012,7 @@ app.post('/matchmaking/queue/join', async (request, reply) => {
       displayName,
       buildVersion: typeof body.buildVersion === 'string' ? body.buildVersion.trim() : null,
       platform: body.platform === 'steam' || body.platform === 'web' ? body.platform : null,
+      rankedSnapshot,
     },
   });
 

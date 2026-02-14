@@ -15,6 +15,15 @@ function expectMatched(ticket: QueueTicketView): QueueTicketView & { status: 'ma
   return ticket as QueueTicketView & { status: 'matched' };
 }
 
+function rankedMetadata(rating: number, mrPoints: number | null = null): { rankedSnapshot: { rating: number; mrPoints: number | null } } {
+  return {
+    rankedSnapshot: {
+      rating,
+      mrPoints,
+    },
+  };
+}
+
 test('matches only within same queue type', () => {
   const queue = createMatchmakingQueueService();
 
@@ -57,6 +66,89 @@ test('applies region preferences when selecting a match region', () => {
   assert.ok(ticketAStatus);
   const matchedA = expectMatched(ticketAStatus);
   assert.equal(matchedA.matchStart.region, 'us-east');
+});
+
+test('ranked matchmaking expands allowed rating gap based on queue wait time', () => {
+  let nowMs = 1_000_000;
+  const queue = createMatchmakingQueueService({
+    now: () => nowMs,
+    rankedRatingInitialGap: 100,
+    rankedRatingExpansionPerSecond: 10,
+    rankedRatingMaxGap: 500,
+  });
+
+  const first = queue.join({
+    accountId: ACCOUNT_1,
+    queueType: 'ranked',
+    regionPreferences: ['us-east'],
+    playerMetadata: rankedMetadata(1200),
+  });
+  assert.equal(first.status, 'queued');
+
+  nowMs += 5_000;
+  const second = queue.join({
+    accountId: ACCOUNT_2,
+    queueType: 'ranked',
+    regionPreferences: ['us-east'],
+    playerMetadata: rankedMetadata(1500),
+  });
+  assert.equal(second.status, 'queued');
+
+  const secondPeek = queue.getTicketForAccount(second.ticketId, ACCOUNT_2);
+  assert.ok(secondPeek);
+  assert.equal(secondPeek.status, 'queued');
+
+  nowMs += 40_000;
+  const third = queue.join({
+    accountId: ACCOUNT_3,
+    queueType: 'ranked',
+    regionPreferences: ['us-east'],
+    playerMetadata: rankedMetadata(1490),
+  });
+  const matchedThird = expectMatched(third);
+  assert.equal(matchedThird.matchStart.diagnostics.skillTrack, 'rating');
+  assert.equal(typeof matchedThird.matchStart.diagnostics.expectedGap, 'number');
+  assert.equal(typeof matchedThird.matchStart.diagnostics.matchedGap, 'number');
+  assert.ok((matchedThird.matchStart.diagnostics.expectedGap ?? 0) >= (matchedThird.matchStart.diagnostics.matchedGap ?? 0));
+});
+
+test('master track matchmaking enforces strict primary-region constraint before wait threshold', () => {
+  let nowMs = 2_000_000;
+  const queue = createMatchmakingQueueService({
+    now: () => nowMs,
+    rankedMasterInitialGap: 100,
+    rankedMasterExpansionPerSecond: 10,
+    rankedMasterMaxGap: 300,
+    rankedMasterStrictRegionSeconds: 20,
+  });
+
+  const first = queue.join({
+    accountId: ACCOUNT_1,
+    queueType: 'ranked',
+    regionPreferences: ['us-east', 'us-west'],
+    playerMetadata: rankedMetadata(1900, 1500),
+  });
+  assert.equal(first.status, 'queued');
+
+  nowMs += 2_000;
+  const second = queue.join({
+    accountId: ACCOUNT_2,
+    queueType: 'ranked',
+    regionPreferences: ['us-west', 'us-east'],
+    playerMetadata: rankedMetadata(1910, 1508),
+  });
+  assert.equal(second.status, 'queued');
+
+  nowMs += 22_000;
+  const third = queue.join({
+    accountId: ACCOUNT_3,
+    queueType: 'ranked',
+    regionPreferences: ['us-west', 'us-east'],
+    playerMetadata: rankedMetadata(1915, 1509),
+  });
+  const matchedThird = expectMatched(third);
+  assert.equal(matchedThird.matchStart.diagnostics.skillTrack, 'master');
+  assert.equal(matchedThird.matchStart.diagnostics.regionConstraintRelaxed, true);
 });
 
 test('match start payload includes session token and peer metadata', () => {

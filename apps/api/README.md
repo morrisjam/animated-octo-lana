@@ -15,6 +15,13 @@ Optional:
 - `MATCHMAKING_SESSION_TOKEN_TTL_SECONDS` defaults to session TTL.
 - `MATCHMAKING_RECONNECT_GRACE_SECONDS` defaults to `10`.
 - `MATCHMAKING_CLOSED_RETENTION_SECONDS` defaults to `120`.
+- `MATCHMAKING_RANKED_INITIAL_GAP` defaults to `120`.
+- `MATCHMAKING_RANKED_GAP_EXPANSION_PER_SECOND` defaults to `8`.
+- `MATCHMAKING_RANKED_MAX_GAP` defaults to `700`.
+- `MATCHMAKING_MASTER_INITIAL_GAP` defaults to `80`.
+- `MATCHMAKING_MASTER_GAP_EXPANSION_PER_SECOND` defaults to `5`.
+- `MATCHMAKING_MASTER_MAX_GAP` defaults to `400`.
+- `MATCHMAKING_MASTER_STRICT_REGION_SECONDS` defaults to `20`.
 - `MATCHMAKING_STUN_URLS` optional comma-separated STUN URL list.
 - `MATCHMAKING_TURN_URLS` optional comma-separated TURN URL list.
 - `MATCHMAKING_TURN_USERNAME` and `MATCHMAKING_TURN_CREDENTIAL` for TURN relay auth.
@@ -300,6 +307,7 @@ Ranked result submission:
 - Moderation actions and policy rejections are audited in `social_moderation_events` with actor, target, reason, metadata, and timestamp.
 - Supported queue regions are `us-east`, `us-west`, `eu-west`, and `ap-southeast`.
 - Queue match payload includes session token and peer metadata for handshake bootstrapping.
+- Ranked queue match payload includes diagnostics (`skillTrack`, `expectedGap`, `matchedGap`, `waitSeconds`, `regionConstraintRelaxed`) for matchmaking review.
 - Session tokens expire and reconnect attempts use one-time ids for replay protection.
 - Ranked result submissions require a valid session token; mismatched participant/match payloads are stored and flagged with `review_status = pending`.
 - Accepted ranked results persist per-player pre/post rating deltas in `ranked_match_rating_deltas`.

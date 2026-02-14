@@ -18,6 +18,11 @@ export interface QueuePlayerMetadata {
   displayName?: string | null;
   platform?: 'web' | 'steam' | null;
   buildVersion?: string | null;
+  rankedSnapshot?: {
+    rating?: number | null;
+    leagueTier?: string | null;
+    mrPoints?: number | null;
+  };
 }
 
 export interface QueueJoinRequest {
@@ -46,6 +51,13 @@ export interface MatchStartPayload {
   expiresAt: string;
   localPlayer: MatchPlayerMetadata;
   peer: MatchPlayerMetadata;
+  diagnostics: {
+    skillTrack: 'unranked' | 'rating' | 'master';
+    expectedGap: number | null;
+    matchedGap: number | null;
+    waitSeconds: number;
+    regionConstraintRelaxed: boolean;
+  };
 }
 
 export interface QueueTicketView {
@@ -114,6 +126,13 @@ export interface QueueServiceOptions {
   sessionTokenTtlSeconds?: number;
   reconnectGraceSeconds?: number;
   closedTicketRetentionSeconds?: number;
+  rankedRatingInitialGap?: number;
+  rankedRatingExpansionPerSecond?: number;
+  rankedRatingMaxGap?: number;
+  rankedMasterInitialGap?: number;
+  rankedMasterExpansionPerSecond?: number;
+  rankedMasterMaxGap?: number;
+  rankedMasterStrictRegionSeconds?: number;
   now?: () => number;
 }
 
@@ -161,12 +180,20 @@ interface CandidateMatch {
   ticket: QueueTicketRecord;
   region: RegionId;
   score: number;
+  diagnostics: MatchStartPayload['diagnostics'];
 }
 
 const DEFAULT_TICKET_TTL_SECONDS = 90;
 const DEFAULT_SESSION_TTL_SECONDS = 30;
 const DEFAULT_RECONNECT_GRACE_SECONDS = 10;
 const DEFAULT_CLOSED_RETENTION_SECONDS = 120;
+const DEFAULT_RANKED_RATING_INITIAL_GAP = 120;
+const DEFAULT_RANKED_RATING_EXPANSION_PER_SECOND = 8;
+const DEFAULT_RANKED_RATING_MAX_GAP = 700;
+const DEFAULT_MASTER_INITIAL_GAP = 80;
+const DEFAULT_MASTER_EXPANSION_PER_SECOND = 5;
+const DEFAULT_MASTER_MAX_GAP = 400;
+const DEFAULT_MASTER_STRICT_REGION_SECONDS = 20;
 
 function createBucketKey(queueType: QueueType, region: RegionId): string {
   return `${queueType}:${region}`;
@@ -224,6 +251,20 @@ export class MatchmakingQueueService {
 
   private readonly closedRetentionMs: number;
 
+  private readonly rankedRatingInitialGap: number;
+
+  private readonly rankedRatingExpansionPerSecond: number;
+
+  private readonly rankedRatingMaxGap: number;
+
+  private readonly rankedMasterInitialGap: number;
+
+  private readonly rankedMasterExpansionPerSecond: number;
+
+  private readonly rankedMasterMaxGap: number;
+
+  private readonly rankedMasterStrictRegionSeconds: number;
+
   private readonly now: () => number;
 
   private readonly ticketsById = new Map<string, QueueTicketRecord>();
@@ -240,6 +281,22 @@ export class MatchmakingQueueService {
     this.sessionTokenTtlMs = (options.sessionTokenTtlSeconds ?? options.sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS) * 1000;
     this.reconnectGraceMs = (options.reconnectGraceSeconds ?? DEFAULT_RECONNECT_GRACE_SECONDS) * 1000;
     this.closedRetentionMs = (options.closedTicketRetentionSeconds ?? DEFAULT_CLOSED_RETENTION_SECONDS) * 1000;
+    this.rankedRatingInitialGap = Math.max(1, Math.floor(options.rankedRatingInitialGap ?? DEFAULT_RANKED_RATING_INITIAL_GAP));
+    this.rankedRatingExpansionPerSecond = Math.max(0.1, options.rankedRatingExpansionPerSecond ?? DEFAULT_RANKED_RATING_EXPANSION_PER_SECOND);
+    this.rankedRatingMaxGap = Math.max(
+      this.rankedRatingInitialGap,
+      Math.floor(options.rankedRatingMaxGap ?? DEFAULT_RANKED_RATING_MAX_GAP),
+    );
+    this.rankedMasterInitialGap = Math.max(1, Math.floor(options.rankedMasterInitialGap ?? DEFAULT_MASTER_INITIAL_GAP));
+    this.rankedMasterExpansionPerSecond = Math.max(0.1, options.rankedMasterExpansionPerSecond ?? DEFAULT_MASTER_EXPANSION_PER_SECOND);
+    this.rankedMasterMaxGap = Math.max(
+      this.rankedMasterInitialGap,
+      Math.floor(options.rankedMasterMaxGap ?? DEFAULT_MASTER_MAX_GAP),
+    );
+    this.rankedMasterStrictRegionSeconds = Math.max(
+      0,
+      Math.floor(options.rankedMasterStrictRegionSeconds ?? DEFAULT_MASTER_STRICT_REGION_SECONDS),
+    );
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -439,15 +496,15 @@ export class MatchmakingQueueService {
       return;
     }
 
-    const candidate = this.findBestCandidate(sourceTicket);
+    const candidate = this.findBestCandidate(sourceTicket, nowMs);
     if (!candidate) {
       return;
     }
 
-    this.createMatch(sourceTicket, candidate.ticket, candidate.region, nowMs);
+    this.createMatch(sourceTicket, candidate.ticket, candidate.region, nowMs, candidate.diagnostics);
   }
 
-  private findBestCandidate(sourceTicket: QueueTicketRecord): CandidateMatch | null {
+  private findBestCandidate(sourceTicket: QueueTicketRecord, nowMs: number): CandidateMatch | null {
     let bestMatch: CandidateMatch | null = null;
     const seenCandidates = new Set<string>();
 
@@ -469,19 +526,36 @@ export class MatchmakingQueueService {
           continue;
         }
 
-        const score = this.computeRegionScore(sourceTicket, candidateTicket, region);
+        const regionScore = this.computeRegionScore(sourceTicket, candidateTicket, region);
+        let diagnostics: MatchStartPayload['diagnostics'] = {
+          skillTrack: 'unranked',
+          expectedGap: null,
+          matchedGap: null,
+          waitSeconds: Math.floor(Math.max(nowMs - sourceTicket.queuedAtMs, nowMs - candidateTicket.queuedAtMs) / 1000),
+          regionConstraintRelaxed: false,
+        };
+        let skillPenalty = 0;
+        if (sourceTicket.queueType === 'ranked') {
+          const rankedBand = this.evaluateRankedBand(sourceTicket, candidateTicket, region, nowMs);
+          if (!rankedBand) {
+            continue;
+          }
+          diagnostics = rankedBand.diagnostics;
+          skillPenalty = rankedBand.skillPenalty;
+        }
+        const score = regionScore * 1000 + skillPenalty;
         if (!bestMatch) {
-          bestMatch = { ticket: candidateTicket, region, score };
+          bestMatch = { ticket: candidateTicket, region, score, diagnostics };
           continue;
         }
 
         if (score < bestMatch.score) {
-          bestMatch = { ticket: candidateTicket, region, score };
+          bestMatch = { ticket: candidateTicket, region, score, diagnostics };
           continue;
         }
 
         if (score === bestMatch.score && candidateTicket.queuedAtMs < bestMatch.ticket.queuedAtMs) {
-          bestMatch = { ticket: candidateTicket, region, score };
+          bestMatch = { ticket: candidateTicket, region, score, diagnostics };
         }
       }
     }
@@ -512,7 +586,81 @@ export class MatchmakingQueueService {
     return firstRank + secondRank;
   }
 
-  private createMatch(first: QueueTicketRecord, second: QueueTicketRecord, region: RegionId, nowMs: number): void {
+  private evaluateRankedBand(
+    sourceTicket: QueueTicketRecord,
+    candidateTicket: QueueTicketRecord,
+    region: RegionId,
+    nowMs: number,
+  ): { diagnostics: MatchStartPayload['diagnostics']; skillPenalty: number } | null {
+    const sourceSnapshot = this.getRankedSnapshot(sourceTicket);
+    const candidateSnapshot = this.getRankedSnapshot(candidateTicket);
+    const sourceIsMaster = sourceSnapshot.mrPoints !== null;
+    const candidateIsMaster = candidateSnapshot.mrPoints !== null;
+    if (sourceIsMaster !== candidateIsMaster) {
+      return null;
+    }
+
+    const waitSeconds = Math.max(0, Math.floor(
+      Math.max(nowMs - sourceTicket.queuedAtMs, nowMs - candidateTicket.queuedAtMs) / 1000,
+    ));
+    const isMasterTrack = sourceIsMaster && candidateIsMaster;
+    const baseGap = isMasterTrack ? this.rankedMasterInitialGap : this.rankedRatingInitialGap;
+    const expansionPerSecond = isMasterTrack ? this.rankedMasterExpansionPerSecond : this.rankedRatingExpansionPerSecond;
+    const maxGap = isMasterTrack ? this.rankedMasterMaxGap : this.rankedRatingMaxGap;
+    const expectedGap = Math.min(maxGap, Math.round(baseGap + waitSeconds * expansionPerSecond));
+    const matchedGap = isMasterTrack
+      ? Math.abs((sourceSnapshot.mrPoints as number) - (candidateSnapshot.mrPoints as number))
+      : Math.abs(sourceSnapshot.rating - candidateSnapshot.rating);
+    if (matchedGap > expectedGap) {
+      return null;
+    }
+
+    let regionConstraintRelaxed = false;
+    if (isMasterTrack) {
+      if (waitSeconds < this.rankedMasterStrictRegionSeconds) {
+        const sourcePrimary = sourceTicket.regionPreferences[0];
+        const candidatePrimary = candidateTicket.regionPreferences[0];
+        if (!(region === sourcePrimary && region === candidatePrimary)) {
+          return null;
+        }
+      } else {
+        regionConstraintRelaxed = true;
+      }
+    }
+
+    return {
+      diagnostics: {
+        skillTrack: isMasterTrack ? 'master' : 'rating',
+        expectedGap,
+        matchedGap,
+        waitSeconds,
+        regionConstraintRelaxed,
+      },
+      skillPenalty: matchedGap,
+    };
+  }
+
+  private getRankedSnapshot(ticket: QueueTicketRecord): { rating: number; mrPoints: number | null } {
+    const snapshot = ticket.playerMetadata.rankedSnapshot;
+    const rating = typeof snapshot?.rating === 'number' && Number.isFinite(snapshot.rating)
+      ? snapshot.rating
+      : 1200;
+    const mrPoints = typeof snapshot?.mrPoints === 'number' && Number.isFinite(snapshot.mrPoints)
+      ? snapshot.mrPoints
+      : null;
+    return {
+      rating,
+      mrPoints,
+    };
+  }
+
+  private createMatch(
+    first: QueueTicketRecord,
+    second: QueueTicketRecord,
+    region: RegionId,
+    nowMs: number,
+    diagnostics: MatchStartPayload['diagnostics'],
+  ): void {
     const [p1Ticket, p2Ticket] = [first, second].sort((a, b) => {
       if (a.queuedAtMs !== b.queuedAtMs) {
         return a.queuedAtMs - b.queuedAtMs;
@@ -572,6 +720,7 @@ export class MatchmakingQueueService {
       expiresAt,
       localPlayer: p1Local,
       peer: p2Local,
+      diagnostics,
     };
 
     const p2Payload: MatchStartPayload = {
@@ -584,6 +733,7 @@ export class MatchmakingQueueService {
       expiresAt,
       localPlayer: p2Local,
       peer: p1Local,
+      diagnostics,
     };
 
     this.removeFromRegionBuckets(first);
@@ -704,6 +854,7 @@ export class MatchmakingQueueService {
           ...ticket.matchStart,
           localPlayer: { ...ticket.matchStart.localPlayer, preferredRegions: [...ticket.matchStart.localPlayer.preferredRegions] },
           peer: { ...ticket.matchStart.peer, preferredRegions: [...ticket.matchStart.peer.preferredRegions] },
+          diagnostics: { ...ticket.matchStart.diagnostics },
         }
         : undefined,
     };

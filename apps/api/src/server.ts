@@ -211,6 +211,23 @@ interface ReplayDeleteBody {
   reason?: string;
 }
 
+interface SendFriendRequestBody {
+  targetAccountId?: string;
+}
+
+interface FriendBlockBody {
+  targetAccountId?: string;
+  reason?: string;
+}
+
+interface FriendRemoveBody {
+  targetAccountId?: string;
+}
+
+interface FriendRequestsQuery {
+  status?: string;
+}
+
 function isUuid(value: string | undefined): boolean {
   if (!value) {
     return false;
@@ -440,6 +457,23 @@ function normaliseDisplayName(value: unknown): string | null {
     return null;
   }
   return normalised.slice(0, 32);
+}
+
+function orderAccountPair(firstAccountId: string, secondAccountId: string): { low: string; high: string } {
+  return firstAccountId < secondAccountId
+    ? { low: firstAccountId, high: secondAccountId }
+    : { low: secondAccountId, high: firstAccountId };
+}
+
+function parsePositiveInteger(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
 }
 
 async function logAccountAuthEvent(
@@ -1359,6 +1393,497 @@ app.post('/auth/steam/exchange', async (request, reply) => {
   } finally {
     client.release();
   }
+});
+
+app.post('/friends/requests/send', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const body = (request.body ?? {}) as SendFriendRequestBody;
+  const targetAccountId = String(body.targetAccountId ?? '').trim();
+  if (!isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID.' };
+  }
+  if (targetAccountId === accountId) {
+    reply.code(400);
+    return { error: 'Cannot send friend request to yourself.' };
+  }
+  if (!await ensureAccountExists(targetAccountId)) {
+    reply.code(404);
+    return { error: 'Target account not found.' };
+  }
+
+  const pair = orderAccountPair(accountId, targetAccountId);
+  const existingFriendship = await db.query(
+    `
+      SELECT 1
+      FROM friendships
+      WHERE account_id_low = $1 AND account_id_high = $2
+      LIMIT 1
+    `,
+    [pair.low, pair.high],
+  );
+  if (existingFriendship.rowCount) {
+    reply.code(409);
+    return { error: 'You are already friends with this account.' };
+  }
+
+  const existingOutgoing = await db.query(
+    `
+      SELECT request_id
+      FROM friend_requests
+      WHERE requester_account_id = $1 AND target_account_id = $2 AND status = 'pending'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [accountId, targetAccountId],
+  );
+  if (existingOutgoing.rowCount) {
+    reply.code(409);
+    return { error: 'Friend request already pending.' };
+  }
+
+  const existingIncoming = await db.query(
+    `
+      SELECT request_id
+      FROM friend_requests
+      WHERE requester_account_id = $1 AND target_account_id = $2 AND status = 'pending'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [targetAccountId, accountId],
+  );
+  if (existingIncoming.rowCount) {
+    reply.code(409);
+    return {
+      error: 'Incoming friend request already exists from this account.',
+      recovery: `Accept request ${String((existingIncoming.rows[0] as { request_id: number }).request_id)} instead.`,
+    };
+  }
+
+  const existingBlock = await db.query(
+    `
+      SELECT requester_account_id
+      FROM friend_requests
+      WHERE (
+        (requester_account_id = $1 AND target_account_id = $2)
+        OR (requester_account_id = $2 AND target_account_id = $1)
+      )
+      AND status = 'blocked'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    [accountId, targetAccountId],
+  );
+  if (existingBlock.rowCount) {
+    const blocker = (existingBlock.rows[0] as { requester_account_id: string }).requester_account_id;
+    if (blocker === accountId) {
+      reply.code(409);
+      return { error: 'You have blocked this account. Unblock flow is required before sending friend requests.' };
+    }
+    reply.code(403);
+    return { error: 'This account has blocked you.' };
+  }
+
+  const created = await db.query(
+    `
+      INSERT INTO friend_requests(
+        requester_account_id,
+        target_account_id,
+        status,
+        actor_account_id,
+        reason
+      )
+      VALUES ($1, $2, 'pending', $1, NULL)
+      RETURNING request_id, requester_account_id, target_account_id, status, created_at, updated_at
+    `,
+    [accountId, targetAccountId],
+  );
+  reply.code(201);
+  return created.rows[0];
+});
+
+app.post('/friends/requests/:requestId/accept', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const params = request.params as { requestId?: string };
+  const requestId = parsePositiveInteger(params.requestId);
+  if (!requestId) {
+    reply.code(400);
+    return { error: 'requestId must be a positive integer.' };
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const requestRowResult = await client.query(
+      `
+        SELECT request_id, requester_account_id, target_account_id, status
+        FROM friend_requests
+        WHERE request_id = $1
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [requestId],
+    );
+    if (!requestRowResult.rowCount) {
+      await client.query('ROLLBACK');
+      reply.code(404);
+      return { error: 'Friend request not found.' };
+    }
+    const row = requestRowResult.rows[0] as {
+      request_id: number;
+      requester_account_id: string;
+      target_account_id: string;
+      status: string;
+    };
+    if (row.target_account_id !== accountId) {
+      await client.query('ROLLBACK');
+      reply.code(403);
+      return { error: 'Only the request target can accept this request.' };
+    }
+    if (row.status !== 'pending') {
+      await client.query('ROLLBACK');
+      reply.code(409);
+      return { error: `Cannot accept request in ${row.status} state.` };
+    }
+
+    await client.query(
+      `
+        UPDATE friend_requests
+        SET
+          status = 'accepted',
+          actor_account_id = $2,
+          updated_at = NOW(),
+          responded_at = NOW()
+        WHERE request_id = $1
+      `,
+      [requestId, accountId],
+    );
+    const pair = orderAccountPair(row.requester_account_id, row.target_account_id);
+    await client.query(
+      `
+        INSERT INTO friendships(account_id_low, account_id_high, source_request_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (account_id_low, account_id_high) DO NOTHING
+      `,
+      [pair.low, pair.high, requestId],
+    );
+    await client.query('COMMIT');
+    return {
+      requestId,
+      status: 'accepted',
+      friendship: {
+        accountIdLow: pair.low,
+        accountIdHigh: pair.high,
+      },
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/friends/requests/:requestId/decline', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const params = request.params as { requestId?: string };
+  const requestId = parsePositiveInteger(params.requestId);
+  if (!requestId) {
+    reply.code(400);
+    return { error: 'requestId must be a positive integer.' };
+  }
+
+  const updated = await db.query(
+    `
+      UPDATE friend_requests
+      SET
+        status = 'declined',
+        actor_account_id = $2,
+        updated_at = NOW(),
+        responded_at = NOW()
+      WHERE request_id = $1
+        AND target_account_id = $2
+        AND status = 'pending'
+      RETURNING request_id, status, updated_at
+    `,
+    [requestId, accountId],
+  );
+  if (!updated.rowCount) {
+    reply.code(409);
+    return { error: 'Request cannot be declined (missing, unauthorized, or not pending).' };
+  }
+  return updated.rows[0];
+});
+
+app.post('/friends/requests/:requestId/cancel', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const params = request.params as { requestId?: string };
+  const requestId = parsePositiveInteger(params.requestId);
+  if (!requestId) {
+    reply.code(400);
+    return { error: 'requestId must be a positive integer.' };
+  }
+
+  const updated = await db.query(
+    `
+      UPDATE friend_requests
+      SET
+        status = 'cancelled',
+        actor_account_id = $2,
+        updated_at = NOW(),
+        responded_at = NOW(),
+        reason = 'requester_cancelled'
+      WHERE request_id = $1
+        AND requester_account_id = $2
+        AND status = 'pending'
+      RETURNING request_id, status, updated_at
+    `,
+    [requestId, accountId],
+  );
+  if (!updated.rowCount) {
+    reply.code(409);
+    return { error: 'Request cannot be cancelled (missing, unauthorized, or not pending).' };
+  }
+  return updated.rows[0];
+});
+
+app.post('/friends/remove', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const body = (request.body ?? {}) as FriendRemoveBody;
+  const targetAccountId = String(body.targetAccountId ?? '').trim();
+  if (!isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID.' };
+  }
+  if (targetAccountId === accountId) {
+    reply.code(400);
+    return { error: 'Cannot remove yourself from friends.' };
+  }
+
+  const pair = orderAccountPair(accountId, targetAccountId);
+  const removed = await db.query(
+    `
+      DELETE FROM friendships
+      WHERE account_id_low = $1 AND account_id_high = $2
+      RETURNING account_id_low, account_id_high
+    `,
+    [pair.low, pair.high],
+  );
+  if (!removed.rowCount) {
+    return { removed: false };
+  }
+
+  await db.query(
+    `
+      INSERT INTO friend_requests(
+        requester_account_id,
+        target_account_id,
+        status,
+        actor_account_id,
+        reason,
+        responded_at
+      )
+      VALUES ($1, $2, 'cancelled', $1, 'friend_removed', NOW())
+    `,
+    [accountId, targetAccountId],
+  );
+  return {
+    removed: true,
+    friendship: {
+      accountIdLow: pair.low,
+      accountIdHigh: pair.high,
+    },
+  };
+});
+
+app.post('/friends/block', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const body = (request.body ?? {}) as FriendBlockBody;
+  const targetAccountId = String(body.targetAccountId ?? '').trim();
+  if (!isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID.' };
+  }
+  if (targetAccountId === accountId) {
+    reply.code(400);
+    return { error: 'Cannot block yourself.' };
+  }
+  if (!await ensureAccountExists(targetAccountId)) {
+    reply.code(404);
+    return { error: 'Target account not found.' };
+  }
+
+  const pair = orderAccountPair(accountId, targetAccountId);
+  const blockReason = String(body.reason ?? '').trim() || null;
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+
+    const removedFriendship = await client.query(
+      `
+        DELETE FROM friendships
+        WHERE account_id_low = $1 AND account_id_high = $2
+        RETURNING 1
+      `,
+      [pair.low, pair.high],
+    );
+    const cancelledPending = await client.query(
+      `
+        UPDATE friend_requests
+        SET
+          status = 'cancelled',
+          actor_account_id = $1,
+          updated_at = NOW(),
+          responded_at = NOW(),
+          reason = 'blocked_by_peer'
+        WHERE (
+          (requester_account_id = $1 AND target_account_id = $2)
+          OR (requester_account_id = $2 AND target_account_id = $1)
+        )
+        AND status = 'pending'
+        RETURNING request_id
+      `,
+      [accountId, targetAccountId],
+    );
+    const blockInsert = await client.query(
+      `
+        INSERT INTO friend_requests(
+          requester_account_id,
+          target_account_id,
+          status,
+          actor_account_id,
+          reason,
+          responded_at
+        )
+        VALUES ($1, $2, 'blocked', $1, $3, NOW())
+        RETURNING request_id, status, updated_at
+      `,
+      [accountId, targetAccountId, blockReason],
+    );
+
+    await client.query('COMMIT');
+    return {
+      blocked: true,
+      request: blockInsert.rows[0],
+      removedFriendship: Boolean(removedFriendship.rowCount),
+      cancelledPendingRequests: cancelledPending.rowCount ?? 0,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/friends/list', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const rows = await db.query(
+    `
+      SELECT
+        CASE
+          WHEN f.account_id_low = $1 THEN f.account_id_high
+          ELSE f.account_id_low
+        END AS friend_account_id,
+        p.display_name,
+        f.created_at
+      FROM friendships f
+      LEFT JOIN profiles p ON p.account_id = (
+        CASE
+          WHEN f.account_id_low = $1 THEN f.account_id_high
+          ELSE f.account_id_low
+        END
+      )
+      WHERE f.account_id_low = $1 OR f.account_id_high = $1
+      ORDER BY f.created_at DESC
+    `,
+    [accountId],
+  );
+  return {
+    friends: rows.rows,
+    count: rows.rowCount ?? 0,
+  };
+});
+
+app.get('/friends/requests', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const query = (request.query ?? {}) as FriendRequestsQuery;
+  const statusFilter = String(query.status ?? '').trim().toLowerCase();
+  const validStatuses = new Set(['pending', 'accepted', 'declined', 'cancelled', 'blocked']);
+  if (statusFilter && !validStatuses.has(statusFilter)) {
+    reply.code(400);
+    return { error: 'status must be one of pending, accepted, declined, cancelled, blocked.' };
+  }
+
+  const values: unknown[] = [accountId];
+  let statusClause = '';
+  if (statusFilter) {
+    values.push(statusFilter);
+    statusClause = `AND fr.status = $${values.length}`;
+  }
+
+  const rows = await db.query(
+    `
+      SELECT
+        fr.request_id,
+        fr.requester_account_id,
+        fr.target_account_id,
+        fr.status,
+        fr.reason,
+        fr.created_at,
+        fr.updated_at,
+        fr.responded_at,
+        CASE
+          WHEN fr.requester_account_id = $1 THEN 'outgoing'
+          ELSE 'incoming'
+        END AS direction
+      FROM friend_requests fr
+      WHERE (fr.requester_account_id = $1 OR fr.target_account_id = $1)
+      ${statusClause}
+      ORDER BY fr.updated_at DESC
+      LIMIT 200
+    `,
+    values,
+  );
+  return {
+    requests: rows.rows,
+    count: rows.rowCount ?? 0,
+  };
 });
 
 app.get('/matchmaking/queue/config', async () => matchmakingQueueService.getConfig());

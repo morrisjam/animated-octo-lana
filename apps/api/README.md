@@ -123,6 +123,14 @@ npm run api:test
 - `GET /replays/:replayId` read replay metadata for participants.
 - `GET /replays/:replayId/payload` read replay payload blob for participants.
 - `DELETE /replays/:replayId` delete replay and record deletion event.
+- `POST /friends/requests/send` send a friend request (`pending`).
+- `POST /friends/requests/:requestId/accept` accept incoming request (`accepted`) and create friendship edge.
+- `POST /friends/requests/:requestId/decline` decline incoming request (`declined`).
+- `POST /friends/requests/:requestId/cancel` cancel outgoing request (`cancelled`).
+- `POST /friends/remove` remove existing friendship.
+- `POST /friends/block` block account (`blocked`) and cancel pending requests.
+- `GET /friends/list` list accepted friend edges for authenticated account.
+- `GET /friends/requests` list friend request history with optional `status` filter.
 
 ## Matchmaking queue request example
 
@@ -176,6 +184,14 @@ Steam exchange:
 }
 ```
 
+Friend request send:
+
+```json
+{
+  "targetAccountId": "22222222-2222-4222-8222-222222222222"
+}
+```
+
 ## Notes
 
 - Valid providers are `steam` and `web`.
@@ -186,6 +202,9 @@ Steam exchange:
 - Steam exchange supports `mergeAccountId` when `x-account-id` matches authenticated account.
 - Merge policy: when Steam identity already belongs to a different account, provided guest/web account is merged into Steam-linked account, source account is disabled, and transferable web credentials/profile data are preserved when safe.
 - Audit coverage: `identity_link_events` capture link/unlink actions, and `account_merge_events` capture account merge operations.
+- Friend graph schema uses `friend_requests` (states: pending, accepted, declined, cancelled, blocked) and `friendships` (accepted edges).
+- Friend workflows supported by API: send, accept, decline, cancel, remove, block, and list.
+- Friend request and friendship queries are index-backed for requester, target, status, and pair lookups.
 - Supported queue regions are `us-east`, `us-west`, `eu-west`, and `ap-southeast`.
 - Queue match payload includes session token and peer metadata for handshake bootstrapping.
 - Session tokens expire and reconnect attempts use one-time ids for replay protection.

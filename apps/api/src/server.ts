@@ -50,6 +50,7 @@ import {
   evaluateRankedResultSubmission,
   type RankedResultSuspiciousReason,
 } from './ranked/resultValidation';
+import { applyRankedRatingUpdate } from './ranked/ratingService';
 
 const app = Fastify({ logger: true });
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
@@ -3071,6 +3072,10 @@ app.post('/ranked/results', async (request, reply) => {
     reply.code(400);
     return { error: 'winnerAccountId must be a UUID when provided.' };
   }
+  if (outcome === 'forfeit' && !winnerAccountIdRaw) {
+    reply.code(400);
+    return { error: 'winnerAccountId is required for forfeit outcomes.' };
+  }
 
   const sessionValidation = matchmakingQueueService.validateSessionToken(body.sessionId, accountId, sessionToken);
   if (!sessionValidation.ok) {
@@ -3080,6 +3085,13 @@ app.post('/ranked/results', async (request, reply) => {
   if (sessionValidation.value.queueType !== 'ranked') {
     reply.code(409);
     return { error: 'Session is not a ranked queue session.' };
+  }
+
+  const p1Participant = sessionValidation.value.participants.find((participant) => participant.side === 'P1');
+  const p2Participant = sessionValidation.value.participants.find((participant) => participant.side === 'P2');
+  if (!p1Participant || !p2Participant) {
+    reply.code(409);
+    return { error: 'Session participants are invalid for ranked processing.' };
   }
 
   const expectedParticipants = [...new Set(sessionValidation.value.participants.map((participant) => participant.accountId))].sort();
@@ -3096,25 +3108,35 @@ app.post('/ranked/results', async (request, reply) => {
     },
   );
   const suspiciousReasons: RankedResultSuspiciousReason[] = [...evaluation.reasons];
-  const winnerAccountId = winnerAccountIdRaw && expectedParticipants.includes(winnerAccountIdRaw) ? winnerAccountIdRaw : null;
+  let winnerAccountId: string | null = null;
+  if (outcome === 'p1_win') {
+    winnerAccountId = p1Participant.accountId;
+  } else if (outcome === 'p2_win') {
+    winnerAccountId = p2Participant.accountId;
+  } else if (outcome === 'forfeit') {
+    winnerAccountId = winnerAccountIdRaw && expectedParticipants.includes(winnerAccountIdRaw) ? winnerAccountIdRaw : null;
+  }
   const reviewStatus = evaluation.suspicious ? 'pending' : 'none';
+  const participantByAccountId = new Map(sessionValidation.value.participants.map((participant) => [participant.accountId, participant]));
 
+  const client = await db.connect();
   try {
-    const submission = await db.query(
+    await client.query('BEGIN');
+    const submission = await client.query(
       `
-        INSERT INTO ranked_result_submissions(
-          session_id, match_id, queue_type, submitted_by_account_id,
-          session_participants, submitted_participants, winner_account_id,
-          outcome, valid_session_token, suspicious, suspicious_reasons,
-          review_status, payload_json
-        )
-        VALUES (
-          $1, $2, 'ranked', $3,
-          $4::uuid[], $5::uuid[], $6,
-          $7, TRUE, $8, $9::text[],
-          $10, $11::jsonb
-        )
-        RETURNING submission_id, created_at
+      INSERT INTO ranked_result_submissions(
+        session_id, match_id, queue_type, submitted_by_account_id,
+        session_participants, submitted_participants, winner_account_id,
+        outcome, valid_session_token, suspicious, suspicious_reasons,
+        review_status, payload_json
+      )
+      VALUES (
+        $1, $2, 'ranked', $3,
+        $4::uuid[], $5::uuid[], $6,
+        $7, TRUE, $8, $9::text[],
+        $10, $11::jsonb
+      )
+      RETURNING submission_id, created_at
       `,
       [
         body.sessionId,
@@ -3136,6 +3158,7 @@ app.post('/ranked/results', async (request, reply) => {
 
     const row = submission.rows[0] as { submission_id: string; created_at: string };
     if (evaluation.suspicious) {
+      await client.query('COMMIT');
       reply.code(202);
       return {
         submissionId: row.submission_id,
@@ -3147,6 +3170,118 @@ app.post('/ranked/results', async (request, reply) => {
       };
     }
 
+    const existingMatch = await client.query(
+      'SELECT 1 FROM ranked_matches WHERE match_id = $1 LIMIT 1',
+      [body.matchId],
+    );
+    if (existingMatch.rowCount) {
+      await client.query('ROLLBACK');
+      reply.code(409);
+      return { error: 'Ranked match has already been processed.' };
+    }
+
+    await client.query(
+      `
+      INSERT INTO ranked_player_ratings(account_id)
+      VALUES ($1), ($2)
+      ON CONFLICT (account_id) DO NOTHING
+      `,
+      [p1Participant.accountId, p2Participant.accountId],
+    );
+    const ratingRows = await client.query(
+      `
+      SELECT account_id, rating
+      FROM ranked_player_ratings
+      WHERE account_id = ANY($1::uuid[])
+      FOR UPDATE
+      `,
+      [[p1Participant.accountId, p2Participant.accountId]],
+    );
+    const ratingMap = new Map<string, number>();
+    for (const rawRow of ratingRows.rows as Array<{ account_id: string; rating: number }>) {
+      ratingMap.set(rawRow.account_id, Number(rawRow.rating));
+    }
+    const p1Rating = ratingMap.get(p1Participant.accountId);
+    const p2Rating = ratingMap.get(p2Participant.accountId);
+    if (!Number.isFinite(p1Rating) || !Number.isFinite(p2Rating)) {
+      await client.query('ROLLBACK');
+      reply.code(500);
+      return { error: 'Failed to resolve ranked ratings for session participants.' };
+    }
+
+    const ratingResult = applyRankedRatingUpdate({
+      participants: [
+        { accountId: p1Participant.accountId, side: 'P1', rating: p1Rating as number },
+        { accountId: p2Participant.accountId, side: 'P2', rating: p2Rating as number },
+      ],
+      outcome,
+      winnerAccountId,
+    });
+
+    await client.query(
+      `
+      INSERT INTO ranked_matches(
+        match_id, session_id, queue_type, outcome, winner_account_id,
+        processed_submission_id, participant_p1_account_id, participant_p2_account_id
+      )
+      VALUES ($1, $2, 'ranked', $3, $4, $5, $6, $7)
+      `,
+      [
+        body.matchId,
+        body.sessionId,
+        outcome,
+        winnerAccountId,
+        row.submission_id,
+        p1Participant.accountId,
+        p2Participant.accountId,
+      ],
+    );
+
+    for (const update of ratingResult.updates) {
+      await client.query(
+        `
+        INSERT INTO ranked_match_rating_deltas(
+          match_id, account_id, side, pre_rating, post_rating, rating_delta, result
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `,
+        [
+          body.matchId,
+          update.accountId,
+          update.side,
+          update.preRating,
+          update.postRating,
+          update.delta,
+          update.result,
+        ],
+      );
+
+      const isForfeitLoss = outcome === 'forfeit' && update.result === 'forfeit';
+      await client.query(
+        `
+        UPDATE ranked_player_ratings
+        SET
+          rating = $2,
+          matches_played = matches_played + 1,
+          wins = wins + $3,
+          losses = losses + $4,
+          draws = draws + $5,
+          forfeits = forfeits + $6,
+          updated_at = NOW()
+        WHERE account_id = $1
+        `,
+        [
+          update.accountId,
+          update.postRating,
+          update.result === 'win' ? 1 : 0,
+          update.result === 'loss' ? 1 : 0,
+          update.result === 'draw' ? 1 : 0,
+          isForfeitLoss ? 1 : 0,
+        ],
+      );
+    }
+
+    await client.query('COMMIT');
     reply.code(201);
     return {
       submissionId: row.submission_id,
@@ -3155,15 +3290,30 @@ app.post('/ranked/results', async (request, reply) => {
       suspicious: false,
       suspiciousReasons: [],
       reviewStatus,
+      ratingDeltas: ratingResult.updates.map((update) => ({
+        accountId: update.accountId,
+        side: participantByAccountId.get(update.accountId)?.side ?? update.side,
+        preRating: update.preRating,
+        postRating: update.postRating,
+        ratingDelta: update.delta,
+        result: update.result,
+      })),
     };
   } catch (error: unknown) {
+    await client.query('ROLLBACK');
     const code = (error as { code?: string } | undefined)?.code;
     const message = error instanceof Error ? error.message : '';
     if (code === '23505' && message.includes('ranked_result_submissions_session_id_submitted_by_account_id_key')) {
       reply.code(409);
       return { error: 'Ranked result was already submitted for this session by this account.' };
     }
+    if (code === '23505' && message.includes('ranked_matches_pkey')) {
+      reply.code(409);
+      return { error: 'Ranked match has already been processed.' };
+    }
     throw error;
+  } finally {
+    client.release();
   }
 });
 

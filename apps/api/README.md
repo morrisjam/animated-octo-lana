@@ -110,7 +110,7 @@ npm run api:test
 - `GET /matchmaking/sessions/:sessionId` read session state for an active or resolved match session.
 - `POST /matchmaking/sessions/disconnect` mark local session participant as disconnected and start reconnect grace window.
 - `POST /matchmaking/sessions/reconnect` reconnect with session token and one-time reconnect attempt id.
-- `POST /ranked/results` submit ranked match result with session token validation and suspicious review flagging.
+- `POST /ranked/results` submit ranked match result with session token validation, suspicious review flagging, and Elo-like rating updates.
 - `POST /matchmaking/network/connection-telemetry` store direct or relay path telemetry by region.
 - `GET /matchmaking/network/connection-telemetry/summary` read telemetry summary with optional `region` and `queueType` filters.
 - `GET /rooms/config` read private room lifecycle configuration.
@@ -287,6 +287,7 @@ Ranked result submission:
 - Queue match payload includes session token and peer metadata for handshake bootstrapping.
 - Session tokens expire and reconnect attempts use one-time ids for replay protection.
 - Ranked result submissions require a valid session token; mismatched participant/match payloads are stored and flagged with `review_status = pending`.
+- Accepted ranked results persist per-player pre/post rating deltas in `ranked_match_rating_deltas`.
 - Reconnect grace window is configurable in queue service configuration.
 - NAT config uses STUN and optional TURN relay servers from environment values.
 - Telemetry endpoint tracks direct vs relay connection outcomes by region.

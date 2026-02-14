@@ -14,6 +14,7 @@ interface StartMenuOptions {
   initialLoadout?: PlayersById<CharacterId>;
   enabledModes?: GameMode[];
   onStartMode(mode: GameMode, loadout: PlayersById<CharacterId>): void;
+  onOpenOnlineDevMenu?(): void;
   onOpenReplayReview?(): void;
   onReturnHome(): void;
   onPlayAgain(): void;
@@ -116,6 +117,7 @@ export class StartMenu {
   private readonly prevPadStateByIndex = new Map<number, PadState>();
   private readonly startRowIndex: number;
   private readonly replayRowIndex: number | null;
+  private readonly onlineDevRowIndex: number | null;
 
   private currentMode: GameMode;
   private readonly enabledModes: GameMode[];
@@ -191,6 +193,22 @@ export class StartMenu {
     this.homePanel.appendChild(startRow);
     this.homeRows.push(startRow);
     this.startRowIndex = this.homeRows.length - 1;
+
+    let onlineDevRowIndex: number | null = null;
+    if (this.options.onOpenOnlineDevMenu) {
+      const onlineDevRow = document.createElement('div');
+      onlineDevRow.className = 'start-menu-row';
+      const onlineDevButton = document.createElement('button');
+      onlineDevButton.type = 'button';
+      onlineDevButton.className = 'start-action';
+      onlineDevButton.textContent = 'Online Dev Menu';
+      onlineDevButton.addEventListener('click', () => this.openOnlineDevMenu());
+      onlineDevRow.appendChild(onlineDevButton);
+      this.homePanel.appendChild(onlineDevRow);
+      this.homeRows.push(onlineDevRow);
+      onlineDevRowIndex = this.homeRows.length - 1;
+    }
+    this.onlineDevRowIndex = onlineDevRowIndex;
 
     let replayRowIndex: number | null = null;
     if (this.options.onOpenReplayReview) {
@@ -498,6 +516,10 @@ export class StartMenu {
       this.startMatch();
       return;
     }
+    if (this.onlineDevRowIndex !== null && this.homeRow === this.onlineDevRowIndex) {
+      this.openOnlineDevMenu();
+      return;
+    }
     if (this.replayRowIndex !== null && this.homeRow === this.replayRowIndex) {
       this.openReplayReview();
     }
@@ -546,6 +568,10 @@ export class StartMenu {
 
   private openReplayReview(): void {
     this.options.onOpenReplayReview?.();
+  }
+
+  private openOnlineDevMenu(): void {
+    this.options.onOpenOnlineDevMenu?.();
   }
 
   private clampHomeRow(value: number): number {

@@ -6,6 +6,7 @@ export interface FeatureFlags {
   debugToolsEnabled: boolean;
   trainingModeEnabled: boolean;
   arcadeModeEnabled: boolean;
+  onlineDevMenuEnabled: boolean;
 }
 
 export interface RuntimeConfig {
@@ -20,6 +21,7 @@ const ENVIRONMENT_PRESETS: Record<RuntimeEnvironment, FeatureFlags> = {
     debugToolsEnabled: true,
     trainingModeEnabled: true,
     arcadeModeEnabled: true,
+    onlineDevMenuEnabled: true,
   },
   staging: {
     onlineEnabled: true,
@@ -27,6 +29,7 @@ const ENVIRONMENT_PRESETS: Record<RuntimeEnvironment, FeatureFlags> = {
     debugToolsEnabled: true,
     trainingModeEnabled: true,
     arcadeModeEnabled: false,
+    onlineDevMenuEnabled: true,
   },
   production: {
     onlineEnabled: false,
@@ -34,6 +37,7 @@ const ENVIRONMENT_PRESETS: Record<RuntimeEnvironment, FeatureFlags> = {
     debugToolsEnabled: false,
     trainingModeEnabled: true,
     arcadeModeEnabled: false,
+    onlineDevMenuEnabled: false,
   },
 };
 
@@ -68,6 +72,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
   const debugOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_DEBUG_TOOLS);
   const trainingOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_TRAINING_MODE);
   const arcadeOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_ARCADE_MODE);
+  const onlineDevMenuOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_ONLINE_DEV_MENU);
 
   const features: FeatureFlags = {
     onlineEnabled: onlineOverride ?? preset.onlineEnabled,
@@ -75,6 +80,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
     debugToolsEnabled: debugOverride ?? preset.debugToolsEnabled,
     trainingModeEnabled: trainingOverride ?? preset.trainingModeEnabled,
     arcadeModeEnabled: arcadeOverride ?? preset.arcadeModeEnabled,
+    onlineDevMenuEnabled: onlineDevMenuOverride ?? preset.onlineDevMenuEnabled,
   };
 
   if (!features.onlineEnabled) {

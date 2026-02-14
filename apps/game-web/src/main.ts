@@ -16,12 +16,13 @@ import { sanitiseTuning } from './sim/tuning';
 import type { PlayerId, PlayersById } from './sim/types';
 import { createHud, type RollbackDiagnosticsView } from './view/hud';
 import { createPauseMenu } from './view/pauseMenu';
+import { createOnlineDevMenu } from './view/onlineDevMenu';
 import { createReplayViewer } from './view/replayViewer';
 import { renderFrame } from './view/render';
 import { createScene, resizeScene } from './view/scene';
 import { createStartMenu, type GameMode } from './view/startMenu';
 
-type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review';
+type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev';
 interface StoredSettings {
   mode?: string;
   loadout?: {
@@ -118,6 +119,14 @@ const replayViewer = createReplayViewer({
     exitReplayReview();
   },
 });
+const onlineDevMenuEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDevMenuEnabled;
+const onlineDevMenu = onlineDevMenuEnabled
+  ? createOnlineDevMenu({
+    onClose: () => {
+      closeOnlineDevMenu();
+    },
+  })
+  : null;
 
 const startMenu = createStartMenu({
   initialMode: selectedMode,
@@ -132,6 +141,11 @@ const startMenu = createStartMenu({
   onPlayAgain: () => {
     beginMode(selectedMode, selectedLoadout);
   },
+  onOpenOnlineDevMenu: onlineDevMenuEnabled
+    ? () => {
+      openOnlineDevMenu();
+    }
+    : undefined,
   onOpenReplayReview: () => {
     void beginReplayReviewFromFixture('smoke.replay.json');
   },
@@ -319,6 +333,30 @@ function returnToHome(): void {
   accumulator = 0;
 }
 
+function openOnlineDevMenu(): void {
+  if (!onlineDevMenu) {
+    return;
+  }
+  appPhase = 'online_dev';
+  void platform.presence.setStatus('online_dev');
+  pauseMenu.setPaused(false);
+  pauseMenu.setCanRestartTraining(false);
+  startMenu.hideHome();
+  startMenu.hideRoundBanner();
+  replayViewer.hide();
+  hudRoot.style.visibility = 'hidden';
+  hud.setTrainingFrameDataVisible(false);
+  onlineDevMenu.show();
+}
+
+function closeOnlineDevMenu(): void {
+  if (!onlineDevMenu) {
+    return;
+  }
+  onlineDevMenu.hide();
+  returnToHome();
+}
+
 function getRollbackDiagnosticsView(session: RollbackSession): RollbackDiagnosticsView {
   const snapshot = session.getDiagnosticsSnapshot();
   return {
@@ -502,6 +540,11 @@ function updateMatchInfo(): void {
     return;
   }
 
+  if (appPhase === 'online_dev') {
+    matchInfo.textContent = 'Online Dev Menu';
+    return;
+  }
+
   if (selectedMode === 'endless') {
     matchInfo.textContent = 'Mode: Endless Dev';
     return;
@@ -571,6 +614,14 @@ window.addEventListener('keydown', (event) => {
     if (event.key.toLowerCase() === 'escape') {
       event.preventDefault();
       exitReplayReview();
+    }
+    return;
+  }
+
+  if (appPhase === 'online_dev') {
+    if (event.key.toLowerCase() === 'escape') {
+      event.preventDefault();
+      closeOnlineDevMenu();
     }
     return;
   }
@@ -712,6 +763,7 @@ window.addEventListener('resize', () => {
 
 window.addEventListener('beforeunload', () => {
   startMenu.dispose();
+  onlineDevMenu?.dispose();
   replayViewer.dispose();
   input.dispose();
   platform.dispose?.();

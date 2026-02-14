@@ -45,6 +45,11 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - `src/net/connectivityApi.ts` contains API helpers for ICE config fetch and direct/relay telemetry posts.
 - Set `VITE_MATCHMAKING_API_BASE` to enable API-backed ICE config and telemetry in future online integration.
 
+## Online Dev menu shell
+
+- `VITE_FEATURE_ONLINE_DEV_MENU=true` enables an in-game Online Dev shell menu in web dev/staging builds.
+- The shell currently provides keyboard/controller navigation and section stubs for `Matchmaking`, `Rooms`, `Replay`, and `Ranked`.
+
 ## Client architecture
 
 - `src/sim`: deterministic simulation and rules.

@@ -222,6 +222,52 @@ html, body {
   box-shadow: inset 0 0 0 1px rgba(255, 203, 97, 0.35);
 }
 
+.start-auth-fields {
+  border: 1px solid rgba(167, 195, 255, 0.2);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  background: rgba(11, 18, 40, 0.55);
+}
+
+.start-auth-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: #b4c9f3;
+}
+
+.start-auth-field input {
+  border: 1px solid rgba(167, 195, 255, 0.25);
+  background: rgba(18, 28, 58, 0.9);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 14px;
+}
+
+.start-auth-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #b4c9f3;
+  font-size: 13px;
+}
+
+.start-auth-status {
+  min-height: 18px;
+  margin: 0;
+  color: #7cd8a9;
+  font-size: 13px;
+}
+
+.start-auth-status.error {
+  color: #ff9e9e;
+}
+
 .start-row-label {
   font-size: 12px;
   letter-spacing: .08em;

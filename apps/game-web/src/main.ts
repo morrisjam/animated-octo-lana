@@ -21,7 +21,13 @@ import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay'
 import { createReplayViewer } from './view/replayViewer';
 import { renderFrame } from './view/render';
 import { createScene, resizeScene } from './view/scene';
-import { createStartMenu, type GameMode, type OnlineDevMenuTarget, type WebAuthMenuAction } from './view/startMenu';
+import {
+  createStartMenu,
+  type GameMode,
+  type OnlineDevMenuTarget,
+  type WebAuthMenuAction,
+  type WebAuthMenuRequest,
+} from './view/startMenu';
 
 type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev';
 interface StoredSettings {
@@ -176,8 +182,8 @@ const startMenu = createStartMenu({
     beginMode(mode, loadout);
   },
   onOpenWebAuth: platform.kind === 'web'
-    ? async (action?: WebAuthMenuAction) => {
-      await openWebAuthFlow(action);
+    ? async (action: WebAuthMenuAction, request?: WebAuthMenuRequest) => {
+      await openWebAuthFlow(action, request);
     }
     : undefined,
   onReturnHome: () => {
@@ -302,6 +308,7 @@ async function bootstrapPlatformProfile(): Promise<void> {
     const session = await platform.auth.getSession();
     sessionAccountId = session.accountId;
     startMenu.setAccountSummary(formatAccountSummary(session));
+    startMenu.setAuthState(session.isAuthenticated);
     if (!session.accountId) {
       return;
     }
@@ -314,90 +321,58 @@ async function bootstrapPlatformProfile(): Promise<void> {
   }
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return 'Unexpected authentication failure.';
-}
-
-async function openWebAuthFlow(preferredAction?: WebAuthMenuAction): Promise<void> {
+async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuRequest): Promise<void> {
   const auth = platform.auth;
   if (!auth.signIn || !auth.signUp || !auth.signOut) {
-    window.alert('Web auth is unavailable for this platform build.');
-    return;
+    throw new Error('Web auth is unavailable for this platform build.');
   }
 
-  let action: string;
-  if (preferredAction) {
-    action = preferredAction;
+  let session: PlatformAuthSession | null = null;
+  if (action === 'signout') {
+    session = await auth.signOut();
+  } else if (action === 'signin') {
+    const email = request?.email?.trim();
+    const password = request?.password ?? '';
+    if (!email) {
+      throw new Error('Email is required.');
+    }
+    if (!password) {
+      throw new Error('Password is required.');
+    }
+    session = await auth.signIn({ email, password });
+  } else if (action === 'signup') {
+    const email = request?.email?.trim();
+    const password = request?.password ?? '';
+    if (!email) {
+      throw new Error('Email is required.');
+    }
+    if (!password) {
+      throw new Error('Password is required.');
+    }
+    const currentSession = await auth.getSession();
+    const canUpgradeGuest = !currentSession.isAuthenticated && Boolean(currentSession.accountId);
+    session = await auth.signUp({
+      email,
+      password,
+      displayName: request?.displayName?.trim() || null,
+      upgradeCurrentGuest: canUpgradeGuest ? Boolean(request?.upgradeCurrentGuest) : false,
+    });
   } else {
-    const actionRaw = window.prompt('Account action: signin, signup, or signout', 'signin');
-    if (!actionRaw) {
-      return;
-    }
-    action = actionRaw.trim().toLowerCase();
+    throw new Error('Unknown auth action.');
   }
 
-  try {
-    let session: PlatformAuthSession | null = null;
-    if (action === 'signout') {
-      session = await auth.signOut();
-      window.alert('Signed out. Guest session restored.');
-    } else if (action === 'signin') {
-      const email = window.prompt('Email:', '')?.trim();
-      if (!email) {
-        return;
-      }
-      const password = window.prompt('Password (prototype prompt, not masked):', '');
-      if (password === null) {
-        return;
-      }
-      session = await auth.signIn({ email, password });
-      window.alert('Sign-in successful.');
-    } else if (action === 'signup') {
-      const email = window.prompt('Email:', '')?.trim();
-      if (!email) {
-        return;
-      }
-      const password = window.prompt('Password (min 8 chars, prototype prompt not masked):', '');
-      if (password === null) {
-        return;
-      }
-      const displayNameRaw = window.prompt('Display name (optional):', '');
-      if (displayNameRaw === null) {
-        return;
-      }
-      const currentSession = await auth.getSession();
-      const canUpgradeGuest = !currentSession.isAuthenticated && Boolean(currentSession.accountId);
-      const upgradeCurrentGuest = canUpgradeGuest
-        ? window.confirm('Upgrade current guest account to this new web sign-in?')
-        : false;
-      session = await auth.signUp({
-        email,
-        password,
-        displayName: displayNameRaw.trim() || null,
-        upgradeCurrentGuest,
-      });
-      window.alert(upgradeCurrentGuest ? 'Sign-up successful. Guest account upgraded.' : 'Sign-up successful.');
-    } else {
-      window.alert('Unknown action. Type signin, signup, or signout.');
-      return;
-    }
+  if (!session) {
+    throw new Error('Authentication request did not return a session.');
+  }
 
-    if (!session) {
-      return;
+  sessionAccountId = session.accountId;
+  startMenu.setAccountSummary(formatAccountSummary(session));
+  startMenu.setAuthState(session.isAuthenticated);
+  if (session.accountId) {
+    const profile = await platform.profile.getProfile(session.accountId);
+    if (session.isAuthenticated && profile.displayName) {
+      startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
     }
-    sessionAccountId = session.accountId;
-    startMenu.setAccountSummary(formatAccountSummary(session));
-    if (session.accountId) {
-      const profile = await platform.profile.getProfile(session.accountId);
-      if (session.isAuthenticated && profile.displayName) {
-        startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
-      }
-    }
-  } catch (error) {
-    window.alert(`Auth request failed: ${getErrorMessage(error)}`);
   }
 }
 

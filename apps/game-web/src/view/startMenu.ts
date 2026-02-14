@@ -10,6 +10,12 @@ import type { PlayerId, PlayersById } from '../sim/types';
 export type GameMode = 'endless' | 'best_of_3' | 'training';
 export type WebAuthMenuAction = 'signin' | 'signup' | 'signout';
 export type OnlineDevMenuTarget = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
+export interface WebAuthMenuRequest {
+  email?: string;
+  password?: string;
+  displayName?: string | null;
+  upgradeCurrentGuest?: boolean;
+}
 
 type StartScreen = 'title' | 'login' | 'main' | 'online' | 'local' | 'replays' | 'rankings' | 'settings' | 'match_over';
 
@@ -19,7 +25,7 @@ interface StartMenuOptions {
   enabledModes?: GameMode[];
   initialAccountSummary?: string;
   onStartMode(mode: GameMode, loadout: PlayersById<CharacterId>): void;
-  onOpenWebAuth?(action?: WebAuthMenuAction): Promise<void> | void;
+  onOpenWebAuth?(action: WebAuthMenuAction, request?: WebAuthMenuRequest): Promise<void> | void;
   onOpenOnlineDevMenu?(target?: OnlineDevMenuTarget): void;
   onOpenReplayReview?(): void;
   onReturnHome(): void;
@@ -105,6 +111,25 @@ function getNextMode(current: GameMode, enabledModes: GameMode[], direction: 1 |
   return enabledModes[nextIndex];
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  if (target instanceof HTMLTextAreaElement) {
+    return true;
+  }
+  if (target instanceof HTMLSelectElement) {
+    return true;
+  }
+  if (target instanceof HTMLInputElement) {
+    return !['button', 'submit', 'reset', 'checkbox', 'radio'].includes(target.type);
+  }
+  return false;
+}
+
 export class StartMenu {
   private readonly root: HTMLDivElement;
   private readonly roundBanner: HTMLDivElement;
@@ -123,6 +148,15 @@ export class StartMenu {
   private readonly rowIndexByScreen = new Map<StartScreen, number>();
 
   private readonly accountSummaryLabel: HTMLDivElement;
+  private readonly loginAccountSummaryLabel: HTMLDivElement;
+  private readonly authStatusLabel: HTMLDivElement;
+  private readonly authEmailInput: HTMLInputElement;
+  private readonly authPasswordInput: HTMLInputElement;
+  private readonly authDisplayNameInput: HTMLInputElement;
+  private readonly authUpgradeGuestInput: HTMLInputElement;
+  private readonly signInButton: HTMLButtonElement;
+  private readonly signUpButton: HTMLButtonElement;
+  private readonly signOutButton: HTMLButtonElement;
   private readonly localModeButton: HTMLButtonElement;
   private readonly p1CharacterButton: HTMLButtonElement;
   private readonly p2CharacterButton: HTMLButtonElement;
@@ -140,9 +174,18 @@ export class StartMenu {
   private currentMode: GameMode;
   private currentLoadout: PlayersById<CharacterId>;
   private accountSummary: string;
+  private isAuthenticated = false;
+  private authBusy = false;
 
   private readonly keydownHandler = (event: KeyboardEvent): void => {
     if (this.root.hidden) {
+      return;
+    }
+    if (isEditableTarget(event.target)) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.handleBackAction();
+      }
       return;
     }
 
@@ -208,20 +251,81 @@ export class StartMenu {
     this.titlePanel.appendChild(continueRow.row);
     this.registerRows('title', [continueRow.row]);
 
+    const loginSessionRow = document.createElement('div');
+    loginSessionRow.className = 'start-menu-row';
+    this.loginAccountSummaryLabel = document.createElement('div');
+    this.loginAccountSummaryLabel.className = 'start-row-label';
+    this.loginAccountSummaryLabel.textContent = this.accountSummary;
+    loginSessionRow.appendChild(this.loginAccountSummaryLabel);
+    this.loginPanel.appendChild(loginSessionRow);
+
+    const authFields = document.createElement('div');
+    authFields.className = 'start-auth-fields';
+
+    const emailLabel = document.createElement('label');
+    emailLabel.className = 'start-auth-field';
+    emailLabel.textContent = 'Email';
+    this.authEmailInput = document.createElement('input');
+    this.authEmailInput.type = 'email';
+    this.authEmailInput.placeholder = 'you@example.com';
+    this.authEmailInput.autocomplete = 'email';
+    emailLabel.appendChild(this.authEmailInput);
+
+    const passwordLabel = document.createElement('label');
+    passwordLabel.className = 'start-auth-field';
+    passwordLabel.textContent = 'Password';
+    this.authPasswordInput = document.createElement('input');
+    this.authPasswordInput.type = 'password';
+    this.authPasswordInput.placeholder = 'Password';
+    this.authPasswordInput.autocomplete = 'current-password';
+    passwordLabel.appendChild(this.authPasswordInput);
+
+    const displayNameLabel = document.createElement('label');
+    displayNameLabel.className = 'start-auth-field';
+    displayNameLabel.textContent = 'Display Name (Sign Up)';
+    this.authDisplayNameInput = document.createElement('input');
+    this.authDisplayNameInput.type = 'text';
+    this.authDisplayNameInput.placeholder = 'Optional';
+    this.authDisplayNameInput.autocomplete = 'nickname';
+    displayNameLabel.appendChild(this.authDisplayNameInput);
+
+    const upgradeRow = document.createElement('label');
+    upgradeRow.className = 'start-auth-check';
+    this.authUpgradeGuestInput = document.createElement('input');
+    this.authUpgradeGuestInput.type = 'checkbox';
+    this.authUpgradeGuestInput.checked = true;
+    const upgradeText = document.createElement('span');
+    upgradeText.textContent = 'Upgrade current guest account on sign up';
+    upgradeRow.append(this.authUpgradeGuestInput, upgradeText);
+
+    authFields.append(emailLabel, passwordLabel, displayNameLabel, upgradeRow);
+    this.loginPanel.appendChild(authFields);
+
+    this.authStatusLabel = document.createElement('p');
+    this.authStatusLabel.className = 'start-auth-status';
+    this.authStatusLabel.textContent = '';
+    this.loginPanel.appendChild(this.authStatusLabel);
+
     const signInRow = this.createActionRow('Sign In', async () => {
       await this.handleAuthAction('signin');
     });
+    this.signInButton = signInRow.button;
     const signUpRow = this.createActionRow('Sign Up', async () => {
       await this.handleAuthAction('signup');
     });
+    this.signUpButton = signUpRow.button;
+    const signOutRow = this.createActionRow('Sign Out', async () => {
+      await this.handleAuthAction('signout');
+    });
+    this.signOutButton = signOutRow.button;
     const guestRow = this.createActionRow('Continue as Guest', () => {
       this.setScreen('main');
     });
     const loginBackRow = this.createActionRow('Back', () => {
       this.setScreen('title');
     });
-    this.loginPanel.append(signInRow.row, signUpRow.row, guestRow.row, loginBackRow.row);
-    this.registerRows('login', [signInRow.row, signUpRow.row, guestRow.row, loginBackRow.row]);
+    this.loginPanel.append(signInRow.row, signUpRow.row, signOutRow.row, guestRow.row, loginBackRow.row);
+    this.registerRows('login', [signInRow.row, signUpRow.row, signOutRow.row, guestRow.row, loginBackRow.row]);
 
     const mainAccountRow = document.createElement('div');
     mainAccountRow.className = 'start-menu-row';
@@ -329,8 +433,8 @@ export class StartMenu {
     this.rankingsPanel.append(rankingsSnapshotRow.row, rankingsBackRow.row);
     this.registerRows('rankings', [rankingsSnapshotRow.row, rankingsBackRow.row]);
 
-    const settingsAccountRow = this.createActionRow('Account', async () => {
-      await this.handleAuthAction('signin');
+    const settingsAccountRow = this.createActionRow('Account', () => {
+      this.setScreen('login');
     });
     const settingsSocialRow = this.createActionRow('Social', () => {
       this.options.onOpenOnlineDevMenu?.('social');
@@ -400,6 +504,7 @@ export class StartMenu {
     window.addEventListener('keydown', this.keydownHandler);
     this.refreshLocalRows();
     this.setScreen('title');
+    this.setAuthState(false);
     this.setMatchSelection(0);
     this.pollGamepads();
   }
@@ -453,6 +558,21 @@ export class StartMenu {
   public setAccountSummary(summary: string): void {
     this.accountSummary = summary;
     this.accountSummaryLabel.textContent = summary;
+    this.loginAccountSummaryLabel.textContent = summary;
+  }
+
+  public setAuthState(isAuthenticated: boolean): void {
+    this.isAuthenticated = isAuthenticated;
+    this.signOutButton.disabled = !this.isAuthenticated || this.authBusy;
+    if (isAuthenticated) {
+      this.authStatusLabel.textContent = '';
+      this.authStatusLabel.classList.remove('error');
+      return;
+    }
+    if (this.authStatusLabel.textContent.trim().length === 0) {
+      this.authStatusLabel.textContent = 'Guest session active.';
+      this.authStatusLabel.classList.remove('error');
+    }
   }
 
   private createPanel(title: string, subtitle: string): HTMLDivElement {
@@ -605,13 +725,73 @@ export class StartMenu {
     this.options.onStartMode(this.currentMode, cloneLoadout(this.currentLoadout));
   }
 
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return 'Unexpected authentication failure.';
+  }
+
+  private getAuthRequest(action: WebAuthMenuAction): WebAuthMenuRequest | undefined {
+    if (action === 'signout') {
+      return undefined;
+    }
+    const email = this.authEmailInput.value.trim();
+    const password = this.authPasswordInput.value;
+    if (!email || !password) {
+      this.authStatusLabel.textContent = 'Email and password are required.';
+      this.authStatusLabel.classList.add('error');
+      return undefined;
+    }
+    if (action === 'signup') {
+      return {
+        email,
+        password,
+        displayName: this.authDisplayNameInput.value.trim() || null,
+        upgradeCurrentGuest: this.authUpgradeGuestInput.checked,
+      };
+    }
+    return { email, password };
+  }
+
+  private setAuthBusy(busy: boolean): void {
+    this.authBusy = busy;
+    this.signInButton.disabled = busy;
+    this.signUpButton.disabled = busy;
+    this.signOutButton.disabled = busy || !this.isAuthenticated;
+  }
+
   private async handleAuthAction(action: WebAuthMenuAction): Promise<void> {
     if (!this.options.onOpenWebAuth) {
       this.setScreen('main');
       return;
     }
-    await this.options.onOpenWebAuth(action);
-    this.setScreen('main');
+    const request = this.getAuthRequest(action);
+    if (action !== 'signout' && !request) {
+      return;
+    }
+    this.authStatusLabel.classList.remove('error');
+    this.authStatusLabel.textContent = action === 'signout' ? 'Signing out...' : 'Submitting authentication...';
+    this.setAuthBusy(true);
+    try {
+      await this.options.onOpenWebAuth(action, request);
+      this.authPasswordInput.value = '';
+      this.authStatusLabel.classList.remove('error');
+      if (action === 'signout') {
+        this.authStatusLabel.textContent = 'Signed out. Guest session restored.';
+      } else if (action === 'signin') {
+        this.authStatusLabel.textContent = 'Sign-in successful.';
+        this.setScreen('main');
+      } else {
+        this.authStatusLabel.textContent = 'Sign-up successful.';
+        this.setScreen('main');
+      }
+    } catch (error) {
+      this.authStatusLabel.textContent = `Auth failed: ${this.getErrorMessage(error)}`;
+      this.authStatusLabel.classList.add('error');
+    } finally {
+      this.setAuthBusy(false);
+    }
   }
 
   private moveSelection(direction: 1 | -1): void {

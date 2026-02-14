@@ -52,6 +52,10 @@ import {
 } from './ranked/resultValidation';
 import { applyRankedRatingUpdate } from './ranked/ratingService';
 import {
+  detectRankedAnomalies,
+  type RankedAnomalyType,
+} from './ranked/anomalyDetection';
+import {
   ensureActiveSeason,
   getSeasonById,
   resolveRankedSeasonDurationDays,
@@ -74,7 +78,7 @@ app.register(cors, {
     callback(new Error('Origin not allowed by CORS'), false);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['content-type', 'x-account-id'],
+  allowedHeaders: ['content-type', 'x-account-id', 'x-admin-key', 'x-admin-actor'],
 });
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -124,6 +128,12 @@ const rankedCalibrationMatchesRequired = parsePositiveIntegerEnv(process.env.RAN
 const rankedMasterEntryRating = parsePositiveIntegerEnv(process.env.RANKED_MASTER_ENTRY_RATING) ?? 1900;
 const rankedMasterBasePoints = parsePositiveIntegerEnv(process.env.RANKED_MASTER_BASE_POINTS) ?? 1500;
 const rankedMasterQueueWeight = parsePositiveNumberEnv(process.env.RANKED_MR_WEIGHT_RANKED) ?? 1;
+const rankedAnomalyMinMatchIntervalSeconds = parsePositiveIntegerEnv(
+  process.env.RANKED_ANOMALY_MIN_MATCH_INTERVAL_SECONDS,
+) ?? 30;
+const rankedAnomalyRatingJumpThreshold = parsePositiveIntegerEnv(process.env.RANKED_ANOMALY_RATING_JUMP_THRESHOLD) ?? 60;
+const rankedAnomalyMrJumpThreshold = parsePositiveIntegerEnv(process.env.RANKED_ANOMALY_MR_JUMP_THRESHOLD) ?? 80;
+const rankedAnomalyAdminKey = process.env.RANKED_ANOMALY_ADMIN_KEY;
 
 interface LinkIdentityBody {
   provider?: string;
@@ -317,6 +327,26 @@ interface RankedLeaderboardQuery {
   offset?: string;
   track?: string;
 }
+
+interface RankedAnomalyAlertsQuery {
+  status?: string;
+  type?: string;
+  accountId?: string;
+  matchId?: string;
+  limit?: string;
+  offset?: string;
+}
+
+interface RankedAnomalyAlertParams {
+  alertId?: string;
+}
+
+interface RankedAnomalyAlertReviewBody {
+  status?: string;
+  note?: string;
+}
+
+type RankedAnomalyStatus = 'open' | 'false_positive' | 'confirmed';
 
 function isUuid(value: string | undefined): boolean {
   if (!value) {
@@ -574,6 +604,28 @@ function parseRankedOutcome(value: string | undefined): RankedResultOutcome | nu
   return null;
 }
 
+function parseRankedAnomalyStatus(value: string | undefined): RankedAnomalyStatus | null {
+  if (!value) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'open' || normalised === 'false_positive' || normalised === 'confirmed') {
+    return normalised;
+  }
+  return null;
+}
+
+function parseRankedAnomalyType(value: string | undefined): RankedAnomalyType | null {
+  if (!value) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'impossible_cadence' || normalised === 'rating_jump' || normalised === 'mr_jump') {
+    return normalised;
+  }
+  return null;
+}
+
 function normaliseDisplayName(value: unknown): string | null {
   if (value === undefined || value === null) {
     return null;
@@ -630,6 +682,10 @@ function parseLeaderboardTrack(value: string | undefined): 'rating' | 'master' {
   }
   const parsed = value.trim().toLowerCase();
   return parsed === 'master' ? 'master' : 'rating';
+}
+
+function getHeaderValue(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
 }
 
 type SocialPresenceVisibility = 'friends' | 'private';
@@ -3418,6 +3474,19 @@ app.post('/ranked/results', async (request, reply) => {
         enteredAt: rawRow.entered_at,
       });
     }
+    const previousMatchRows = await client.query(
+      `
+      SELECT account_id, MAX(created_at) AS previous_match_at
+      FROM ranked_match_rating_deltas
+      WHERE account_id = ANY($1::uuid[])
+      GROUP BY account_id
+      `,
+      [[p1Participant.accountId, p2Participant.accountId]],
+    );
+    const previousMatchAtByAccount = new Map<string, string | null>();
+    for (const rawRow of previousMatchRows.rows as Array<{ account_id: string; previous_match_at: string | null }>) {
+      previousMatchAtByAccount.set(rawRow.account_id, rawRow.previous_match_at);
+    }
 
     const ratingResult = applyRankedRatingUpdate({
       participants: [
@@ -3511,6 +3580,18 @@ app.post('/ranked/results', async (request, reply) => {
         enteredMasterTrack: masterProgress.enteredMasterTrack,
       });
       masterStateByAccount.set(update.accountId, masterProgress.post);
+      const mrDelta = masterProgress.pre.mrPoints !== null && masterProgress.post.mrPoints !== null
+        ? masterProgress.post.mrPoints - masterProgress.pre.mrPoints
+        : null;
+      const anomalyAlerts = detectRankedAnomalies({
+        occurredAtIso: row.created_at,
+        previousMatchAtIso: previousMatchAtByAccount.get(update.accountId) ?? null,
+        ratingDelta: update.delta,
+        mrDelta,
+        minMatchIntervalSeconds: rankedAnomalyMinMatchIntervalSeconds,
+        ratingJumpThreshold: rankedAnomalyRatingJumpThreshold,
+        mrJumpThreshold: rankedAnomalyMrJumpThreshold,
+      });
 
       await client.query(
         `
@@ -3537,6 +3618,36 @@ app.post('/ranked/results', async (request, reply) => {
           masterProgress.post.mrPoints,
         ],
       );
+      for (const alert of anomalyAlerts) {
+        await client.query(
+          `
+          INSERT INTO ranked_anomaly_alerts(
+            alert_type, severity, status, account_id, match_id, message, metadata, detected_at
+          )
+          VALUES ($1, $2, 'open', $3, $4, $5, $6::jsonb, $7)
+          `,
+          [
+            alert.type,
+            alert.severity,
+            update.accountId,
+            body.matchId,
+            alert.message,
+            JSON.stringify({
+              ...alert.metadata,
+              outcome,
+              side: update.side,
+              result: update.result,
+              preRating: update.preRating,
+              postRating: update.postRating,
+              ratingDelta: update.delta,
+              preMrPoints: masterProgress.pre.mrPoints,
+              postMrPoints: masterProgress.post.mrPoints,
+            }),
+            row.created_at,
+          ],
+        );
+      }
+      previousMatchAtByAccount.set(update.accountId, row.created_at);
 
       const isForfeitLoss = outcome === 'forfeit' && update.result === 'forfeit';
       await client.query(
@@ -4238,14 +4349,229 @@ app.get('/ranked/leaderboard', async (request, reply) => {
   };
 });
 
+app.get('/ranked/anomalies/alerts', async (request, reply) => {
+  if (!rankedAnomalyAdminKey) {
+    reply.code(501);
+    return { error: 'Ranked anomaly alerts are not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (adminKey !== rankedAnomalyAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+
+  const query = (request.query ?? {}) as RankedAnomalyAlertsQuery;
+  const status = query.status === undefined ? null : parseRankedAnomalyStatus(query.status);
+  if (query.status !== undefined && !status) {
+    reply.code(400);
+    return { error: 'status must be one of: open, false_positive, confirmed.' };
+  }
+  const alertType = query.type === undefined ? null : parseRankedAnomalyType(query.type);
+  if (query.type !== undefined && !alertType) {
+    reply.code(400);
+    return { error: 'type must be one of: impossible_cadence, rating_jump, mr_jump.' };
+  }
+  const accountId = query.accountId === undefined ? null : query.accountId.trim();
+  if (accountId !== null && !isUuid(accountId)) {
+    reply.code(400);
+    return { error: 'accountId must be a UUID when provided.' };
+  }
+  const matchId = query.matchId === undefined ? null : query.matchId.trim();
+  if (matchId !== null && !isUuid(matchId)) {
+    reply.code(400);
+    return { error: 'matchId must be a UUID when provided.' };
+  }
+  const limit = parsePositiveInteger(query.limit) ?? 50;
+  const offset = parseNonNegativeInteger(query.offset) ?? 0;
+  if (limit > 200) {
+    reply.code(400);
+    return { error: 'limit must be 200 or less.' };
+  }
+
+  const totalResult = await db.query(
+    `
+    SELECT COUNT(*) AS total
+    FROM ranked_anomaly_alerts
+    WHERE ($1::text IS NULL OR status = $1)
+      AND ($2::text IS NULL OR alert_type = $2)
+      AND ($3::uuid IS NULL OR account_id = $3)
+      AND ($4::uuid IS NULL OR match_id = $4)
+    `,
+    [status, alertType, accountId, matchId],
+  );
+  const total = Number((totalResult.rows[0] as { total: string }).total ?? '0');
+  const rows = await db.query(
+    `
+    SELECT
+      alert_id,
+      alert_type,
+      severity,
+      status,
+      account_id,
+      match_id,
+      message,
+      metadata,
+      detected_at,
+      reviewed_at,
+      reviewed_by,
+      review_note
+    FROM ranked_anomaly_alerts
+    WHERE ($1::text IS NULL OR status = $1)
+      AND ($2::text IS NULL OR alert_type = $2)
+      AND ($3::uuid IS NULL OR account_id = $3)
+      AND ($4::uuid IS NULL OR match_id = $4)
+    ORDER BY detected_at DESC
+    LIMIT $5 OFFSET $6
+    `,
+    [status, alertType, accountId, matchId, limit, offset],
+  );
+
+  return {
+    filters: {
+      status,
+      type: alertType,
+      accountId,
+      matchId,
+    },
+    pagination: {
+      limit,
+      offset,
+      total,
+    },
+    items: rows.rows.map((row) => {
+      const alert = row as {
+        alert_id: string;
+        alert_type: RankedAnomalyType;
+        severity: 'high' | 'medium';
+        status: RankedAnomalyStatus;
+        account_id: string;
+        match_id: string;
+        message: string;
+        metadata: unknown;
+        detected_at: string;
+        reviewed_at: string | null;
+        reviewed_by: string | null;
+        review_note: string | null;
+      };
+      return {
+        alertId: alert.alert_id,
+        type: alert.alert_type,
+        severity: alert.severity,
+        status: alert.status,
+        accountId: alert.account_id,
+        matchId: alert.match_id,
+        message: alert.message,
+        metadata: alert.metadata,
+        detectedAt: alert.detected_at,
+        reviewedAt: alert.reviewed_at,
+        reviewedBy: alert.reviewed_by,
+        reviewNote: alert.review_note,
+      };
+    }),
+  };
+});
+
+app.post('/ranked/anomalies/alerts/:alertId/review', async (request, reply) => {
+  if (!rankedAnomalyAdminKey) {
+    reply.code(501);
+    return { error: 'Ranked anomaly alerts are not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (adminKey !== rankedAnomalyAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+
+  const params = (request.params ?? {}) as RankedAnomalyAlertParams;
+  if (!isUuid(params.alertId)) {
+    reply.code(400);
+    return { error: 'alertId must be a UUID.' };
+  }
+
+  const body = (request.body ?? {}) as RankedAnomalyAlertReviewBody;
+  const status = parseRankedAnomalyStatus(body.status);
+  if (status !== 'false_positive' && status !== 'confirmed') {
+    reply.code(400);
+    return { error: 'status must be one of: false_positive, confirmed.' };
+  }
+  const note = typeof body.note === 'string' ? body.note.trim() : '';
+  if (status === 'false_positive' && !note) {
+    reply.code(400);
+    return { error: 'note is required when marking false_positive.' };
+  }
+  if (note.length > 1024) {
+    reply.code(400);
+    return { error: 'note must be 1024 characters or fewer.' };
+  }
+  const reviewerHeader = getHeaderValue(request.headers['x-admin-actor']).trim();
+  const reviewedBy = reviewerHeader ? reviewerHeader.slice(0, 64) : 'ops';
+
+  const updated = await db.query(
+    `
+    UPDATE ranked_anomaly_alerts
+    SET
+      status = $2,
+      reviewed_at = NOW(),
+      reviewed_by = $3,
+      review_note = $4
+    WHERE alert_id = $1
+    RETURNING
+      alert_id,
+      alert_type,
+      severity,
+      status,
+      account_id,
+      match_id,
+      message,
+      metadata,
+      detected_at,
+      reviewed_at,
+      reviewed_by,
+      review_note
+    `,
+    [params.alertId, status, reviewedBy, note || null],
+  );
+  if (!updated.rowCount) {
+    reply.code(404);
+    return { error: 'Anomaly alert not found.' };
+  }
+  const row = updated.rows[0] as {
+    alert_id: string;
+    alert_type: RankedAnomalyType;
+    severity: 'high' | 'medium';
+    status: RankedAnomalyStatus;
+    account_id: string;
+    match_id: string;
+    message: string;
+    metadata: unknown;
+    detected_at: string;
+    reviewed_at: string | null;
+    reviewed_by: string | null;
+    review_note: string | null;
+  };
+  return {
+    alertId: row.alert_id,
+    type: row.alert_type,
+    severity: row.severity,
+    status: row.status,
+    accountId: row.account_id,
+    matchId: row.match_id,
+    message: row.message,
+    metadata: row.metadata,
+    detectedAt: row.detected_at,
+    reviewedAt: row.reviewed_at,
+    reviewedBy: row.reviewed_by,
+    reviewNote: row.review_note,
+  };
+});
+
 app.post('/ranked/seasons/reset', async (request, reply) => {
   const requiredAdminKey = process.env.RANKED_SEASON_RESET_ADMIN_KEY;
   if (!requiredAdminKey) {
     reply.code(501);
     return { error: 'Ranked season reset is not configured.' };
   }
-  const headerValue = request.headers['x-admin-key'];
-  const adminKey = Array.isArray(headerValue) ? headerValue[0] : String(headerValue ?? '');
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
   if (adminKey !== requiredAdminKey) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };

@@ -35,4 +35,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - Add anti-smurf ops heuristics documentation and escalation rules.
 
 ## First concrete story to start now
-- Next start with `S3.4` (ranked anomaly detection), extending current anti-smurf policy into automated alerting.
+- `S3.4` (ranked anomaly detection) is complete.
+- Next start with `S3.5` (enforcement tooling), consuming anomaly review outcomes.

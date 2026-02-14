@@ -29,6 +29,7 @@ Status: active policy for web + Steam rollout
    - season leaderboard movement.
 2. Accounts above threshold are tagged `review_pending`.
 3. Operations triages within 24 hours.
+4. Ranked anomaly alert stream (`ranked_anomaly_alerts`) is reviewed using `docs/RANKED_ANOMALY_REVIEW_FLOW.md`.
 
 ## Escalation Stages
 1. Soft monitor:

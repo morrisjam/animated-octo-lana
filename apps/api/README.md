@@ -50,6 +50,10 @@ Optional:
 - `RANKED_MASTER_ENTRY_RATING` defaults to `1900`.
 - `RANKED_MASTER_BASE_POINTS` defaults to `1500`.
 - `RANKED_MR_WEIGHT_RANKED` defaults to `1`.
+- `RANKED_ANOMALY_MIN_MATCH_INTERVAL_SECONDS` defaults to `30`.
+- `RANKED_ANOMALY_RATING_JUMP_THRESHOLD` defaults to `60`.
+- `RANKED_ANOMALY_MR_JUMP_THRESHOLD` defaults to `80`.
+- `RANKED_ANOMALY_ADMIN_KEY` optional admin key required by ranked anomaly alert review endpoints.
 
 API scripts auto-load `.env` from repo root. Create it once:
 
@@ -132,6 +136,8 @@ npm run api:season-reset
 - `POST /ranked/results` submit ranked match result with session token validation, suspicious review flagging, and Elo-like rating updates.
 - `GET /ranked/progression` read ranked progression snapshot for current or requested season.
 - `GET /ranked/leaderboard` read ranked leaderboard with pagination (`limit`, `offset`), optional `region` filter, and optional `track=master`.
+- `GET /ranked/anomalies/alerts` list ranked anomaly alerts for operations (`x-admin-key` required).
+- `POST /ranked/anomalies/alerts/:alertId/review` mark alert as `false_positive` or `confirmed` (`x-admin-key` required).
 - `POST /ranked/seasons/reset` archive expired active season standings and roll to next season (`x-admin-key` required).
 - `POST /matchmaking/network/connection-telemetry` store direct or relay path telemetry by region.
 - `GET /matchmaking/network/connection-telemetry/summary` read telemetry summary with optional `region` and `queueType` filters.
@@ -317,6 +323,8 @@ Ranked result submission:
 - Placement flow assigns the initial league tier after configurable calibration matches.
 - Master track entry is threshold-based (`RANKED_MASTER_ENTRY_RATING`) and MR points update per ranked match with configurable weighting (`RANKED_MR_WEIGHT_RANKED`).
 - Season reset snapshots both base standings (`ranked_season_standings`) and master standings (`ranked_master_season_standings`); new seasons start with no master entries until players re-qualify.
+- Ranked anomaly detection writes `ranked_anomaly_alerts` for impossible cadence, rating jump, and MR jump heuristics.
+- False-positive/confirmation handling is documented in `docs/RANKED_ANOMALY_REVIEW_FLOW.md`.
 - Reconnect grace window is configurable in queue service configuration.
 - NAT config uses STUN and optional TURN relay servers from environment values.
 - Telemetry endpoint tracks direct vs relay connection outcomes by region.

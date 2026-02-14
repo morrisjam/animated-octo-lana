@@ -48,7 +48,8 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 ## Online Dev menu shell
 
 - `VITE_FEATURE_ONLINE_DEV_MENU=true` enables an in-game Online Dev shell menu in web dev/staging builds.
-- The shell currently provides keyboard/controller navigation and section stubs for `Matchmaking`, `Rooms`, `Replay`, and `Ranked`.
+- The shell provides keyboard/controller section navigation for `Matchmaking`, `Rooms`, `Replay`, and `Ranked`.
+- Matchmaking panel supports queue join/leave and live ticket/session polling with reconnect debug fields.
 
 ## Client architecture
 

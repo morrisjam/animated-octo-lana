@@ -119,9 +119,16 @@ const replayViewer = createReplayViewer({
     exitReplayReview();
   },
 });
+const matchmakingApiBase = (
+  (import.meta.env.VITE_MATCHMAKING_API_BASE as string | undefined)?.trim()
+  || (import.meta.env.VITE_PROFILE_API_BASE as string | undefined)?.trim()
+  || ''
+);
 const onlineDevMenuEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDevMenuEnabled;
 const onlineDevMenu = onlineDevMenuEnabled
   ? createOnlineDevMenu({
+    apiBase: matchmakingApiBase,
+    getAccountId: () => sessionAccountId,
     onClose: () => {
       closeOnlineDevMenu();
     },

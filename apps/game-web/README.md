@@ -53,6 +53,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Rooms panel supports create/join/refresh/lock/spectator/start/rematch/close flows with invite payload previews and room phase/history inspection.
 - Replay panel supports player/opponent/character/matchup/queue/date/patch filters, cursor-paginated search, and direct replay payload launch into replay review.
 - Ranked panel supports progression snapshot inspection (rating/league/LP/MR/provisional) with recent pre/post delta rows and profile-settings fallback when ranked APIs are unavailable.
+- `VITE_FEATURE_ONLINE_DIAGNOSTICS=true` enables a live diagnostics overlay with rollback/network/session counters and `Export JSON` capture.
 
 ## Client architecture
 

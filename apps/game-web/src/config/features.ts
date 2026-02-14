@@ -4,6 +4,7 @@ export interface FeatureFlags {
   onlineEnabled: boolean;
   rankedEnabled: boolean;
   debugToolsEnabled: boolean;
+  onlineDiagnosticsEnabled: boolean;
   trainingModeEnabled: boolean;
   arcadeModeEnabled: boolean;
   onlineDevMenuEnabled: boolean;
@@ -19,6 +20,7 @@ const ENVIRONMENT_PRESETS: Record<RuntimeEnvironment, FeatureFlags> = {
     onlineEnabled: true,
     rankedEnabled: true,
     debugToolsEnabled: true,
+    onlineDiagnosticsEnabled: true,
     trainingModeEnabled: true,
     arcadeModeEnabled: true,
     onlineDevMenuEnabled: true,
@@ -27,6 +29,7 @@ const ENVIRONMENT_PRESETS: Record<RuntimeEnvironment, FeatureFlags> = {
     onlineEnabled: true,
     rankedEnabled: true,
     debugToolsEnabled: true,
+    onlineDiagnosticsEnabled: true,
     trainingModeEnabled: true,
     arcadeModeEnabled: false,
     onlineDevMenuEnabled: true,
@@ -35,6 +38,7 @@ const ENVIRONMENT_PRESETS: Record<RuntimeEnvironment, FeatureFlags> = {
     onlineEnabled: false,
     rankedEnabled: false,
     debugToolsEnabled: false,
+    onlineDiagnosticsEnabled: false,
     trainingModeEnabled: true,
     arcadeModeEnabled: false,
     onlineDevMenuEnabled: false,
@@ -70,6 +74,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
   const onlineOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_ONLINE);
   const rankedOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_RANKED);
   const debugOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_DEBUG_TOOLS);
+  const diagnosticsOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_ONLINE_DIAGNOSTICS);
   const trainingOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_TRAINING_MODE);
   const arcadeOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_ARCADE_MODE);
   const onlineDevMenuOverride = parseBooleanEnv(import.meta.env.VITE_FEATURE_ONLINE_DEV_MENU);
@@ -78,6 +83,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
     onlineEnabled: onlineOverride ?? preset.onlineEnabled,
     rankedEnabled: rankedOverride ?? preset.rankedEnabled,
     debugToolsEnabled: debugOverride ?? preset.debugToolsEnabled,
+    onlineDiagnosticsEnabled: diagnosticsOverride ?? preset.onlineDiagnosticsEnabled,
     trainingModeEnabled: trainingOverride ?? preset.trainingModeEnabled,
     arcadeModeEnabled: arcadeOverride ?? preset.arcadeModeEnabled,
     onlineDevMenuEnabled: onlineDevMenuOverride ?? preset.onlineDevMenuEnabled,
@@ -85,6 +91,7 @@ export function loadRuntimeConfig(): RuntimeConfig {
 
   if (!features.onlineEnabled) {
     features.rankedEnabled = false;
+    features.onlineDiagnosticsEnabled = false;
   }
 
   return {

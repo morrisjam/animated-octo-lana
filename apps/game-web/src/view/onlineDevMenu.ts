@@ -1,11 +1,25 @@
 type OnlineDevSectionId = 'matchmaking' | 'rooms' | 'replay' | 'ranked';
 type QueueType = 'unranked' | 'ranked';
 type RegionId = 'us-east' | 'us-west' | 'eu-west' | 'ap-southeast';
+type ConnectionPath = 'direct' | 'relay' | 'unknown';
+
+export interface OnlineDiagnosticsUpdate {
+  ticketId: string | null;
+  sessionId: string | null;
+  queueType: QueueType | null;
+  region: RegionId | null;
+  queueWaitMs: number | null;
+  connectionPath: ConnectionPath;
+  rttMs: number | null;
+  packetLossPercent: number | null;
+  participantAccountIds: string[];
+}
 
 interface OnlineDevMenuOptions {
   apiBase: string;
   getAccountId(): string | null;
   onOpenReplayPayload(options: { replayId: string; payload: unknown }): Promise<void> | void;
+  onDiagnosticsUpdate?(update: OnlineDiagnosticsUpdate): void;
   onClose(): void;
 }
 
@@ -278,6 +292,9 @@ export class OnlineDevMenu {
   private readonly prevPadStateByIndex = new Map<number, PadState>();
   private readonly queueSelect: HTMLSelectElement;
   private readonly regionInputs = new Map<RegionId, HTMLInputElement>();
+  private readonly telemetryPathSelect: HTMLSelectElement;
+  private readonly telemetryRttInput: HTMLInputElement;
+  private readonly telemetryPacketLossInput: HTMLInputElement;
   private readonly joinButton: HTMLButtonElement;
   private readonly leaveButton: HTMLButtonElement;
   private readonly pollButton: HTMLButtonElement;
@@ -465,6 +482,51 @@ export class OnlineDevMenu {
     }
     regionsGroup.appendChild(regionsList);
     controlGrid.appendChild(regionsGroup);
+
+    const telemetryPathLabel = document.createElement('label');
+    telemetryPathLabel.className = 'online-dev-control';
+    telemetryPathLabel.textContent = 'Connection path';
+    this.telemetryPathSelect = document.createElement('select');
+    for (const optionValue of ['unknown', 'direct', 'relay'] as const) {
+      const option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionValue;
+      this.telemetryPathSelect.appendChild(option);
+    }
+    this.telemetryPathSelect.addEventListener('change', () => {
+      this.emitDiagnosticsUpdate();
+    });
+    telemetryPathLabel.appendChild(this.telemetryPathSelect);
+    controlGrid.appendChild(telemetryPathLabel);
+
+    const telemetryRttLabel = document.createElement('label');
+    telemetryRttLabel.className = 'online-dev-control';
+    telemetryRttLabel.textContent = 'RTT ms (optional)';
+    this.telemetryRttInput = document.createElement('input');
+    this.telemetryRttInput.type = 'number';
+    this.telemetryRttInput.min = '0';
+    this.telemetryRttInput.step = '1';
+    this.telemetryRttInput.placeholder = 'ex: 42';
+    this.telemetryRttInput.addEventListener('input', () => {
+      this.emitDiagnosticsUpdate();
+    });
+    telemetryRttLabel.appendChild(this.telemetryRttInput);
+    controlGrid.appendChild(telemetryRttLabel);
+
+    const telemetryPacketLossLabel = document.createElement('label');
+    telemetryPacketLossLabel.className = 'online-dev-control';
+    telemetryPacketLossLabel.textContent = 'Packet loss % (optional)';
+    this.telemetryPacketLossInput = document.createElement('input');
+    this.telemetryPacketLossInput.type = 'number';
+    this.telemetryPacketLossInput.min = '0';
+    this.telemetryPacketLossInput.max = '100';
+    this.telemetryPacketLossInput.step = '0.1';
+    this.telemetryPacketLossInput.placeholder = 'ex: 0.8';
+    this.telemetryPacketLossInput.addEventListener('input', () => {
+      this.emitDiagnosticsUpdate();
+    });
+    telemetryPacketLossLabel.appendChild(this.telemetryPacketLossInput);
+    controlGrid.appendChild(telemetryPacketLossLabel);
 
     const actions = document.createElement('div');
     actions.className = 'online-dev-actions';
@@ -871,6 +933,10 @@ export class OnlineDevMenu {
     panel.appendChild(closeButton);
 
     document.body.appendChild(this.root);
+    const connection = (navigator as Navigator & { connection?: { rtt?: number } }).connection;
+    if (connection && typeof connection.rtt === 'number' && Number.isFinite(connection.rtt) && connection.rtt >= 0) {
+      this.telemetryRttInput.value = String(Math.round(connection.rtt));
+    }
     this.setSelectedIndex(0);
     this.renderMatchmakingData();
     this.renderRoomData();
@@ -890,12 +956,14 @@ export class OnlineDevMenu {
     this.populateReplayPlayerDefault();
     this.setSelectedIndex(this.selectedIndex);
     this.ensurePolling();
+    this.emitDiagnosticsUpdate();
   }
 
   public hide(): void {
     this.root.hidden = true;
     this.prevPadStateByIndex.clear();
     this.stopPolling();
+    this.emitDiagnosticsUpdate();
   }
 
   public dispose(): void {
@@ -1037,6 +1105,9 @@ export class OnlineDevMenu {
     this.leaveButton.disabled = this.pendingMatchmakingRequest || !hasTicket;
     this.pollButton.disabled = this.pendingMatchmakingRequest || !hasTicket;
     this.queueSelect.disabled = this.pendingMatchmakingRequest;
+    this.telemetryPathSelect.disabled = this.pendingMatchmakingRequest;
+    this.telemetryRttInput.disabled = this.pendingMatchmakingRequest;
+    this.telemetryPacketLossInput.disabled = this.pendingMatchmakingRequest;
     for (const input of this.regionInputs.values()) {
       input.disabled = this.pendingMatchmakingRequest;
     }
@@ -1096,6 +1167,7 @@ export class OnlineDevMenu {
       participantConnectionState: this.session?.participants ?? [],
     };
     this.reconnectOutput.textContent = stableStringify(reconnectData);
+    this.emitDiagnosticsUpdate();
   }
 
   private renderRoomData(): void {
@@ -1110,6 +1182,59 @@ export class OnlineDevMenu {
     if (this.room?.roomCode) {
       this.roomCodeInput.value = this.room.roomCode;
     }
+  }
+
+  private resolveTelemetryNumber(rawValue: string): number | null {
+    const value = rawValue.trim();
+    if (!value) {
+      return null;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private resolveQueueWaitMs(): number | null {
+    if (!this.ticket) {
+      return null;
+    }
+    const queuedAtMs = Date.parse(this.ticket.queuedAt);
+    if (Number.isNaN(queuedAtMs)) {
+      return null;
+    }
+    const endRaw = this.ticket.matchedAt ?? this.ticket.closedAt ?? new Date().toISOString();
+    const endMs = Date.parse(endRaw);
+    if (Number.isNaN(endMs)) {
+      return null;
+    }
+    return Math.max(0, endMs - queuedAtMs);
+  }
+
+  private emitDiagnosticsUpdate(): void {
+    const callback = this.options.onDiagnosticsUpdate;
+    if (!callback) {
+      return;
+    }
+    const pathValue = this.telemetryPathSelect.value;
+    const connectionPath: ConnectionPath = pathValue === 'direct' || pathValue === 'relay'
+      ? pathValue
+      : 'unknown';
+    const navigatorRtt = (navigator as Navigator & { connection?: { rtt?: number } }).connection?.rtt;
+    const fallbackRtt = typeof navigatorRtt === 'number' && Number.isFinite(navigatorRtt)
+      ? navigatorRtt
+      : null;
+    const rttMs = this.resolveTelemetryNumber(this.telemetryRttInput.value) ?? fallbackRtt;
+    const packetLossPercent = this.resolveTelemetryNumber(this.telemetryPacketLossInput.value);
+    callback({
+      ticketId: this.ticket?.ticketId ?? null,
+      sessionId: this.session?.sessionId ?? this.ticket?.matchStart?.sessionId ?? null,
+      queueType: this.ticket?.queueType ?? null,
+      region: this.ticket?.matchStart?.region ?? this.session?.region ?? null,
+      queueWaitMs: this.resolveQueueWaitMs(),
+      connectionPath,
+      rttMs,
+      packetLossPercent,
+      participantAccountIds: this.session?.participants.map((participant) => participant.accountId) ?? [],
+    });
   }
 
   private renderReplayData(): void {

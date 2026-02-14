@@ -16,7 +16,8 @@ import { sanitiseTuning } from './sim/tuning';
 import type { PlayerId, PlayersById } from './sim/types';
 import { createHud, type RollbackDiagnosticsView } from './view/hud';
 import { createPauseMenu } from './view/pauseMenu';
-import { createOnlineDevMenu } from './view/onlineDevMenu';
+import { createOnlineDevMenu, type OnlineDiagnosticsUpdate } from './view/onlineDevMenu';
+import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay';
 import { createReplayViewer } from './view/replayViewer';
 import { renderFrame } from './view/render';
 import { createScene, resizeScene } from './view/scene';
@@ -124,6 +125,28 @@ const matchmakingApiBase = (
   || (import.meta.env.VITE_PROFILE_API_BASE as string | undefined)?.trim()
   || ''
 );
+const diagnosticsBuildId = (
+  (import.meta.env.VITE_APP_BUILD as string | undefined)?.trim()
+  || (import.meta.env.VITE_COMMIT_SHA as string | undefined)?.trim()
+  || 'dev-local'
+);
+const diagnosticsRulesetVersion = (
+  (import.meta.env.VITE_RULESET_VERSION as string | undefined)?.trim()
+  || 'prototype-2026.02'
+);
+const diagnosticsEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDiagnosticsEnabled;
+let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
+  ticketId: null,
+  sessionId: null,
+  queueType: null,
+  region: null,
+  queueWaitMs: null,
+  connectionPath: 'unknown',
+  rttMs: null,
+  packetLossPercent: null,
+  participantAccountIds: [],
+};
+const diagnosticsOverlay = diagnosticsEnabled ? createOnlineDiagnosticsOverlay() : null;
 const onlineDevMenuEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDevMenuEnabled;
 const onlineDevMenu = onlineDevMenuEnabled
   ? createOnlineDevMenu({
@@ -134,6 +157,9 @@ const onlineDevMenu = onlineDevMenuEnabled
       if (!opened) {
         throw new Error(`Replay payload validation failed for ${replayId}.`);
       }
+    },
+    onDiagnosticsUpdate: (update) => {
+      onlineDiagnosticsUpdate = update;
     },
     onClose: () => {
       closeOnlineDevMenu();
@@ -577,6 +603,28 @@ function updateMatchInfo(): void {
   matchInfo.textContent = `Mode: Best of 3 | ${getRoundScoreText()}`;
 }
 
+function updateOnlineDiagnosticsOverlay(): void {
+  if (!diagnosticsOverlay) {
+    return;
+  }
+  diagnosticsOverlay.update({
+    capturedAt: new Date().toISOString(),
+    build: diagnosticsBuildId,
+    rulesetVersion: diagnosticsRulesetVersion,
+    accountId: sessionAccountId,
+    participantAccountIds: onlineDiagnosticsUpdate.participantAccountIds,
+    sessionId: onlineDiagnosticsUpdate.sessionId,
+    ticketId: onlineDiagnosticsUpdate.ticketId,
+    queueType: onlineDiagnosticsUpdate.queueType,
+    region: onlineDiagnosticsUpdate.region,
+    queueWaitMs: onlineDiagnosticsUpdate.queueWaitMs,
+    connectionPath: onlineDiagnosticsUpdate.connectionPath,
+    rttMs: onlineDiagnosticsUpdate.rttMs,
+    packetLossPercent: onlineDiagnosticsUpdate.packetLossPercent,
+    rollback: rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null,
+  });
+}
+
 function isPauseButtonDown(): boolean {
   const gamepads = navigator.getGamepads?.() ?? [];
   for (const gamepad of gamepads) {
@@ -765,6 +813,7 @@ function tick(nowMs: number): void {
   renderFrame(sceneContext, snapshot);
   hud.update(snapshot);
   updateMatchInfo();
+  updateOnlineDiagnosticsOverlay();
 
   requestAnimationFrame(tick);
 }
@@ -784,6 +833,7 @@ window.addEventListener('beforeunload', () => {
   startMenu.dispose();
   onlineDevMenu?.dispose();
   replayViewer.dispose();
+  diagnosticsOverlay?.dispose();
   input.dispose();
   platform.dispose?.();
 });

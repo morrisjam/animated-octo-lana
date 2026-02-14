@@ -604,6 +604,54 @@ html, body {
   cursor: pointer;
 }
 
+.online-diagnostics-overlay {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 37;
+  width: min(420px, calc(100vw - 24px));
+  border: 1px solid rgba(167, 195, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(5, 10, 24, 0.92);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.online-diagnostics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.online-diagnostics-export {
+  border: 1px solid rgba(167, 195, 255, 0.28);
+  background: rgba(18, 28, 58, 0.9);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.online-diagnostics-status {
+  font-size: 11px;
+  color: #9fdcc7;
+}
+
+.online-diagnostics-body {
+  margin: 0;
+  font-size: 11px;
+  color: #dbe8ff;
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .pause-menu {
   position: fixed;
   inset: 0;

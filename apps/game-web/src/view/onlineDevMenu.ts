@@ -1075,6 +1075,9 @@ export class OnlineDevMenu {
       option.textContent = optionValue || 'all statuses';
       this.socialRequestFilterSelect.appendChild(option);
     }
+    this.socialRequestFilterSelect.addEventListener('change', () => {
+      this.updateSocialControlState();
+    });
     socialRequestFilterLabel.appendChild(this.socialRequestFilterSelect);
     socialControlGrid.appendChild(socialRequestFilterLabel);
 
@@ -2721,6 +2724,3 @@ export class OnlineDevMenu {
 export function createOnlineDevMenu(options: OnlineDevMenuOptions): OnlineDevMenu {
   return new OnlineDevMenu(options);
 }
-    this.socialRequestFilterSelect.addEventListener('change', () => {
-      this.updateSocialControlState();
-    });

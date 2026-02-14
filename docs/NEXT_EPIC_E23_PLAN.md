@@ -36,4 +36,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 
 ## First concrete story to start now
 - `S3.4` (ranked anomaly detection) is complete.
-- Next start with `S3.5` (enforcement tooling), consuming anomaly review outcomes.
+- `S3.5` (enforcement tooling) is complete.
+- Next start with `S3.1` (service health and SLO baseline).

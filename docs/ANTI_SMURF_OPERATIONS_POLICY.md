@@ -43,6 +43,7 @@ Status: active policy for web + Steam rollout
 4. Enforcement:
    - Temporary ranked lock (24h to 7d) for repeated confirmed abuse.
    - Permanent ranked ban only after manual review and audit sign-off.
+   - Use enforcement action APIs and appeal workflow documented in `docs/ENFORCEMENT_TOOLING_FLOW.md`.
 
 ## False-Positive Safeguards
 - No hard enforcement from a single heuristic.

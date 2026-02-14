@@ -54,6 +54,7 @@ Optional:
 - `RANKED_ANOMALY_RATING_JUMP_THRESHOLD` defaults to `60`.
 - `RANKED_ANOMALY_MR_JUMP_THRESHOLD` defaults to `80`.
 - `RANKED_ANOMALY_ADMIN_KEY` optional admin key required by ranked anomaly alert review endpoints.
+- `ENFORCEMENT_ADMIN_KEY` optional admin key required by enforcement action and appeal review endpoints.
 
 API scripts auto-load `.env` from repo root. Create it once:
 
@@ -136,6 +137,11 @@ npm run api:season-reset
 - `POST /ranked/results` submit ranked match result with session token validation, suspicious review flagging, and Elo-like rating updates.
 - `GET /ranked/progression` read ranked progression snapshot for current or requested season.
 - `GET /ranked/leaderboard` read ranked leaderboard with pagination (`limit`, `offset`), optional `region` filter, and optional `track=master`.
+- `POST /admin/enforcement/actions` create warning, suspension, or ban action (`x-admin-key` required).
+- `GET /admin/enforcement/actions` list enforcement actions and latest appeal status (`x-admin-key` required).
+- `GET /enforcement/me` list authenticated account sanctions and appeal statuses.
+- `POST /enforcement/appeals` submit an appeal for a sanction on authenticated account.
+- `POST /admin/enforcement/appeals/:appealId/review` move appeal to `under_review`, `accepted`, or `rejected` and optionally revoke action (`x-admin-key` required).
 - `GET /ranked/anomalies/alerts` list ranked anomaly alerts for operations (`x-admin-key` required).
 - `POST /ranked/anomalies/alerts/:alertId/review` mark alert as `false_positive` or `confirmed` (`x-admin-key` required).
 - `POST /ranked/seasons/reset` archive expired active season standings and roll to next season (`x-admin-key` required).
@@ -325,6 +331,9 @@ Ranked result submission:
 - Season reset snapshots both base standings (`ranked_season_standings`) and master standings (`ranked_master_season_standings`); new seasons start with no master entries until players re-qualify.
 - Ranked anomaly detection writes `ranked_anomaly_alerts` for impossible cadence, rating jump, and MR jump heuristics.
 - False-positive/confirmation handling is documented in `docs/RANKED_ANOMALY_REVIEW_FLOW.md`.
+- Enforcement actions are stored in `enforcement_actions` (warning, suspension, ban) with actor identity and optional anomaly source alert linkage.
+- Appeal lifecycle is tracked in `enforcement_appeals` (`submitted`, `under_review`, `accepted`, `rejected`) with reviewer audit metadata.
+- Active suspension/ban actions block online queue join and ranked result submission.
 - Reconnect grace window is configurable in queue service configuration.
 - NAT config uses STUN and optional TURN relay servers from environment values.
 - Telemetry endpoint tracks direct vs relay connection outcomes by region.

@@ -47,6 +47,10 @@ import {
   type PresenceStatus,
 } from './social/presenceInviteService';
 import {
+  getEnforcementActionState,
+  type EnforcementActionType,
+} from './social/enforcementPolicy';
+import {
   evaluateRankedResultSubmission,
   type RankedResultSuspiciousReason,
 } from './ranked/resultValidation';
@@ -134,6 +138,7 @@ const rankedAnomalyMinMatchIntervalSeconds = parsePositiveIntegerEnv(
 const rankedAnomalyRatingJumpThreshold = parsePositiveIntegerEnv(process.env.RANKED_ANOMALY_RATING_JUMP_THRESHOLD) ?? 60;
 const rankedAnomalyMrJumpThreshold = parsePositiveIntegerEnv(process.env.RANKED_ANOMALY_MR_JUMP_THRESHOLD) ?? 80;
 const rankedAnomalyAdminKey = process.env.RANKED_ANOMALY_ADMIN_KEY;
+const enforcementAdminKey = process.env.ENFORCEMENT_ADMIN_KEY;
 
 interface LinkIdentityBody {
   provider?: string;
@@ -347,6 +352,40 @@ interface RankedAnomalyAlertReviewBody {
 }
 
 type RankedAnomalyStatus = 'open' | 'false_positive' | 'confirmed';
+type EnforcementAppealStatus = 'submitted' | 'under_review' | 'accepted' | 'rejected';
+
+interface AdminCreateEnforcementActionBody {
+  targetAccountId?: string;
+  actionType?: string;
+  reason?: string;
+  durationHours?: number;
+  startsAt?: string;
+  sourceAlertId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+interface AdminListEnforcementActionsQuery {
+  targetAccountId?: string;
+  actionType?: string;
+  activeOnly?: string;
+  limit?: string;
+  offset?: string;
+}
+
+interface AdminReviewAppealParams {
+  appealId?: string;
+}
+
+interface AdminReviewAppealBody {
+  status?: string;
+  reviewerNote?: string;
+  revokeAction?: boolean;
+}
+
+interface PlayerCreateEnforcementAppealBody {
+  actionId?: string;
+  note?: string;
+}
 
 function isUuid(value: string | undefined): boolean {
   if (!value) {
@@ -626,6 +665,42 @@ function parseRankedAnomalyType(value: string | undefined): RankedAnomalyType | 
   return null;
 }
 
+function parseEnforcementActionType(value: string | undefined): EnforcementActionType | null {
+  if (!value) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'warning' || normalised === 'suspension' || normalised === 'ban') {
+    return normalised;
+  }
+  return null;
+}
+
+function parseEnforcementAppealStatus(value: string | undefined): EnforcementAppealStatus | null {
+  if (!value) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'submitted' || normalised === 'under_review' || normalised === 'accepted' || normalised === 'rejected') {
+    return normalised;
+  }
+  return null;
+}
+
+function parseQueryBoolean(value: string | undefined): boolean | null {
+  if (value === undefined) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'true' || normalised === '1') {
+    return true;
+  }
+  if (normalised === 'false' || normalised === '0') {
+    return false;
+  }
+  return null;
+}
+
 function normaliseDisplayName(value: unknown): string | null {
   if (value === undefined || value === null) {
     return null;
@@ -686,6 +761,76 @@ function parseLeaderboardTrack(value: string | undefined): 'rating' | 'master' {
 
 function getHeaderValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+}
+
+function getAdminActorIdentity(headers: Record<string, unknown>): string {
+  const actor = getHeaderValue(headers['x-admin-actor'] as string | string[] | undefined).trim();
+  return actor ? actor.slice(0, 64) : 'ops';
+}
+
+function parseObjectPayload(value: unknown, fieldName: string): Record<string, unknown> {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${fieldName} must be a JSON object when provided.`);
+  }
+  const serialised = JSON.stringify(value);
+  if (serialised.length > 16_384) {
+    throw new Error(`${fieldName} payload exceeds 16KB limit.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+interface BlockingEnforcementAction {
+  actionId: string;
+  actionType: EnforcementActionType;
+  reason: string;
+  startsAt: string;
+  endsAt: string | null;
+}
+
+async function getBlockingEnforcementAction(accountId: string): Promise<BlockingEnforcementAction | null> {
+  const result = await db.query(
+    `
+      SELECT
+        action_id,
+        action_type,
+        reason,
+        starts_at,
+        ends_at
+      FROM enforcement_actions
+      WHERE target_account_id = $1
+        AND revoked_at IS NULL
+        AND starts_at <= NOW()
+        AND (
+          action_type = 'ban'
+          OR (action_type = 'suspension' AND ends_at > NOW())
+        )
+      ORDER BY
+        CASE WHEN action_type = 'ban' THEN 0 ELSE 1 END,
+        starts_at DESC
+      LIMIT 1
+    `,
+    [accountId],
+  );
+  if (!result.rowCount) {
+    return null;
+  }
+  const row = result.rows[0] as {
+    action_id: string;
+    action_type: EnforcementActionType;
+    reason: string;
+    starts_at: string;
+    ends_at: string | null;
+  };
+  return {
+    actionId: row.action_id,
+    actionType: row.action_type,
+    reason: row.reason,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+  };
 }
 
 type SocialPresenceVisibility = 'friends' | 'private';
@@ -3009,6 +3154,20 @@ app.post('/matchmaking/queue/join', async (request, reply) => {
     reply.code(404);
     return { error: 'Account not found.' };
   }
+  const blockingAction = await getBlockingEnforcementAction(accountId);
+  if (blockingAction) {
+    reply.code(403);
+    return {
+      error: 'Account is currently restricted from online queue access.',
+      enforcement: {
+        actionId: blockingAction.actionId,
+        actionType: blockingAction.actionType,
+        reason: blockingAction.reason,
+        startsAt: blockingAction.startsAt,
+        endsAt: blockingAction.endsAt,
+      },
+    };
+  }
 
   const body = (request.body ?? {}) as MatchmakingQueueJoinBody;
   const queueType = typeof body.queueType === 'string' ? body.queueType.toLowerCase().trim() : '';
@@ -3207,6 +3366,20 @@ app.post('/ranked/results', async (request, reply) => {
   if (!await ensureAccountExists(accountId)) {
     reply.code(404);
     return { error: 'Account not found.' };
+  }
+  const blockingAction = await getBlockingEnforcementAction(accountId);
+  if (blockingAction) {
+    reply.code(403);
+    return {
+      error: 'Account is currently restricted from ranked submission.',
+      enforcement: {
+        actionId: blockingAction.actionId,
+        actionType: blockingAction.actionType,
+        reason: blockingAction.reason,
+        startsAt: blockingAction.startsAt,
+        endsAt: blockingAction.endsAt,
+      },
+    };
   }
 
   const body = (request.body ?? {}) as RankedResultSubmitBody;
@@ -4347,6 +4520,631 @@ app.get('/ranked/leaderboard', async (request, reply) => {
       };
     }),
   };
+});
+
+app.post('/admin/enforcement/actions', async (request, reply) => {
+  if (!enforcementAdminKey) {
+    reply.code(501);
+    return { error: 'Enforcement tooling is not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (adminKey !== enforcementAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+
+  const body = (request.body ?? {}) as AdminCreateEnforcementActionBody;
+  const targetAccountId = String(body.targetAccountId ?? '').trim();
+  if (!isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID.' };
+  }
+  if (!await ensureAccountExists(targetAccountId)) {
+    reply.code(404);
+    return { error: 'Target account not found.' };
+  }
+  const actionType = parseEnforcementActionType(body.actionType);
+  if (!actionType) {
+    reply.code(400);
+    return { error: 'actionType must be one of: warning, suspension, ban.' };
+  }
+  const reason = String(body.reason ?? '').trim();
+  if (!reason || reason.length > 1024) {
+    reply.code(400);
+    return { error: 'reason is required and must be 1024 characters or fewer.' };
+  }
+  const sourceAlertId = body.sourceAlertId === undefined || body.sourceAlertId === null
+    ? null
+    : String(body.sourceAlertId).trim();
+  if (sourceAlertId !== null && !isUuid(sourceAlertId)) {
+    reply.code(400);
+    return { error: 'sourceAlertId must be a UUID when provided.' };
+  }
+  const startsAt = body.startsAt ? parseIsoDate(body.startsAt) : new Date();
+  if (!startsAt) {
+    reply.code(400);
+    return { error: 'startsAt must be a valid ISO timestamp when provided.' };
+  }
+  const durationHours = typeof body.durationHours === 'number' && Number.isFinite(body.durationHours)
+    ? body.durationHours
+    : null;
+  if (actionType === 'suspension') {
+    if (durationHours === null || durationHours <= 0 || durationHours > 24 * 365) {
+      reply.code(400);
+      return { error: 'durationHours is required for suspension and must be > 0 and <= 8760.' };
+    }
+  } else if (durationHours !== null) {
+    reply.code(400);
+    return { error: 'durationHours is only allowed for suspension actions.' };
+  }
+  let metadata: Record<string, unknown>;
+  try {
+    metadata = parseObjectPayload(body.metadata, 'metadata');
+  } catch (error) {
+    reply.code(400);
+    return { error: error instanceof Error ? error.message : 'metadata is invalid.' };
+  }
+  const endsAt = actionType === 'suspension'
+    ? new Date(startsAt.getTime() + (durationHours as number) * 60 * 60 * 1000)
+    : null;
+  const actorIdentity = getAdminActorIdentity(request.headers as Record<string, unknown>);
+
+  try {
+    const created = await db.query(
+      `
+      INSERT INTO enforcement_actions(
+        target_account_id, actor_identity, source_alert_id, action_type, reason, metadata, starts_at, ends_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, NOW())
+      RETURNING
+        action_id,
+        target_account_id,
+        actor_identity,
+        source_alert_id,
+        action_type,
+        reason,
+        metadata,
+        starts_at,
+        ends_at,
+        revoked_at,
+        revoked_by,
+        revoked_reason,
+        created_at,
+        updated_at
+      `,
+      [
+        targetAccountId,
+        actorIdentity,
+        sourceAlertId,
+        actionType,
+        reason,
+        JSON.stringify(metadata),
+        startsAt.toISOString(),
+        endsAt?.toISOString() ?? null,
+      ],
+    );
+    const row = created.rows[0] as {
+      action_id: string;
+      target_account_id: string;
+      actor_identity: string;
+      source_alert_id: string | null;
+      action_type: EnforcementActionType;
+      reason: string;
+      metadata: unknown;
+      starts_at: string;
+      ends_at: string | null;
+      revoked_at: string | null;
+      revoked_by: string | null;
+      revoked_reason: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+    return {
+      actionId: row.action_id,
+      targetAccountId: row.target_account_id,
+      actorIdentity: row.actor_identity,
+      sourceAlertId: row.source_alert_id,
+      actionType: row.action_type,
+      actionState: getEnforcementActionState({
+        actionType: row.action_type,
+        startsAtIso: row.starts_at,
+        endsAtIso: row.ends_at,
+        revokedAtIso: row.revoked_at,
+      }),
+      reason: row.reason,
+      metadata: row.metadata,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      revokedAt: row.revoked_at,
+      revokedBy: row.revoked_by,
+      revokedReason: row.revoked_reason,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  } catch (error: unknown) {
+    const code = (error as { code?: string } | undefined)?.code;
+    if (code === '23503') {
+      reply.code(400);
+      return { error: 'sourceAlertId does not reference an existing ranked anomaly alert.' };
+    }
+    throw error;
+  }
+});
+
+app.get('/admin/enforcement/actions', async (request, reply) => {
+  if (!enforcementAdminKey) {
+    reply.code(501);
+    return { error: 'Enforcement tooling is not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (adminKey !== enforcementAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+
+  const query = (request.query ?? {}) as AdminListEnforcementActionsQuery;
+  const targetAccountId = query.targetAccountId === undefined ? null : query.targetAccountId.trim();
+  if (targetAccountId !== null && !isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID when provided.' };
+  }
+  const actionType = query.actionType === undefined ? null : parseEnforcementActionType(query.actionType);
+  if (query.actionType !== undefined && !actionType) {
+    reply.code(400);
+    return { error: 'actionType must be one of: warning, suspension, ban.' };
+  }
+  const activeOnly = query.activeOnly === undefined ? false : parseQueryBoolean(query.activeOnly);
+  if (activeOnly === null) {
+    reply.code(400);
+    return { error: 'activeOnly must be true/false (or 1/0) when provided.' };
+  }
+  const limit = parsePositiveInteger(query.limit) ?? 50;
+  const offset = parseNonNegativeInteger(query.offset) ?? 0;
+  if (limit > 200) {
+    reply.code(400);
+    return { error: 'limit must be 200 or less.' };
+  }
+
+  const totalResult = await db.query(
+    `
+    SELECT COUNT(*) AS total
+    FROM enforcement_actions a
+    WHERE ($1::uuid IS NULL OR a.target_account_id = $1)
+      AND ($2::text IS NULL OR a.action_type = $2)
+      AND (
+        $3::boolean = FALSE
+        OR (
+          a.revoked_at IS NULL
+          AND a.starts_at <= NOW()
+          AND (a.action_type = 'ban' OR (a.action_type = 'suspension' AND a.ends_at > NOW()))
+        )
+      )
+    `,
+    [targetAccountId, actionType, activeOnly],
+  );
+  const total = Number((totalResult.rows[0] as { total: string }).total ?? '0');
+  const rows = await db.query(
+    `
+    SELECT
+      a.action_id,
+      a.target_account_id,
+      a.actor_identity,
+      a.source_alert_id,
+      a.action_type,
+      a.reason,
+      a.metadata,
+      a.starts_at,
+      a.ends_at,
+      a.revoked_at,
+      a.revoked_by,
+      a.revoked_reason,
+      a.created_at,
+      a.updated_at,
+      p.display_name,
+      appeal.status AS appeal_status,
+      appeal.updated_at AS appeal_updated_at
+    FROM enforcement_actions a
+    LEFT JOIN profiles p ON p.account_id = a.target_account_id
+    LEFT JOIN LATERAL (
+      SELECT status, updated_at
+      FROM enforcement_appeals e
+      WHERE e.action_id = a.action_id
+      ORDER BY e.updated_at DESC
+      LIMIT 1
+    ) appeal ON TRUE
+    WHERE ($1::uuid IS NULL OR a.target_account_id = $1)
+      AND ($2::text IS NULL OR a.action_type = $2)
+      AND (
+        $3::boolean = FALSE
+        OR (
+          a.revoked_at IS NULL
+          AND a.starts_at <= NOW()
+          AND (a.action_type = 'ban' OR (a.action_type = 'suspension' AND a.ends_at > NOW()))
+        )
+      )
+    ORDER BY a.created_at DESC
+    LIMIT $4 OFFSET $5
+    `,
+    [targetAccountId, actionType, activeOnly, limit, offset],
+  );
+
+  return {
+    filters: {
+      targetAccountId,
+      actionType,
+      activeOnly,
+    },
+    pagination: {
+      limit,
+      offset,
+      total,
+    },
+    items: rows.rows.map((row) => {
+      const entry = row as {
+        action_id: string;
+        target_account_id: string;
+        actor_identity: string;
+        source_alert_id: string | null;
+        action_type: EnforcementActionType;
+        reason: string;
+        metadata: unknown;
+        starts_at: string;
+        ends_at: string | null;
+        revoked_at: string | null;
+        revoked_by: string | null;
+        revoked_reason: string | null;
+        created_at: string;
+        updated_at: string;
+        display_name: string | null;
+        appeal_status: EnforcementAppealStatus | null;
+        appeal_updated_at: string | null;
+      };
+      return {
+        actionId: entry.action_id,
+        targetAccountId: entry.target_account_id,
+        targetDisplayName: entry.display_name,
+        actorIdentity: entry.actor_identity,
+        sourceAlertId: entry.source_alert_id,
+        actionType: entry.action_type,
+        actionState: getEnforcementActionState({
+          actionType: entry.action_type,
+          startsAtIso: entry.starts_at,
+          endsAtIso: entry.ends_at,
+          revokedAtIso: entry.revoked_at,
+        }),
+        reason: entry.reason,
+        metadata: entry.metadata,
+        startsAt: entry.starts_at,
+        endsAt: entry.ends_at,
+        revokedAt: entry.revoked_at,
+        revokedBy: entry.revoked_by,
+        revokedReason: entry.revoked_reason,
+        appealStatus: entry.appeal_status,
+        appealUpdatedAt: entry.appeal_updated_at,
+        createdAt: entry.created_at,
+        updatedAt: entry.updated_at,
+      };
+    }),
+  };
+});
+
+app.get('/enforcement/me', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (!await ensureAccountExists(accountId)) {
+    reply.code(404);
+    return { error: 'Account not found.' };
+  }
+
+  const rows = await db.query(
+    `
+    SELECT
+      a.action_id,
+      a.action_type,
+      a.reason,
+      a.metadata,
+      a.starts_at,
+      a.ends_at,
+      a.revoked_at,
+      a.revoked_reason,
+      a.created_at,
+      appeal.appeal_id,
+      appeal.status AS appeal_status,
+      appeal.player_note,
+      appeal.reviewer_note,
+      appeal.reviewed_by,
+      appeal.reviewed_at,
+      appeal.updated_at AS appeal_updated_at
+    FROM enforcement_actions a
+    LEFT JOIN LATERAL (
+      SELECT
+        e.appeal_id,
+        e.status,
+        e.player_note,
+        e.reviewer_note,
+        e.reviewed_by,
+        e.reviewed_at,
+        e.updated_at
+      FROM enforcement_appeals e
+      WHERE e.action_id = a.action_id
+        AND e.submitted_by_account_id = $1
+      ORDER BY e.updated_at DESC
+      LIMIT 1
+    ) appeal ON TRUE
+    WHERE a.target_account_id = $1
+    ORDER BY a.created_at DESC
+    LIMIT 100
+    `,
+    [accountId],
+  );
+
+  return {
+    items: rows.rows.map((row) => {
+      const entry = row as {
+        action_id: string;
+        action_type: EnforcementActionType;
+        reason: string;
+        metadata: unknown;
+        starts_at: string;
+        ends_at: string | null;
+        revoked_at: string | null;
+        revoked_reason: string | null;
+        created_at: string;
+        appeal_id: string | null;
+        appeal_status: EnforcementAppealStatus | null;
+        player_note: string | null;
+        reviewer_note: string | null;
+        reviewed_by: string | null;
+        reviewed_at: string | null;
+        appeal_updated_at: string | null;
+      };
+      return {
+        actionId: entry.action_id,
+        actionType: entry.action_type,
+        actionState: getEnforcementActionState({
+          actionType: entry.action_type,
+          startsAtIso: entry.starts_at,
+          endsAtIso: entry.ends_at,
+          revokedAtIso: entry.revoked_at,
+        }),
+        reason: entry.reason,
+        metadata: entry.metadata,
+        startsAt: entry.starts_at,
+        endsAt: entry.ends_at,
+        revokedAt: entry.revoked_at,
+        revokedReason: entry.revoked_reason,
+        createdAt: entry.created_at,
+        appeal: entry.appeal_id
+          ? {
+            appealId: entry.appeal_id,
+            status: entry.appeal_status,
+            playerNote: entry.player_note,
+            reviewerNote: entry.reviewer_note,
+            reviewedBy: entry.reviewed_by,
+            reviewedAt: entry.reviewed_at,
+            updatedAt: entry.appeal_updated_at,
+          }
+          : null,
+      };
+    }),
+  };
+});
+
+app.post('/enforcement/appeals', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (!await ensureAccountExists(accountId)) {
+    reply.code(404);
+    return { error: 'Account not found.' };
+  }
+
+  const body = (request.body ?? {}) as PlayerCreateEnforcementAppealBody;
+  const actionId = String(body.actionId ?? '').trim();
+  if (!isUuid(actionId)) {
+    reply.code(400);
+    return { error: 'actionId must be a UUID.' };
+  }
+  const note = String(body.note ?? '').trim();
+  if (!note || note.length > 1024) {
+    reply.code(400);
+    return { error: 'note is required and must be 1024 characters or fewer.' };
+  }
+
+  try {
+    const created = await db.query(
+      `
+      INSERT INTO enforcement_appeals(
+        action_id, target_account_id, submitted_by_account_id, status, player_note, updated_at
+      )
+      SELECT action_id, target_account_id, $2, 'submitted', $3, NOW()
+      FROM enforcement_actions
+      WHERE action_id = $1
+        AND target_account_id = $2
+      RETURNING
+        appeal_id,
+        action_id,
+        target_account_id,
+        submitted_by_account_id,
+        status,
+        player_note,
+        reviewer_note,
+        reviewed_by,
+        reviewed_at,
+        created_at,
+        updated_at
+      `,
+      [actionId, accountId, note],
+    );
+    if (!created.rowCount) {
+      reply.code(404);
+      return { error: 'Enforcement action not found for this account.' };
+    }
+    const row = created.rows[0] as {
+      appeal_id: string;
+      action_id: string;
+      target_account_id: string;
+      submitted_by_account_id: string;
+      status: EnforcementAppealStatus;
+      player_note: string | null;
+      reviewer_note: string | null;
+      reviewed_by: string | null;
+      reviewed_at: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+    reply.code(201);
+    return {
+      appealId: row.appeal_id,
+      actionId: row.action_id,
+      targetAccountId: row.target_account_id,
+      submittedByAccountId: row.submitted_by_account_id,
+      status: row.status,
+      playerNote: row.player_note,
+      reviewerNote: row.reviewer_note,
+      reviewedBy: row.reviewed_by,
+      reviewedAt: row.reviewed_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  } catch (error: unknown) {
+    const code = (error as { code?: string } | undefined)?.code;
+    if (code === '23505') {
+      reply.code(409);
+      return { error: 'An appeal is already open for this action.' };
+    }
+    throw error;
+  }
+});
+
+app.post('/admin/enforcement/appeals/:appealId/review', async (request, reply) => {
+  if (!enforcementAdminKey) {
+    reply.code(501);
+    return { error: 'Enforcement tooling is not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (adminKey !== enforcementAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+
+  const params = (request.params ?? {}) as AdminReviewAppealParams;
+  if (!isUuid(params.appealId)) {
+    reply.code(400);
+    return { error: 'appealId must be a UUID.' };
+  }
+  const body = (request.body ?? {}) as AdminReviewAppealBody;
+  const status = parseEnforcementAppealStatus(body.status);
+  if (!status || status === 'submitted') {
+    reply.code(400);
+    return { error: 'status must be one of: under_review, accepted, rejected.' };
+  }
+  const reviewerNote = String(body.reviewerNote ?? '').trim();
+  if ((status === 'accepted' || status === 'rejected') && !reviewerNote) {
+    reply.code(400);
+    return { error: 'reviewerNote is required for accepted or rejected outcomes.' };
+  }
+  if (reviewerNote.length > 1024) {
+    reply.code(400);
+    return { error: 'reviewerNote must be 1024 characters or fewer.' };
+  }
+  const revokeAction = body.revokeAction === true;
+  if (revokeAction && status !== 'accepted') {
+    reply.code(400);
+    return { error: 'revokeAction is only allowed when status is accepted.' };
+  }
+  const actorIdentity = getAdminActorIdentity(request.headers as Record<string, unknown>);
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const updatedAppeal = await client.query(
+      `
+      UPDATE enforcement_appeals
+      SET
+        status = $2,
+        reviewer_note = $3,
+        reviewed_by = $4,
+        reviewed_at = NOW(),
+        updated_at = NOW()
+      WHERE appeal_id = $1
+      RETURNING
+        appeal_id,
+        action_id,
+        target_account_id,
+        submitted_by_account_id,
+        status,
+        player_note,
+        reviewer_note,
+        reviewed_by,
+        reviewed_at,
+        created_at,
+        updated_at
+      `,
+      [params.appealId, status, reviewerNote || null, actorIdentity],
+    );
+    if (!updatedAppeal.rowCount) {
+      await client.query('ROLLBACK');
+      reply.code(404);
+      return { error: 'Appeal not found.' };
+    }
+    const appeal = updatedAppeal.rows[0] as {
+      appeal_id: string;
+      action_id: string;
+      target_account_id: string;
+      submitted_by_account_id: string;
+      status: EnforcementAppealStatus;
+      player_note: string | null;
+      reviewer_note: string | null;
+      reviewed_by: string | null;
+      reviewed_at: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+    let actionRevoked = false;
+    if (revokeAction) {
+      const revoked = await client.query(
+        `
+        UPDATE enforcement_actions
+        SET
+          revoked_at = NOW(),
+          revoked_by = $2,
+          revoked_reason = COALESCE($3, 'appeal_accepted'),
+          updated_at = NOW()
+        WHERE action_id = $1
+          AND revoked_at IS NULL
+        RETURNING action_id
+        `,
+        [appeal.action_id, actorIdentity, reviewerNote || null],
+      );
+      actionRevoked = Boolean(revoked.rowCount);
+    }
+    await client.query('COMMIT');
+    return {
+      appealId: appeal.appeal_id,
+      actionId: appeal.action_id,
+      targetAccountId: appeal.target_account_id,
+      submittedByAccountId: appeal.submitted_by_account_id,
+      status: appeal.status,
+      playerNote: appeal.player_note,
+      reviewerNote: appeal.reviewer_note,
+      reviewedBy: appeal.reviewed_by,
+      reviewedAt: appeal.reviewed_at,
+      createdAt: appeal.created_at,
+      updatedAt: appeal.updated_at,
+      actionRevoked,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 app.get('/ranked/anomalies/alerts', async (request, reply) => {

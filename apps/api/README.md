@@ -37,6 +37,8 @@ Optional:
 - `REPLAY_BLOB_DIR` defaults to `./data/replay-blobs`.
 - `REPLAY_RETENTION_DAYS_RANKED` defaults to `365`.
 - `REPLAY_RETENTION_DAYS_CASUAL` defaults to `90`.
+- `RANKED_SEASON_DURATION_DAYS` defaults to `90`.
+- `RANKED_SEASON_RESET_ADMIN_KEY` optional admin key required by `POST /ranked/seasons/reset`.
 
 API scripts auto-load `.env` from repo root. Create it once:
 
@@ -90,6 +92,12 @@ npm run api:local
 npm run api:test
 ```
 
+## Run ranked season reset job
+
+```bash
+npm run api:season-reset
+```
+
 ## Endpoints
 
 - `POST /accounts` create account.
@@ -111,6 +119,9 @@ npm run api:test
 - `POST /matchmaking/sessions/disconnect` mark local session participant as disconnected and start reconnect grace window.
 - `POST /matchmaking/sessions/reconnect` reconnect with session token and one-time reconnect attempt id.
 - `POST /ranked/results` submit ranked match result with session token validation, suspicious review flagging, and Elo-like rating updates.
+- `GET /ranked/progression` read ranked progression snapshot for current or requested season.
+- `GET /ranked/leaderboard` read ranked leaderboard with pagination (`limit`, `offset`) and optional `region` filter.
+- `POST /ranked/seasons/reset` archive expired active season standings and roll to next season (`x-admin-key` required).
 - `POST /matchmaking/network/connection-telemetry` store direct or relay path telemetry by region.
 - `GET /matchmaking/network/connection-telemetry/summary` read telemetry summary with optional `region` and `queueType` filters.
 - `GET /rooms/config` read private room lifecycle configuration.
@@ -288,6 +299,8 @@ Ranked result submission:
 - Session tokens expire and reconnect attempts use one-time ids for replay protection.
 - Ranked result submissions require a valid session token; mismatched participant/match payloads are stored and flagged with `review_status = pending`.
 - Accepted ranked results persist per-player pre/post rating deltas in `ranked_match_rating_deltas`.
+- Ranked seasons have explicit start/end windows (`ranked_seasons`) and archived snapshots (`ranked_season_standings`).
+- Season reset job archives standings, stamps historical matches by season, and creates the next active season window.
 - Reconnect grace window is configurable in queue service configuration.
 - NAT config uses STUN and optional TURN relay servers from environment values.
 - Telemetry endpoint tracks direct vs relay connection outcomes by region.

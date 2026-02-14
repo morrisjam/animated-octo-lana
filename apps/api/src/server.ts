@@ -51,6 +51,12 @@ import {
   type RankedResultSuspiciousReason,
 } from './ranked/resultValidation';
 import { applyRankedRatingUpdate } from './ranked/ratingService';
+import {
+  ensureActiveSeason,
+  getSeasonById,
+  resolveRankedSeasonDurationDays,
+  runRankedSeasonReset,
+} from './ranked/seasonService';
 
 const app = Fastify({ logger: true });
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
@@ -101,6 +107,7 @@ const presenceInviteService = createPresenceInviteService({
 const replayBlobStore = createReplayBlobStoreFromEnv(process.env);
 const rankedReplayRetentionDays = parsePositiveIntegerEnv(process.env.REPLAY_RETENTION_DAYS_RANKED) ?? 365;
 const casualReplayRetentionDays = parsePositiveIntegerEnv(process.env.REPLAY_RETENTION_DAYS_CASUAL) ?? 90;
+const rankedSeasonDurationDays = resolveRankedSeasonDurationDays(process.env);
 
 interface LinkIdentityBody {
   provider?: string;
@@ -282,6 +289,17 @@ interface RankedResultSubmitBody {
 }
 
 type RankedResultOutcome = 'p1_win' | 'p2_win' | 'draw' | 'forfeit';
+
+interface RankedProgressionQuery {
+  seasonId?: string;
+}
+
+interface RankedLeaderboardQuery {
+  seasonId?: string;
+  region?: string;
+  limit?: string;
+  offset?: string;
+}
 
 function isUuid(value: string | undefined): boolean {
   if (!value) {
@@ -554,6 +572,28 @@ function parsePositiveInteger(value: string | undefined): number | null {
     return null;
   }
   return parsed;
+}
+
+function parseNonNegativeInteger(value: string | undefined): number | null {
+  if (value === undefined) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseLeaderboardRegion(value: string | undefined): string | null {
+  if (value === undefined) {
+    return null;
+  }
+  const region = value.trim().toLowerCase();
+  if (!region) {
+    return null;
+  }
+  return region;
 }
 
 type SocialPresenceVisibility = 'friends' | 'private';
@@ -3217,18 +3257,20 @@ app.post('/ranked/results', async (request, reply) => {
       outcome,
       winnerAccountId,
     });
+    const activeSeason = await ensureActiveSeason(client, new Date(), rankedSeasonDurationDays);
 
     await client.query(
       `
       INSERT INTO ranked_matches(
-        match_id, session_id, queue_type, outcome, winner_account_id,
+        match_id, session_id, season_id, queue_type, outcome, winner_account_id,
         processed_submission_id, participant_p1_account_id, participant_p2_account_id
       )
-      VALUES ($1, $2, 'ranked', $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, 'ranked', $4, $5, $6, $7, $8)
       `,
       [
         body.matchId,
         body.sessionId,
+        activeSeason.seasonId,
         outcome,
         winnerAccountId,
         row.submission_id,
@@ -3311,6 +3353,345 @@ app.post('/ranked/results', async (request, reply) => {
       reply.code(409);
       return { error: 'Ranked match has already been processed.' };
     }
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/ranked/progression', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (!await ensureAccountExists(accountId)) {
+    reply.code(404);
+    return { error: 'Account not found.' };
+  }
+
+  const query = (request.query ?? {}) as RankedProgressionQuery;
+  const requestedSeasonId = typeof query.seasonId === 'string' ? query.seasonId.trim() : '';
+  const season = requestedSeasonId
+    ? await getSeasonById(db, requestedSeasonId)
+    : await ensureActiveSeason(db, new Date(), rankedSeasonDurationDays);
+  if (!season) {
+    reply.code(404);
+    return { error: 'Ranked season not found.' };
+  }
+
+  let ratingRow: {
+    rating: number | null;
+    matches_played: number | null;
+    updated_at: string | null;
+  } | null = null;
+  if (season.state === 'archived') {
+    const archived = await db.query(
+      `
+        SELECT rating, matches_played, captured_at AS updated_at
+        FROM ranked_season_standings
+        WHERE season_id = $1 AND account_id = $2
+        LIMIT 1
+      `,
+      [season.seasonId, accountId],
+    );
+    ratingRow = archived.rowCount
+      ? archived.rows[0] as { rating: number; matches_played: number; updated_at: string }
+      : null;
+  } else {
+    const live = await db.query(
+      `
+        SELECT rating, matches_played, updated_at
+        FROM ranked_player_ratings
+        WHERE account_id = $1
+        LIMIT 1
+      `,
+      [accountId],
+    );
+    ratingRow = live.rowCount
+      ? live.rows[0] as { rating: number; matches_played: number; updated_at: string }
+      : null;
+  }
+
+  const deltas = await db.query(
+    `
+      SELECT
+        d.match_id,
+        d.result,
+        d.pre_rating,
+        d.post_rating,
+        d.created_at
+      FROM ranked_match_rating_deltas d
+      INNER JOIN ranked_matches m ON m.match_id = d.match_id
+      WHERE d.account_id = $1
+        AND ($2::text IS NULL OR m.season_id = $2)
+      ORDER BY d.created_at DESC
+      LIMIT 10
+    `,
+    [accountId, season.seasonId],
+  );
+
+  const rating = ratingRow?.rating ?? null;
+  const matchesPlayed = ratingRow?.matches_played ?? 0;
+  const leagueTier = rating === null
+    ? null
+    : rating >= 1800
+      ? 'Platinum'
+      : rating >= 1600
+        ? 'Gold'
+        : rating >= 1400
+          ? 'Silver'
+          : rating >= 1200
+            ? 'Bronze'
+            : 'Iron';
+  const leaguePoints = rating === null ? null : Math.max(0, rating % 200);
+
+  return {
+    seasonId: season.seasonId,
+    season: {
+      seasonId: season.seasonId,
+      startsAt: season.startsAt,
+      endsAt: season.endsAt,
+      state: season.state,
+    },
+    current: {
+      seasonId: season.seasonId,
+      rating,
+      leagueTier,
+      leaguePoints,
+      mrPoints: null,
+      provisional: matchesPlayed < 10,
+      updatedAt: ratingRow?.updated_at ?? season.activatedAt ?? season.startsAt,
+    },
+    recentDeltas: deltas.rows.map((row) => {
+      const entry = row as {
+        match_id: string;
+        result: string;
+        pre_rating: number;
+        post_rating: number;
+        created_at: string;
+      };
+      return {
+        matchId: entry.match_id,
+        queueType: 'ranked',
+        result: entry.result,
+        preRating: entry.pre_rating,
+        postRating: entry.post_rating,
+        occurredAt: entry.created_at,
+      };
+    }),
+  };
+});
+
+app.get('/ranked/leaderboard', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (!await ensureAccountExists(accountId)) {
+    reply.code(404);
+    return { error: 'Account not found.' };
+  }
+
+  const query = (request.query ?? {}) as RankedLeaderboardQuery;
+  const requestedSeasonId = typeof query.seasonId === 'string' ? query.seasonId.trim() : '';
+  const season = requestedSeasonId
+    ? await getSeasonById(db, requestedSeasonId)
+    : await ensureActiveSeason(db, new Date(), rankedSeasonDurationDays);
+  if (!season) {
+    reply.code(404);
+    return { error: 'Ranked season not found.' };
+  }
+
+  const parsedLimit = parsePositiveInteger(query.limit);
+  const limit = parsedLimit ? Math.min(parsedLimit, 100) : 25;
+  const parsedOffset = parseNonNegativeInteger(query.offset);
+  const offset = parsedOffset ?? 0;
+  const region = parseLeaderboardRegion(query.region);
+
+  if (season.state === 'archived') {
+    const totalResult = await db.query(
+      `
+        SELECT COUNT(*) AS count
+        FROM ranked_season_standings
+        WHERE season_id = $1
+          AND ($2::text IS NULL OR region = $2)
+      `,
+      [season.seasonId, region],
+    );
+    const total = Number((totalResult.rows[0] as { count: string }).count);
+    const rows = await db.query(
+      `
+        SELECT
+          rank_position,
+          account_id,
+          region,
+          rating,
+          matches_played,
+          wins,
+          losses,
+          draws,
+          forfeits,
+          captured_at
+        FROM ranked_season_standings
+        WHERE season_id = $1
+          AND ($2::text IS NULL OR region = $2)
+        ORDER BY rank_position ASC, account_id ASC
+        LIMIT $3 OFFSET $4
+      `,
+      [season.seasonId, region, limit, offset],
+    );
+    return {
+      season: {
+        seasonId: season.seasonId,
+        startsAt: season.startsAt,
+        endsAt: season.endsAt,
+        state: season.state,
+      },
+      filter: {
+        region,
+      },
+      page: {
+        limit,
+        offset,
+        total,
+      },
+      items: rows.rows.map((row) => {
+        const entry = row as {
+          rank_position: number;
+          account_id: string;
+          region: string;
+          rating: number;
+          matches_played: number;
+          wins: number;
+          losses: number;
+          draws: number;
+          forfeits: number;
+          captured_at: string;
+        };
+        return {
+          rank: entry.rank_position,
+          accountId: entry.account_id,
+          region: entry.region,
+          rating: entry.rating,
+          matchesPlayed: entry.matches_played,
+          wins: entry.wins,
+          losses: entry.losses,
+          draws: entry.draws,
+          forfeits: entry.forfeits,
+          updatedAt: entry.captured_at,
+        };
+      }),
+    };
+  }
+
+  const totalResult = await db.query(
+    `
+      SELECT COUNT(*) AS count
+      FROM ranked_player_ratings r
+      LEFT JOIN profiles p ON p.account_id = r.account_id
+      WHERE (
+        $1::text IS NULL
+        OR COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') = $1
+      )
+    `,
+    [region],
+  );
+  const total = Number((totalResult.rows[0] as { count: string }).count);
+  const rows = await db.query(
+    `
+      WITH ranked_rows AS (
+        SELECT
+          ROW_NUMBER() OVER (
+            ORDER BY r.rating DESC, r.wins DESC, r.matches_played DESC, r.account_id ASC
+          ) AS rank_position,
+          r.account_id,
+          COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') AS region,
+          r.rating,
+          r.matches_played,
+          r.wins,
+          r.losses,
+          r.draws,
+          r.forfeits,
+          r.updated_at
+        FROM ranked_player_ratings r
+        LEFT JOIN profiles p ON p.account_id = r.account_id
+      )
+      SELECT *
+      FROM ranked_rows
+      WHERE ($1::text IS NULL OR region = $1)
+      ORDER BY rank_position ASC, account_id ASC
+      LIMIT $2 OFFSET $3
+    `,
+    [region, limit, offset],
+  );
+
+  return {
+    season: {
+      seasonId: season.seasonId,
+      startsAt: season.startsAt,
+      endsAt: season.endsAt,
+      state: season.state,
+    },
+    filter: {
+      region,
+    },
+    page: {
+      limit,
+      offset,
+      total,
+    },
+    items: rows.rows.map((row) => {
+      const entry = row as {
+        rank_position: number;
+        account_id: string;
+        region: string;
+        rating: number;
+        matches_played: number;
+        wins: number;
+        losses: number;
+        draws: number;
+        forfeits: number;
+        updated_at: string;
+      };
+      return {
+        rank: entry.rank_position,
+        accountId: entry.account_id,
+        region: entry.region,
+        rating: entry.rating,
+        matchesPlayed: entry.matches_played,
+        wins: entry.wins,
+        losses: entry.losses,
+        draws: entry.draws,
+        forfeits: entry.forfeits,
+        updatedAt: entry.updated_at,
+      };
+    }),
+  };
+});
+
+app.post('/ranked/seasons/reset', async (request, reply) => {
+  const requiredAdminKey = process.env.RANKED_SEASON_RESET_ADMIN_KEY;
+  if (!requiredAdminKey) {
+    reply.code(501);
+    return { error: 'Ranked season reset is not configured.' };
+  }
+  const headerValue = request.headers['x-admin-key'];
+  const adminKey = Array.isArray(headerValue) ? headerValue[0] : String(headerValue ?? '');
+  if (adminKey !== requiredAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await runRankedSeasonReset(client, new Date(), rankedSeasonDurationDays);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();

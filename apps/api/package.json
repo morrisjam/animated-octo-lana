@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "migrate": "tsx scripts/migrate.ts",
+    "season:reset": "tsx scripts/rankedSeasonReset.ts",
     "test": "node --test --import tsx src/**/*.test.ts"
   },
   "dependencies": {

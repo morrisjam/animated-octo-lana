@@ -176,6 +176,31 @@ interface ReplaySearchFiltersInput {
   limit: number;
 }
 
+interface RankedMatchDeltaView {
+  matchId: string | null;
+  queueType: string | null;
+  result: string | null;
+  preRating: number | null;
+  postRating: number | null;
+  preLeaguePoints: number | null;
+  postLeaguePoints: number | null;
+  preMrPoints: number | null;
+  postMrPoints: number | null;
+  occurredAt: string | null;
+}
+
+interface RankedProgressionView {
+  source: 'ranked_api' | 'profile_settings' | 'unavailable';
+  seasonId: string | null;
+  rating: number | null;
+  leagueTier: string | null;
+  leaguePoints: number | null;
+  mrPoints: number | null;
+  provisional: boolean | null;
+  updatedAt: string | null;
+  recentDeltas: RankedMatchDeltaView[];
+}
+
 const QUEUE_TYPES: QueueType[] = ['unranked', 'ranked'];
 const REGION_IDS: RegionId[] = ['us-east', 'us-west', 'eu-west', 'ap-southeast'];
 
@@ -201,8 +226,8 @@ const SECTIONS: OnlineDevSection[] = [
   {
     id: 'ranked',
     title: 'Ranked',
-    summary: 'Ranked progression inspection tools will appear here.',
-    status: 'S2.25 target',
+    summary: 'Inspect ranked progression and recent result deltas from API or profile fallback.',
+    status: 'S2.25 ready',
   },
 ];
 
@@ -300,18 +325,26 @@ export class OnlineDevMenu {
   private readonly replayResults: HTMLDivElement;
   private readonly replayCursorOutput: HTMLPreElement;
   private readonly rankedPanel: HTMLDivElement;
+  private readonly rankedSeasonInput: HTMLInputElement;
+  private readonly rankedRefreshButton: HTMLButtonElement;
+  private readonly rankedStatusElement: HTMLDivElement;
+  private readonly rankedErrorElement: HTMLDivElement;
+  private readonly rankedProgressOutput: HTMLPreElement;
+  private readonly rankedDeltaOutput: HTMLPreElement;
   private selectedIndex = 0;
   private rafId = 0;
   private pollIntervalId: number | null = null;
   private pendingMatchmakingRequest = false;
   private pendingRoomRequest = false;
   private pendingReplayRequest = false;
+  private pendingRankedRequest = false;
   private ticket: QueueTicketView | null = null;
   private session: MatchSessionView | null = null;
   private room: RoomView | null = null;
   private replayItems: ReplaySearchItemView[] = [];
   private replayNextCursor: string | null = null;
   private replayActiveFilters: ReplaySearchFiltersInput | null = null;
+  private rankedProgression: RankedProgressionView | null = null;
   private invitePreview: { web: RoomInviteView | null; steam: RoomInviteView | null } = {
     web: null,
     steam: null,
@@ -775,10 +808,53 @@ export class OnlineDevMenu {
     this.rankedPanel = document.createElement('div');
     this.rankedPanel.className = 'online-dev-ranked';
     this.rankedPanel.hidden = true;
-    const rankedPlaceholder = document.createElement('p');
-    rankedPlaceholder.className = 'online-dev-hint';
-    rankedPlaceholder.textContent = 'Ranked progression panel lands in S2.25.';
-    this.rankedPanel.appendChild(rankedPlaceholder);
+
+    const rankedControlGrid = document.createElement('div');
+    rankedControlGrid.className = 'online-dev-controls';
+    this.rankedPanel.appendChild(rankedControlGrid);
+
+    const rankedSeasonLabel = document.createElement('label');
+    rankedSeasonLabel.className = 'online-dev-control';
+    rankedSeasonLabel.textContent = 'Season id (optional)';
+    this.rankedSeasonInput = document.createElement('input');
+    this.rankedSeasonInput.type = 'text';
+    this.rankedSeasonInput.placeholder = 'Current season when empty';
+    rankedSeasonLabel.appendChild(this.rankedSeasonInput);
+    rankedControlGrid.appendChild(rankedSeasonLabel);
+
+    const rankedActions = document.createElement('div');
+    rankedActions.className = 'online-dev-actions';
+    this.rankedRefreshButton = document.createElement('button');
+    this.rankedRefreshButton.type = 'button';
+    this.rankedRefreshButton.className = 'online-dev-action';
+    this.rankedRefreshButton.textContent = 'Refresh Ranked Snapshot';
+    this.rankedRefreshButton.addEventListener('click', () => {
+      void this.refreshRankedProgression();
+    });
+    rankedActions.appendChild(this.rankedRefreshButton);
+    this.rankedPanel.appendChild(rankedActions);
+
+    this.rankedStatusElement = document.createElement('div');
+    this.rankedStatusElement.className = 'online-dev-status';
+    this.rankedStatusElement.textContent = 'Ready.';
+    this.rankedPanel.appendChild(this.rankedStatusElement);
+
+    this.rankedErrorElement = document.createElement('div');
+    this.rankedErrorElement.className = 'online-dev-error';
+    this.rankedErrorElement.hidden = true;
+    this.rankedPanel.appendChild(this.rankedErrorElement);
+
+    const rankedOutputs = document.createElement('div');
+    rankedOutputs.className = 'online-dev-outputs';
+    this.rankedPanel.appendChild(rankedOutputs);
+
+    const rankedProgressPanel = this.createOutputPanel('Current progression');
+    this.rankedProgressOutput = rankedProgressPanel.output;
+    rankedOutputs.appendChild(rankedProgressPanel.root);
+
+    const rankedDeltaPanel = this.createOutputPanel('Recent match deltas');
+    this.rankedDeltaOutput = rankedDeltaPanel.output;
+    rankedOutputs.appendChild(rankedDeltaPanel.root);
 
     this.sectionBody.append(this.matchmakingPanel, this.roomsPanel, this.replayPanel, this.rankedPanel);
 
@@ -800,8 +876,10 @@ export class OnlineDevMenu {
     this.renderRoomData();
     this.clearReplayState();
     this.renderReplayData();
+    this.renderRankedData();
     this.updateRoomControlState();
     this.updateReplayControlState();
+    this.updateRankedControlState();
     window.addEventListener('keydown', this.keydownHandler);
     this.pollGamepads();
   }
@@ -939,6 +1017,20 @@ export class OnlineDevMenu {
     }
   }
 
+  private setRankedError(message: string | null): void {
+    if (!message) {
+      this.rankedErrorElement.hidden = true;
+      this.rankedErrorElement.textContent = '';
+      return;
+    }
+    this.rankedErrorElement.hidden = false;
+    this.rankedErrorElement.textContent = message;
+  }
+
+  private setRankedStatus(message: string): void {
+    this.rankedStatusElement.textContent = message;
+  }
+
   private updateControlState(): void {
     const hasTicket = this.ticket !== null;
     this.joinButton.disabled = this.pendingMatchmakingRequest;
@@ -985,6 +1077,12 @@ export class OnlineDevMenu {
     this.replaySearchButton.disabled = busy;
     this.replayNextButton.disabled = busy || !this.replayNextCursor;
     this.replayClearButton.disabled = busy;
+  }
+
+  private updateRankedControlState(): void {
+    const busy = this.pendingRankedRequest;
+    this.rankedSeasonInput.disabled = busy;
+    this.rankedRefreshButton.disabled = busy;
   }
 
   private renderMatchmakingData(): void {
@@ -1063,6 +1161,31 @@ export class OnlineDevMenu {
     }
   }
 
+  private renderRankedData(): void {
+    this.rankedProgressOutput.textContent = stableStringify({
+      source: this.rankedProgression?.source ?? null,
+      seasonId: this.rankedProgression?.seasonId ?? null,
+      rating: this.rankedProgression?.rating ?? null,
+      leagueTier: this.rankedProgression?.leagueTier ?? null,
+      leaguePoints: this.rankedProgression?.leaguePoints ?? null,
+      mrPoints: this.rankedProgression?.mrPoints ?? null,
+      provisional: this.rankedProgression?.provisional ?? null,
+      updatedAt: this.rankedProgression?.updatedAt ?? null,
+    });
+
+    const recentDeltas = (this.rankedProgression?.recentDeltas ?? []).map((delta) => ({
+      ...delta,
+      ratingDelta: this.computeDelta(delta.preRating, delta.postRating),
+      leaguePointsDelta: this.computeDelta(delta.preLeaguePoints, delta.postLeaguePoints),
+      mrPointsDelta: this.computeDelta(delta.preMrPoints, delta.postMrPoints),
+    }));
+    this.rankedDeltaOutput.textContent = stableStringify(
+      recentDeltas.length > 0
+        ? recentDeltas
+        : [{ message: 'No ranked delta entries available yet.' }],
+    );
+  }
+
   private async runMatchmakingAction(action: () => Promise<void>): Promise<void> {
     if (this.pendingMatchmakingRequest) {
       return;
@@ -1118,6 +1241,25 @@ export class OnlineDevMenu {
       this.pendingReplayRequest = false;
       this.updateReplayControlState();
       this.renderReplayData();
+    }
+  }
+
+  private async runRankedAction(action: () => Promise<void>): Promise<void> {
+    if (this.pendingRankedRequest) {
+      return;
+    }
+    this.pendingRankedRequest = true;
+    this.setRankedError(null);
+    this.updateRankedControlState();
+    try {
+      await action();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected request failure.';
+      this.setRankedError(message);
+    } finally {
+      this.pendingRankedRequest = false;
+      this.updateRankedControlState();
+      this.renderRankedData();
     }
   }
 
@@ -1269,12 +1411,217 @@ export class OnlineDevMenu {
     });
   }
 
+  private async refreshRankedProgression(): Promise<void> {
+    await this.runRankedAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setRankedError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+
+      const seasonId = OnlineDevMenu.valueOrNull(this.rankedSeasonInput.value);
+      this.setRankedStatus('Loading ranked progression...');
+
+      const rankedApiProgression = await this.tryFetchRankedProgressionFromApi(accountId, seasonId);
+      if (rankedApiProgression) {
+        this.rankedProgression = rankedApiProgression;
+        this.setRankedStatus('Loaded ranked progression from ranked API.');
+        return;
+      }
+
+      const fallback = await this.fetchRankedProgressionFromProfile(accountId, seasonId);
+      if (fallback) {
+        this.rankedProgression = fallback;
+        this.setRankedStatus('Ranked API unavailable. Loaded profile settings fallback.');
+        return;
+      }
+
+      this.rankedProgression = {
+        source: 'unavailable',
+        seasonId,
+        rating: null,
+        leagueTier: null,
+        leaguePoints: null,
+        mrPoints: null,
+        provisional: null,
+        updatedAt: null,
+        recentDeltas: [],
+      };
+      this.setRankedStatus('No ranked progression data is available yet.');
+    });
+  }
+
+  private async tryFetchRankedProgressionFromApi(
+    accountId: string,
+    seasonId: string | null,
+  ): Promise<RankedProgressionView | null> {
+    const path = seasonId
+      ? `/ranked/progression?seasonId=${encodeURIComponent(seasonId)}`
+      : '/ranked/progression';
+    const response = await this.requestRaw('GET', path, accountId);
+    if (response.status === 404 || response.status === 501) {
+      return null;
+    }
+    if (!response.ok) {
+      const message = await parseErrorMessage(response);
+      throw new Error(message);
+    }
+    const payload = await response.json() as unknown;
+    return this.parseRankedProgression(payload, 'ranked_api', seasonId);
+  }
+
+  private async fetchRankedProgressionFromProfile(
+    accountId: string,
+    requestedSeasonId: string | null,
+  ): Promise<RankedProgressionView | null> {
+    const profile = await this.requestJson<{ settings_json?: Record<string, unknown>; updated_at?: string | null }>(
+      'GET',
+      '/profile',
+      accountId,
+    );
+    const settings = this.asRecord(profile.settings_json);
+    if (!settings) {
+      return null;
+    }
+    const rankedSettings = this.asRecord(settings.ranked) ?? this.asRecord(settings.rankedProgression);
+    if (!rankedSettings) {
+      return null;
+    }
+    return this.parseRankedProgression(
+      rankedSettings,
+      'profile_settings',
+      requestedSeasonId,
+      this.stringOrNull(profile.updated_at),
+    );
+  }
+
+  private parseRankedProgression(
+    payload: unknown,
+    source: RankedProgressionView['source'],
+    requestedSeasonId: string | null,
+    fallbackUpdatedAt: string | null = null,
+  ): RankedProgressionView {
+    const root = this.asRecord(payload);
+    const current = this.asRecord(root?.current) ?? root ?? {};
+    const recentRaw = Array.isArray(root?.recentDeltas)
+      ? root.recentDeltas
+      : Array.isArray(root?.recentResults)
+        ? root.recentResults
+        : Array.isArray(current?.recentDeltas)
+          ? current.recentDeltas
+          : [];
+    const recentDeltas = recentRaw
+      .map((entry) => this.parseRankedDelta(entry))
+      .filter((entry): entry is RankedMatchDeltaView => entry !== null);
+
+    return {
+      source,
+      seasonId: this.stringOrNull(current.seasonId) ?? this.stringOrNull(root?.seasonId) ?? requestedSeasonId,
+      rating: this.numberOrNull(current.rating),
+      leagueTier: this.stringOrNull(current.leagueTier),
+      leaguePoints: this.numberOrNull(current.leaguePoints),
+      mrPoints: this.numberOrNull(current.mrPoints),
+      provisional: this.booleanOrNull(current.provisional),
+      updatedAt: this.stringOrNull(current.updatedAt) ?? this.stringOrNull(root?.updatedAt) ?? fallbackUpdatedAt,
+      recentDeltas,
+    };
+  }
+
+  private parseRankedDelta(entry: unknown): RankedMatchDeltaView | null {
+    const row = this.asRecord(entry);
+    if (!row) {
+      return null;
+    }
+    const ratingPre = this.numberOrNull(row.preRating) ?? this.numberOrNull(row.ratingBefore);
+    const ratingPost = this.numberOrNull(row.postRating) ?? this.numberOrNull(row.ratingAfter);
+    const lpPre = this.numberOrNull(row.preLeaguePoints) ?? this.numberOrNull(row.leaguePointsBefore);
+    const lpPost = this.numberOrNull(row.postLeaguePoints) ?? this.numberOrNull(row.leaguePointsAfter);
+    const mrPre = this.numberOrNull(row.preMrPoints) ?? this.numberOrNull(row.mrPointsBefore);
+    const mrPost = this.numberOrNull(row.postMrPoints) ?? this.numberOrNull(row.mrPointsAfter);
+    return {
+      matchId: this.stringOrNull(row.matchId),
+      queueType: this.stringOrNull(row.queueType),
+      result: this.stringOrNull(row.result),
+      preRating: ratingPre,
+      postRating: ratingPost,
+      preLeaguePoints: lpPre,
+      postLeaguePoints: lpPost,
+      preMrPoints: mrPre,
+      postMrPoints: mrPost,
+      occurredAt: this.stringOrNull(row.occurredAt),
+    };
+  }
+
+  private computeDelta(before: number | null, after: number | null): number | null {
+    if (before === null || after === null) {
+      return null;
+    }
+    return after - before;
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    return value as Record<string, unknown>;
+  }
+
+  private stringOrNull(value: unknown): string | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private numberOrNull(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  private booleanOrNull(value: unknown): boolean | null {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'string') {
+      if (value === 'true') {
+        return true;
+      }
+      if (value === 'false') {
+        return false;
+      }
+    }
+    return null;
+  }
+
   private async requestJson<T>(
     method: 'GET' | 'POST',
     path: string,
     accountId: string,
     body?: unknown,
   ): Promise<T> {
+    const response = await this.requestRaw(method, path, accountId, body);
+    if (!response.ok) {
+      const errorMessage = await parseErrorMessage(response);
+      throw new Error(errorMessage);
+    }
+    return await response.json() as T;
+  }
+
+  private async requestRaw(
+    method: 'GET' | 'POST',
+    path: string,
+    accountId: string,
+    body?: unknown,
+  ): Promise<Response> {
     const apiBase = this.options.apiBase.trim();
     if (!apiBase) {
       throw new Error('Missing VITE_MATCHMAKING_API_BASE or VITE_PROFILE_API_BASE for Online Dev API panel.');
@@ -1289,16 +1636,11 @@ export class OnlineDevMenu {
       payload = JSON.stringify(body);
     }
 
-    const response = await fetch(`${apiBase}${path}`, {
+    return await fetch(`${apiBase}${path}`, {
       method,
       headers,
       body: payload,
     });
-    if (!response.ok) {
-      const errorMessage = await parseErrorMessage(response);
-      throw new Error(errorMessage);
-    }
-    return await response.json() as T;
   }
 
   private ensurePolling(): void {

@@ -52,6 +52,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Matchmaking panel supports queue join/leave and live ticket/session polling with reconnect debug fields.
 - Rooms panel supports create/join/refresh/lock/spectator/start/rematch/close flows with invite payload previews and room phase/history inspection.
 - Replay panel supports player/opponent/character/matchup/queue/date/patch filters, cursor-paginated search, and direct replay payload launch into replay review.
+- Ranked panel supports progression snapshot inspection (rating/league/LP/MR/provisional) with recent pre/post delta rows and profile-settings fallback when ranked APIs are unavailable.
 
 ## Client architecture
 

@@ -438,7 +438,10 @@ html, body {
   margin-top: 10px;
 }
 
-.online-dev-matchmaking {
+.online-dev-matchmaking,
+.online-dev-rooms,
+.online-dev-replay,
+.online-dev-ranked {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -548,6 +551,41 @@ html, body {
   color: #dbe8ff;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.online-dev-replay-results {
+  min-height: 200px;
+}
+
+.online-dev-replay-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.online-dev-replay-empty {
+  font-size: 12px;
+  color: #c7d8ff;
+}
+
+.online-dev-replay-item {
+  border: 1px solid rgba(167, 195, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(9, 16, 35, 0.72);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.online-dev-replay-item-title {
+  font-size: 12px;
+  color: #dbe8ff;
+}
+
+.online-dev-replay-item-meta {
+  font-size: 11px;
+  color: #b4c9f3;
 }
 
 .online-dev-hint {

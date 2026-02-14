@@ -129,6 +129,12 @@ const onlineDevMenu = onlineDevMenuEnabled
   ? createOnlineDevMenu({
     apiBase: matchmakingApiBase,
     getAccountId: () => sessionAccountId,
+    onOpenReplayPayload: async ({ replayId, payload }) => {
+      const opened = beginReplayReviewFromPayload(payload, `archive:${replayId}`);
+      if (!opened) {
+        throw new Error(`Replay payload validation failed for ${replayId}.`);
+      }
+    },
     onClose: () => {
       closeOnlineDevMenu();
     },
@@ -427,27 +433,15 @@ function restartTrainingRound(): void {
   accumulator = 0;
 }
 
-async function beginReplayReviewFromFixture(fileName: string): Promise<void> {
-  let payloadRaw: unknown;
-  try {
-    const response = await fetch(`/replays/${fileName}`);
-    if (!response.ok) {
-      throw new Error(`Replay fixture load failed (${response.status})`);
-    }
-    payloadRaw = await response.json();
-  } catch (error) {
-    console.error('[replay-review] failed to load replay fixture', fileName, error);
-    return;
-  }
-
+function beginReplayReviewFromPayload(payloadRaw: unknown, sourceLabel: string): boolean {
   const validation = validateReplayPayload(payloadRaw);
   if (!validation.ok) {
-    console.error('[replay-review] invalid replay payload', validation.error);
-    return;
+    console.error('[replay-review] invalid replay payload', sourceLabel, validation.error);
+    return false;
   }
 
   replayReviewData = buildReplayReviewData(validation.payload);
-  replayReviewSourceLabel = fileName;
+  replayReviewSourceLabel = sourceLabel;
   replayFrameIndex = 0;
   replayAccumulator = 0;
   replayPaused = true;
@@ -461,6 +455,7 @@ async function beginReplayReviewFromFixture(fileName: string): Promise<void> {
   pauseMenu.setCanRestartTraining(false);
   startMenu.hideRoundBanner();
   startMenu.hideHome();
+  onlineDevMenu?.hide();
   hudRoot.style.visibility = 'visible';
   hud.setTrainingFrameDataVisible(false);
   hud.setRollbackDiagnosticsVisible(false);
@@ -473,6 +468,23 @@ async function beginReplayReviewFromFixture(fileName: string): Promise<void> {
     sceneContext.cameraPlayerTracks.P2.set(firstSnapshot.players.P2.pos.x, firstSnapshot.players.P2.pos.y);
     sceneContext.launchCameraActive = false;
   }
+  return true;
+}
+
+async function beginReplayReviewFromFixture(fileName: string): Promise<void> {
+  let payloadRaw: unknown;
+  try {
+    const response = await fetch(`/replays/${fileName}`);
+    if (!response.ok) {
+      throw new Error(`Replay fixture load failed (${response.status})`);
+    }
+    payloadRaw = await response.json();
+  } catch (error) {
+    console.error('[replay-review] failed to load replay fixture', fileName, error);
+    return;
+  }
+
+  beginReplayReviewFromPayload(payloadRaw, fileName);
 }
 
 function exitReplayReview(): void {

@@ -5,6 +5,7 @@ type RegionId = 'us-east' | 'us-west' | 'eu-west' | 'ap-southeast';
 interface OnlineDevMenuOptions {
   apiBase: string;
   getAccountId(): string | null;
+  onOpenReplayPayload(options: { replayId: string; payload: unknown }): Promise<void> | void;
   onClose(): void;
 }
 
@@ -124,6 +125,57 @@ interface RoomInviteView {
   inviteValue: string;
 }
 
+interface ReplayParticipantView {
+  accountId: string;
+  side: 'P1' | 'P2';
+  characterId: string;
+  result: 'win' | 'loss' | 'draw' | 'forfeit' | string;
+}
+
+interface ReplaySearchItemView {
+  replayId: string;
+  matchId: string;
+  queueType: QueueType | string;
+  matchType: string;
+  region: string;
+  patchVersion: string;
+  rulesetVersion: string;
+  payloadVersion: number;
+  outcome: string;
+  winnerAccountId: string | null;
+  startedAt: string;
+  endedAt: string;
+  durationSeconds: number;
+  player: ReplayParticipantView;
+  opponent: ReplayParticipantView;
+}
+
+interface ReplaySearchResponseView {
+  items: ReplaySearchItemView[];
+  nextCursor: string | null;
+  page: {
+    limit: number;
+    returned: number;
+  };
+}
+
+interface ReplayPayloadResponseView {
+  replayId: string;
+  payload: unknown;
+}
+
+interface ReplaySearchFiltersInput {
+  playerId: string;
+  opponentId: string | null;
+  character: string | null;
+  matchup: string | null;
+  queueType: QueueType | null;
+  from: string | null;
+  to: string | null;
+  patchVersion: string | null;
+  limit: number;
+}
+
 const QUEUE_TYPES: QueueType[] = ['unranked', 'ranked'];
 const REGION_IDS: RegionId[] = ['us-east', 'us-west', 'eu-west', 'ap-southeast'];
 
@@ -143,8 +195,8 @@ const SECTIONS: OnlineDevSection[] = [
   {
     id: 'replay',
     title: 'Replay',
-    summary: 'Replay search and playback tools will appear here.',
-    status: 'S2.24 target',
+    summary: 'Search replay archive and launch replay review from payload fetches.',
+    status: 'S2.24 ready',
   },
   {
     id: 'ranked',
@@ -231,14 +283,35 @@ export class OnlineDevMenu {
   private readonly roomOutput: HTMLPreElement;
   private readonly roomPhaseOutput: HTMLPreElement;
   private readonly roomInviteOutput: HTMLPreElement;
+  private readonly replayPanel: HTMLDivElement;
+  private readonly replayPlayerInput: HTMLInputElement;
+  private readonly replayOpponentInput: HTMLInputElement;
+  private readonly replayCharacterInput: HTMLInputElement;
+  private readonly replayMatchupInput: HTMLInputElement;
+  private readonly replayQueueSelect: HTMLSelectElement;
+  private readonly replayFromInput: HTMLInputElement;
+  private readonly replayToInput: HTMLInputElement;
+  private readonly replayPatchInput: HTMLInputElement;
+  private readonly replaySearchButton: HTMLButtonElement;
+  private readonly replayNextButton: HTMLButtonElement;
+  private readonly replayClearButton: HTMLButtonElement;
+  private readonly replayStatusElement: HTMLDivElement;
+  private readonly replayErrorElement: HTMLDivElement;
+  private readonly replayResults: HTMLDivElement;
+  private readonly replayCursorOutput: HTMLPreElement;
+  private readonly rankedPanel: HTMLDivElement;
   private selectedIndex = 0;
   private rafId = 0;
   private pollIntervalId: number | null = null;
   private pendingMatchmakingRequest = false;
   private pendingRoomRequest = false;
+  private pendingReplayRequest = false;
   private ticket: QueueTicketView | null = null;
   private session: MatchSessionView | null = null;
   private room: RoomView | null = null;
+  private replayItems: ReplaySearchItemView[] = [];
+  private replayNextCursor: string | null = null;
+  private replayActiveFilters: ReplaySearchFiltersInput | null = null;
   private invitePreview: { web: RoomInviteView | null; steam: RoomInviteView | null } = {
     web: null,
     steam: null,
@@ -562,7 +635,152 @@ export class OnlineDevMenu {
     this.roomInviteOutput = roomInvitePanel.output;
     roomOutputs.appendChild(roomInvitePanel.root);
 
-    this.sectionBody.append(this.matchmakingPanel, this.roomsPanel);
+    this.replayPanel = document.createElement('div');
+    this.replayPanel.className = 'online-dev-replay';
+    this.replayPanel.hidden = true;
+
+    const replayControlGrid = document.createElement('div');
+    replayControlGrid.className = 'online-dev-controls';
+    this.replayPanel.appendChild(replayControlGrid);
+
+    const replayPlayerLabel = document.createElement('label');
+    replayPlayerLabel.className = 'online-dev-control';
+    replayPlayerLabel.textContent = 'Player account id';
+    this.replayPlayerInput = document.createElement('input');
+    this.replayPlayerInput.type = 'text';
+    this.replayPlayerInput.placeholder = 'Defaults to authenticated account';
+    replayPlayerLabel.appendChild(this.replayPlayerInput);
+    replayControlGrid.appendChild(replayPlayerLabel);
+
+    const replayOpponentLabel = document.createElement('label');
+    replayOpponentLabel.className = 'online-dev-control';
+    replayOpponentLabel.textContent = 'Opponent account id';
+    this.replayOpponentInput = document.createElement('input');
+    this.replayOpponentInput.type = 'text';
+    this.replayOpponentInput.placeholder = 'Optional UUID filter';
+    replayOpponentLabel.appendChild(this.replayOpponentInput);
+    replayControlGrid.appendChild(replayOpponentLabel);
+
+    const replayCharacterLabel = document.createElement('label');
+    replayCharacterLabel.className = 'online-dev-control';
+    replayCharacterLabel.textContent = 'Character id';
+    this.replayCharacterInput = document.createElement('input');
+    this.replayCharacterInput.type = 'text';
+    this.replayCharacterInput.placeholder = 'Optional';
+    replayCharacterLabel.appendChild(this.replayCharacterInput);
+    replayControlGrid.appendChild(replayCharacterLabel);
+
+    const replayMatchupLabel = document.createElement('label');
+    replayMatchupLabel.className = 'online-dev-control';
+    replayMatchupLabel.textContent = 'Matchup filter';
+    this.replayMatchupInput = document.createElement('input');
+    this.replayMatchupInput.type = 'text';
+    this.replayMatchupInput.placeholder = 'format: player:opponent';
+    replayMatchupLabel.appendChild(this.replayMatchupInput);
+    replayControlGrid.appendChild(replayMatchupLabel);
+
+    const replayQueueLabel = document.createElement('label');
+    replayQueueLabel.className = 'online-dev-control';
+    replayQueueLabel.textContent = 'Queue type';
+    this.replayQueueSelect = document.createElement('select');
+    for (const optionValue of ['', ...QUEUE_TYPES]) {
+      const option = document.createElement('option');
+      option.value = optionValue;
+      option.textContent = optionValue || 'all';
+      this.replayQueueSelect.appendChild(option);
+    }
+    replayQueueLabel.appendChild(this.replayQueueSelect);
+    replayControlGrid.appendChild(replayQueueLabel);
+
+    const replayFromLabel = document.createElement('label');
+    replayFromLabel.className = 'online-dev-control';
+    replayFromLabel.textContent = 'From (date/time)';
+    this.replayFromInput = document.createElement('input');
+    this.replayFromInput.type = 'datetime-local';
+    replayFromLabel.appendChild(this.replayFromInput);
+    replayControlGrid.appendChild(replayFromLabel);
+
+    const replayToLabel = document.createElement('label');
+    replayToLabel.className = 'online-dev-control';
+    replayToLabel.textContent = 'To (date/time)';
+    this.replayToInput = document.createElement('input');
+    this.replayToInput.type = 'datetime-local';
+    replayToLabel.appendChild(this.replayToInput);
+    replayControlGrid.appendChild(replayToLabel);
+
+    const replayPatchLabel = document.createElement('label');
+    replayPatchLabel.className = 'online-dev-control';
+    replayPatchLabel.textContent = 'Patch version';
+    this.replayPatchInput = document.createElement('input');
+    this.replayPatchInput.type = 'text';
+    this.replayPatchInput.placeholder = 'Optional';
+    replayPatchLabel.appendChild(this.replayPatchInput);
+    replayControlGrid.appendChild(replayPatchLabel);
+
+    const replayActions = document.createElement('div');
+    replayActions.className = 'online-dev-actions';
+
+    this.replaySearchButton = document.createElement('button');
+    this.replaySearchButton.type = 'button';
+    this.replaySearchButton.className = 'online-dev-action';
+    this.replaySearchButton.textContent = 'Search Replays';
+    this.replaySearchButton.addEventListener('click', () => {
+      void this.searchReplays(true);
+    });
+    replayActions.appendChild(this.replaySearchButton);
+
+    this.replayNextButton = document.createElement('button');
+    this.replayNextButton.type = 'button';
+    this.replayNextButton.className = 'online-dev-action';
+    this.replayNextButton.textContent = 'Load Next Page';
+    this.replayNextButton.addEventListener('click', () => {
+      void this.searchReplays(false);
+    });
+    replayActions.appendChild(this.replayNextButton);
+
+    this.replayClearButton = document.createElement('button');
+    this.replayClearButton.type = 'button';
+    this.replayClearButton.className = 'online-dev-action';
+    this.replayClearButton.textContent = 'Clear Filters';
+    this.replayClearButton.addEventListener('click', () => {
+      this.clearReplayState();
+    });
+    replayActions.appendChild(this.replayClearButton);
+
+    this.replayPanel.appendChild(replayActions);
+
+    this.replayStatusElement = document.createElement('div');
+    this.replayStatusElement.className = 'online-dev-status';
+    this.replayStatusElement.textContent = 'Ready.';
+    this.replayPanel.appendChild(this.replayStatusElement);
+
+    this.replayErrorElement = document.createElement('div');
+    this.replayErrorElement.className = 'online-dev-error';
+    this.replayErrorElement.hidden = true;
+    this.replayPanel.appendChild(this.replayErrorElement);
+
+    const replayResultsPanel = document.createElement('div');
+    replayResultsPanel.className = 'online-dev-output online-dev-replay-results';
+    const replayResultsHeading = document.createElement('h4');
+    replayResultsHeading.textContent = 'Replay results';
+    this.replayResults = document.createElement('div');
+    this.replayResults.className = 'online-dev-replay-list';
+    replayResultsPanel.append(replayResultsHeading, this.replayResults);
+    this.replayPanel.appendChild(replayResultsPanel);
+
+    const replayCursorPanel = this.createOutputPanel('Cursor and filters');
+    this.replayCursorOutput = replayCursorPanel.output;
+    this.replayPanel.appendChild(replayCursorPanel.root);
+
+    this.rankedPanel = document.createElement('div');
+    this.rankedPanel.className = 'online-dev-ranked';
+    this.rankedPanel.hidden = true;
+    const rankedPlaceholder = document.createElement('p');
+    rankedPlaceholder.className = 'online-dev-hint';
+    rankedPlaceholder.textContent = 'Ranked progression panel lands in S2.25.';
+    this.rankedPanel.appendChild(rankedPlaceholder);
+
+    this.sectionBody.append(this.matchmakingPanel, this.roomsPanel, this.replayPanel, this.rankedPanel);
 
     const hint = document.createElement('p');
     hint.className = 'online-dev-hint';
@@ -580,7 +798,10 @@ export class OnlineDevMenu {
     this.setSelectedIndex(0);
     this.renderMatchmakingData();
     this.renderRoomData();
+    this.clearReplayState();
+    this.renderReplayData();
     this.updateRoomControlState();
+    this.updateReplayControlState();
     window.addEventListener('keydown', this.keydownHandler);
     this.pollGamepads();
   }
@@ -588,6 +809,7 @@ export class OnlineDevMenu {
   public show(): void {
     this.root.hidden = false;
     this.prevPadStateByIndex.clear();
+    this.populateReplayPlayerDefault();
     this.setSelectedIndex(this.selectedIndex);
     this.ensurePolling();
   }
@@ -642,6 +864,8 @@ export class OnlineDevMenu {
     this.detailStatus.textContent = section.status;
     this.matchmakingPanel.hidden = section.id !== 'matchmaking';
     this.roomsPanel.hidden = section.id !== 'rooms';
+    this.replayPanel.hidden = section.id !== 'replay';
+    this.rankedPanel.hidden = section.id !== 'ranked';
   }
 
   private getSelectedRegions(): RegionId[] {
@@ -691,6 +915,30 @@ export class OnlineDevMenu {
     this.roomStatusElement.textContent = message;
   }
 
+  private setReplayError(message: string | null): void {
+    if (!message) {
+      this.replayErrorElement.hidden = true;
+      this.replayErrorElement.textContent = '';
+      return;
+    }
+    this.replayErrorElement.hidden = false;
+    this.replayErrorElement.textContent = message;
+  }
+
+  private setReplayStatus(message: string): void {
+    this.replayStatusElement.textContent = message;
+  }
+
+  private populateReplayPlayerDefault(): void {
+    if (this.replayPlayerInput.value.trim().length > 0) {
+      return;
+    }
+    const accountId = this.options.getAccountId();
+    if (accountId) {
+      this.replayPlayerInput.value = accountId;
+    }
+  }
+
   private updateControlState(): void {
     const hasTicket = this.ticket !== null;
     this.joinButton.disabled = this.pendingMatchmakingRequest;
@@ -724,6 +972,21 @@ export class OnlineDevMenu {
     this.inviteSteamButton.disabled = busy || !hasRoomCode;
   }
 
+  private updateReplayControlState(): void {
+    const busy = this.pendingReplayRequest;
+    this.replayPlayerInput.disabled = busy;
+    this.replayOpponentInput.disabled = busy;
+    this.replayCharacterInput.disabled = busy;
+    this.replayMatchupInput.disabled = busy;
+    this.replayQueueSelect.disabled = busy;
+    this.replayFromInput.disabled = busy;
+    this.replayToInput.disabled = busy;
+    this.replayPatchInput.disabled = busy;
+    this.replaySearchButton.disabled = busy;
+    this.replayNextButton.disabled = busy || !this.replayNextCursor;
+    this.replayClearButton.disabled = busy;
+  }
+
   private renderMatchmakingData(): void {
     this.ticketOutput.textContent = this.ticket ? stableStringify(this.ticket) : '-';
     this.sessionOutput.textContent = this.session ? stableStringify(this.session) : '-';
@@ -748,6 +1011,55 @@ export class OnlineDevMenu {
     this.roomInviteOutput.textContent = stableStringify(this.invitePreview);
     if (this.room?.roomCode) {
       this.roomCodeInput.value = this.room.roomCode;
+    }
+  }
+
+  private renderReplayData(): void {
+    this.replayCursorOutput.textContent = stableStringify({
+      loadedResults: this.replayItems.length,
+      nextCursor: this.replayNextCursor,
+      filters: this.replayActiveFilters,
+    });
+
+    this.replayResults.textContent = '';
+    if (this.replayItems.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'online-dev-replay-empty';
+      empty.textContent = this.pendingReplayRequest
+        ? 'Loading replay search...'
+        : 'No replay results. Run a search.';
+      this.replayResults.appendChild(empty);
+      return;
+    }
+
+    for (const item of this.replayItems) {
+      const row = document.createElement('div');
+      row.className = 'online-dev-replay-item';
+
+      const startedAt = new Date(item.startedAt);
+      const startedLabel = Number.isNaN(startedAt.getTime())
+        ? item.startedAt
+        : startedAt.toLocaleString();
+
+      const title = document.createElement('div');
+      title.className = 'online-dev-replay-item-title';
+      title.textContent = `${startedLabel} | ${item.queueType} | ${item.player.characterId} vs ${item.opponent.characterId}`;
+
+      const meta = document.createElement('div');
+      meta.className = 'online-dev-replay-item-meta';
+      meta.textContent = `${item.player.result} vs ${item.opponent.result} | replay ${item.replayId} | ${item.patchVersion}`;
+
+      const actionButton = document.createElement('button');
+      actionButton.type = 'button';
+      actionButton.className = 'online-dev-action';
+      actionButton.textContent = 'Open Replay';
+      actionButton.disabled = this.pendingReplayRequest;
+      actionButton.addEventListener('click', () => {
+        void this.openReplayPayload(item.replayId);
+      });
+
+      row.append(title, meta, actionButton);
+      this.replayResults.appendChild(row);
     }
   }
 
@@ -789,6 +1101,174 @@ export class OnlineDevMenu {
     }
   }
 
+  private async runReplayAction(action: () => Promise<void>): Promise<void> {
+    if (this.pendingReplayRequest) {
+      return;
+    }
+    this.pendingReplayRequest = true;
+    this.setReplayError(null);
+    this.updateReplayControlState();
+    this.renderReplayData();
+    try {
+      await action();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected request failure.';
+      this.setReplayError(message);
+    } finally {
+      this.pendingReplayRequest = false;
+      this.updateReplayControlState();
+      this.renderReplayData();
+    }
+  }
+
+  private static valueOrNull(rawValue: string): string | null {
+    const value = rawValue.trim();
+    return value.length > 0 ? value : null;
+  }
+
+  private parseReplayDateInput(rawValue: string, fieldName: 'from' | 'to'): string | null {
+    const value = rawValue.trim();
+    if (!value) {
+      return null;
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new Error(`${fieldName} date must be valid.`);
+    }
+    return parsed.toISOString();
+  }
+
+  private resolveReplayFilters(accountId: string): ReplaySearchFiltersInput {
+    const fromIso = this.parseReplayDateInput(this.replayFromInput.value, 'from');
+    const toIso = this.parseReplayDateInput(this.replayToInput.value, 'to');
+    if (fromIso && toIso && new Date(fromIso).getTime() > new Date(toIso).getTime()) {
+      throw new Error('Replay search from date must be earlier than to date.');
+    }
+    return {
+      playerId: OnlineDevMenu.valueOrNull(this.replayPlayerInput.value) ?? accountId,
+      opponentId: OnlineDevMenu.valueOrNull(this.replayOpponentInput.value),
+      character: OnlineDevMenu.valueOrNull(this.replayCharacterInput.value),
+      matchup: OnlineDevMenu.valueOrNull(this.replayMatchupInput.value),
+      queueType: (OnlineDevMenu.valueOrNull(this.replayQueueSelect.value) as QueueType | null),
+      from: fromIso,
+      to: toIso,
+      patchVersion: OnlineDevMenu.valueOrNull(this.replayPatchInput.value),
+      limit: 20,
+    };
+  }
+
+  private buildReplaySearchPath(filters: ReplaySearchFiltersInput, cursor: string | null): string {
+    const query = new URLSearchParams();
+    query.set('playerId', filters.playerId);
+    if (filters.opponentId) {
+      query.set('opponentId', filters.opponentId);
+    }
+    if (filters.character) {
+      query.set('character', filters.character);
+    }
+    if (filters.matchup) {
+      query.set('matchup', filters.matchup);
+    }
+    if (filters.queueType) {
+      query.set('queueType', filters.queueType);
+    }
+    if (filters.from) {
+      query.set('from', filters.from);
+    }
+    if (filters.to) {
+      query.set('to', filters.to);
+    }
+    if (filters.patchVersion) {
+      query.set('patchVersion', filters.patchVersion);
+    }
+    query.set('limit', String(filters.limit));
+    if (cursor) {
+      query.set('cursor', cursor);
+    }
+    return `/replays/search?${query.toString()}`;
+  }
+
+  private clearReplayState(): void {
+    this.replayItems = [];
+    this.replayNextCursor = null;
+    this.replayActiveFilters = null;
+    this.replayPlayerInput.value = '';
+    this.replayOpponentInput.value = '';
+    this.replayCharacterInput.value = '';
+    this.replayMatchupInput.value = '';
+    this.replayQueueSelect.value = '';
+    this.replayFromInput.value = '';
+    this.replayToInput.value = '';
+    this.replayPatchInput.value = '';
+    this.populateReplayPlayerDefault();
+    this.setReplayStatus('Ready.');
+    this.setReplayError(null);
+    this.updateReplayControlState();
+    this.renderReplayData();
+  }
+
+  private async searchReplays(reset: boolean): Promise<void> {
+    await this.runReplayAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setReplayError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      this.populateReplayPlayerDefault();
+      if (!reset) {
+        if (!this.replayActiveFilters) {
+          throw new Error('Run replay search before loading next page.');
+        }
+        if (!this.replayNextCursor) {
+          this.setReplayStatus('No more replay results.');
+          return;
+        }
+      }
+
+      const filters = reset
+        ? this.resolveReplayFilters(accountId)
+        : this.replayActiveFilters!;
+      const cursor = reset ? null : this.replayNextCursor;
+      const response = await this.requestJson<ReplaySearchResponseView>(
+        'GET',
+        this.buildReplaySearchPath(filters, cursor),
+        accountId,
+      );
+
+      this.replayActiveFilters = filters;
+      this.replayItems = reset ? response.items : [...this.replayItems, ...response.items];
+      this.replayNextCursor = response.nextCursor;
+      if (this.replayItems.length === 0) {
+        this.setReplayStatus('No replay results found for current filters.');
+      } else {
+        const delta = reset ? response.items.length : response.items.length;
+        const pageState = this.replayNextCursor ? 'next page available' : 'last page reached';
+        this.setReplayStatus(`Loaded ${delta} result(s). Total ${this.replayItems.length} (${pageState}).`);
+      }
+    });
+  }
+
+  private async openReplayPayload(replayId: string): Promise<void> {
+    await this.runReplayAction(async () => {
+      const accountId = this.options.getAccountId();
+      if (!accountId) {
+        this.setReplayError('Missing account id. Profile bootstrap has not completed.');
+        return;
+      }
+      this.setReplayStatus(`Loading replay payload ${replayId}...`);
+      const response = await this.requestJson<ReplayPayloadResponseView>(
+        'GET',
+        `/replays/${replayId}/payload`,
+        accountId,
+      );
+      await this.options.onOpenReplayPayload({
+        replayId: response.replayId,
+        payload: response.payload,
+      });
+      this.setReplayStatus(`Opened replay ${replayId} in replay review viewer.`);
+    });
+  }
+
   private async requestJson<T>(
     method: 'GET' | 'POST',
     path: string,
@@ -797,7 +1277,7 @@ export class OnlineDevMenu {
   ): Promise<T> {
     const apiBase = this.options.apiBase.trim();
     if (!apiBase) {
-      throw new Error('Missing VITE_MATCHMAKING_API_BASE for Online Dev matchmaking panel.');
+      throw new Error('Missing VITE_MATCHMAKING_API_BASE or VITE_PROFILE_API_BASE for Online Dev API panel.');
     }
 
     const headers: Record<string, string> = {

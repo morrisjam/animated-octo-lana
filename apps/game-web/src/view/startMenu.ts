@@ -16,8 +16,28 @@ export interface WebAuthMenuRequest {
   displayName?: string | null;
   upgradeCurrentGuest?: boolean;
 }
+export interface OnlineRankedViewState {
+  headline: string;
+  detail: string;
+}
+export interface OnlineRoomViewState {
+  headline: string;
+  detail: string;
+  roomCode?: string | null;
+}
 
-type StartScreen = 'title' | 'login' | 'main' | 'online' | 'local' | 'replays' | 'rankings' | 'settings' | 'match_over';
+type StartScreen =
+  | 'title'
+  | 'login'
+  | 'main'
+  | 'online'
+  | 'online_ranked'
+  | 'online_room'
+  | 'local'
+  | 'replays'
+  | 'rankings'
+  | 'settings'
+  | 'match_over';
 
 interface StartMenuOptions {
   initialMode?: GameMode;
@@ -26,6 +46,13 @@ interface StartMenuOptions {
   initialAccountSummary?: string;
   onStartMode(mode: GameMode, loadout: PlayersById<CharacterId>): void;
   onOpenWebAuth?(action: WebAuthMenuAction, request?: WebAuthMenuRequest): Promise<void> | void;
+  onJoinRankedQueue?(): Promise<OnlineRankedViewState> | OnlineRankedViewState;
+  onRefreshRankedQueue?(): Promise<OnlineRankedViewState> | OnlineRankedViewState;
+  onLeaveRankedQueue?(): Promise<OnlineRankedViewState> | OnlineRankedViewState;
+  onCreateCustomRoom?(): Promise<OnlineRoomViewState> | OnlineRoomViewState;
+  onJoinCustomRoom?(roomCode: string): Promise<OnlineRoomViewState> | OnlineRoomViewState;
+  onRefreshCustomRoom?(roomCode: string): Promise<OnlineRoomViewState> | OnlineRoomViewState;
+  onCloseCustomRoom?(roomCode: string): Promise<OnlineRoomViewState> | OnlineRoomViewState;
   onOpenOnlineDevMenu?(target?: OnlineDevMenuTarget): void;
   onOpenReplayReview?(): void;
   onReturnHome(): void;
@@ -138,6 +165,8 @@ export class StartMenu {
   private readonly loginPanel: HTMLDivElement;
   private readonly mainPanel: HTMLDivElement;
   private readonly onlinePanel: HTMLDivElement;
+  private readonly onlineRankedPanel: HTMLDivElement;
+  private readonly onlineRoomPanel: HTMLDivElement;
   private readonly localPanel: HTMLDivElement;
   private readonly replaysPanel: HTMLDivElement;
   private readonly rankingsPanel: HTMLDivElement;
@@ -157,6 +186,18 @@ export class StartMenu {
   private readonly signInButton: HTMLButtonElement;
   private readonly signUpButton: HTMLButtonElement;
   private readonly signOutButton: HTMLButtonElement;
+  private readonly rankedStatusHeadline: HTMLDivElement;
+  private readonly rankedStatusDetail: HTMLPreElement;
+  private readonly roomStatusHeadline: HTMLDivElement;
+  private readonly roomStatusDetail: HTMLPreElement;
+  private readonly roomCodeInput: HTMLInputElement;
+  private readonly rankedJoinButton: HTMLButtonElement;
+  private readonly rankedRefreshButton: HTMLButtonElement;
+  private readonly rankedLeaveButton: HTMLButtonElement;
+  private readonly roomCreateButton: HTMLButtonElement;
+  private readonly roomJoinButton: HTMLButtonElement;
+  private readonly roomRefreshButton: HTMLButtonElement;
+  private readonly roomCloseButton: HTMLButtonElement;
   private readonly localModeButton: HTMLButtonElement;
   private readonly p1CharacterButton: HTMLButtonElement;
   private readonly p2CharacterButton: HTMLButtonElement;
@@ -176,6 +217,8 @@ export class StartMenu {
   private accountSummary: string;
   private isAuthenticated = false;
   private authBusy = false;
+  private rankedBusy = false;
+  private roomBusy = false;
 
   private readonly keydownHandler = (event: KeyboardEvent): void => {
     if (this.root.hidden) {
@@ -240,6 +283,8 @@ export class StartMenu {
     this.loginPanel = this.createPanel('Login', 'Sign in, sign up, or continue as guest.');
     this.mainPanel = this.createPanel('Main Menu', 'Choose a category.');
     this.onlinePanel = this.createPanel('Online', 'Matchmaking and custom rooms.');
+    this.onlineRankedPanel = this.createPanel('Ranked Queue', 'Join, refresh, and leave queue from one place.');
+    this.onlineRoomPanel = this.createPanel('Custom Room', 'Create or join room sessions by code.');
     this.localPanel = this.createPanel('Local', 'Local match setup.');
     this.replaysPanel = this.createPanel('Replays', 'Review archived and fixture replays.');
     this.rankingsPanel = this.createPanel('Rankings', 'Ranked snapshot and leaderboard entry point.');
@@ -372,16 +417,74 @@ export class StartMenu {
     ]);
 
     const onlineRankedRow = this.createActionRow('Ranked', () => {
-      this.options.onOpenOnlineDevMenu?.('matchmaking');
+      this.setScreen('online_ranked');
     });
     const onlineRoomRow = this.createActionRow('Custom Room', () => {
-      this.options.onOpenOnlineDevMenu?.('rooms');
+      this.setScreen('online_room');
     });
     const onlineBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
     this.onlinePanel.append(onlineRankedRow.row, onlineRoomRow.row, onlineBackRow.row);
     this.registerRows('online', [onlineRankedRow.row, onlineRoomRow.row, onlineBackRow.row]);
+
+    const rankedStatusPanel = this.createStatusPanel('Status');
+    this.rankedStatusHeadline = rankedStatusPanel.headline;
+    this.rankedStatusDetail = rankedStatusPanel.detail;
+    this.onlineRankedPanel.appendChild(rankedStatusPanel.root);
+    const rankedJoinRow = this.createActionRow('Join Ranked Queue', async () => {
+      await this.handleRankedAction('join');
+    });
+    this.rankedJoinButton = rankedJoinRow.button;
+    const rankedRefreshRow = this.createActionRow('Refresh Queue Status', async () => {
+      await this.handleRankedAction('refresh');
+    });
+    this.rankedRefreshButton = rankedRefreshRow.button;
+    const rankedLeaveRow = this.createActionRow('Leave Queue', async () => {
+      await this.handleRankedAction('leave');
+    });
+    this.rankedLeaveButton = rankedLeaveRow.button;
+    const rankedBackRow = this.createActionRow('Back', () => {
+      this.setScreen('online');
+    });
+    this.onlineRankedPanel.append(rankedJoinRow.row, rankedRefreshRow.row, rankedLeaveRow.row, rankedBackRow.row);
+    this.registerRows('online_ranked', [rankedJoinRow.row, rankedRefreshRow.row, rankedLeaveRow.row, rankedBackRow.row]);
+
+    const roomCodeField = document.createElement('label');
+    roomCodeField.className = 'start-auth-field';
+    roomCodeField.textContent = 'Room Code';
+    this.roomCodeInput = document.createElement('input');
+    this.roomCodeInput.type = 'text';
+    this.roomCodeInput.placeholder = 'ABC123';
+    this.roomCodeInput.maxLength = 6;
+    this.roomCodeInput.autocomplete = 'off';
+    roomCodeField.appendChild(this.roomCodeInput);
+    this.onlineRoomPanel.appendChild(roomCodeField);
+    const roomStatusPanel = this.createStatusPanel('Room Status');
+    this.roomStatusHeadline = roomStatusPanel.headline;
+    this.roomStatusDetail = roomStatusPanel.detail;
+    this.onlineRoomPanel.appendChild(roomStatusPanel.root);
+    const roomCreateRow = this.createActionRow('Create Room', async () => {
+      await this.handleRoomAction('create');
+    });
+    this.roomCreateButton = roomCreateRow.button;
+    const roomJoinRow = this.createActionRow('Join Room', async () => {
+      await this.handleRoomAction('join');
+    });
+    this.roomJoinButton = roomJoinRow.button;
+    const roomRefreshRow = this.createActionRow('Refresh Room', async () => {
+      await this.handleRoomAction('refresh');
+    });
+    this.roomRefreshButton = roomRefreshRow.button;
+    const roomCloseRow = this.createActionRow('Close Room', async () => {
+      await this.handleRoomAction('close');
+    });
+    this.roomCloseButton = roomCloseRow.button;
+    const roomBackRow = this.createActionRow('Back', () => {
+      this.setScreen('online');
+    });
+    this.onlineRoomPanel.append(roomCreateRow.row, roomJoinRow.row, roomRefreshRow.row, roomCloseRow.row, roomBackRow.row);
+    this.registerRows('online_room', [roomCreateRow.row, roomJoinRow.row, roomRefreshRow.row, roomCloseRow.row, roomBackRow.row]);
 
     const localModeRow = this.createActionRow('', () => {
       this.currentMode = getNextMode(this.currentMode, this.enabledModes, 1);
@@ -450,6 +553,8 @@ export class StartMenu {
     padHint.textContent = 'Controls: Up/Down to navigate, Left/Right to adjust local selectors, A/Enter confirm, B/Esc back.';
     this.mainPanel.appendChild(padHint.cloneNode(true));
     this.onlinePanel.appendChild(padHint.cloneNode(true));
+    this.onlineRankedPanel.appendChild(padHint.cloneNode(true));
+    this.onlineRoomPanel.appendChild(padHint.cloneNode(true));
     this.localPanel.appendChild(padHint.cloneNode(true));
     this.replaysPanel.appendChild(padHint.cloneNode(true));
     this.rankingsPanel.appendChild(padHint.cloneNode(true));
@@ -488,6 +593,8 @@ export class StartMenu {
       this.loginPanel,
       this.mainPanel,
       this.onlinePanel,
+      this.onlineRankedPanel,
+      this.onlineRoomPanel,
       this.localPanel,
       this.replaysPanel,
       this.rankingsPanel,
@@ -505,6 +612,15 @@ export class StartMenu {
     this.refreshLocalRows();
     this.setScreen('title');
     this.setAuthState(false);
+    this.applyRankedState({
+      headline: 'Not queued',
+      detail: 'Press "Join Ranked Queue" to start matchmaking.',
+    });
+    this.applyRoomState({
+      headline: 'No room loaded',
+      detail: 'Create a room or enter a code to join one.',
+      roomCode: null,
+    });
     this.setMatchSelection(0);
     this.pollGamepads();
   }
@@ -589,6 +705,55 @@ export class StartMenu {
     return panel;
   }
 
+  private createStatusPanel(title: string): {
+    root: HTMLDivElement;
+    headline: HTMLDivElement;
+    detail: HTMLPreElement;
+  } {
+    const root = document.createElement('div');
+    root.className = 'start-status-panel';
+    const heading = document.createElement('div');
+    heading.className = 'start-row-label';
+    heading.textContent = title;
+    const headline = document.createElement('div');
+    headline.className = 'start-status-headline';
+    headline.textContent = '-';
+    const detail = document.createElement('pre');
+    detail.className = 'start-status-detail';
+    detail.textContent = '-';
+    root.append(heading, headline, detail);
+    return { root, headline, detail };
+  }
+
+  private applyRankedState(state: OnlineRankedViewState): void {
+    this.rankedStatusHeadline.textContent = state.headline;
+    this.rankedStatusDetail.textContent = state.detail;
+  }
+
+  private applyRoomState(state: OnlineRoomViewState): void {
+    this.roomStatusHeadline.textContent = state.headline;
+    this.roomStatusDetail.textContent = state.detail;
+    if (state.roomCode) {
+      this.roomCodeInput.value = state.roomCode;
+    }
+  }
+
+  private setRankedBusy(busy: boolean): void {
+    this.rankedBusy = busy;
+    this.rankedJoinButton.disabled = busy;
+    this.rankedRefreshButton.disabled = busy;
+    this.rankedLeaveButton.disabled = busy;
+  }
+
+  private setRoomBusy(busy: boolean): void {
+    this.roomBusy = busy;
+    this.roomCodeInput.disabled = busy;
+    this.roomCreateButton.disabled = busy;
+    this.roomJoinButton.disabled = busy;
+    this.roomRefreshButton.disabled = busy;
+    this.roomCloseButton.disabled = busy;
+  }
+
   private createActionRow(label: string, onActivate: () => void | Promise<void>, primary = false): { row: HTMLDivElement; button: HTMLButtonElement } {
     const row = document.createElement('div');
     row.className = 'start-menu-row';
@@ -624,6 +789,8 @@ export class StartMenu {
     this.loginPanel.hidden = this.currentScreen !== 'login';
     this.mainPanel.hidden = this.currentScreen !== 'main';
     this.onlinePanel.hidden = this.currentScreen !== 'online';
+    this.onlineRankedPanel.hidden = this.currentScreen !== 'online_ranked';
+    this.onlineRoomPanel.hidden = this.currentScreen !== 'online_room';
     this.localPanel.hidden = this.currentScreen !== 'local';
     this.replaysPanel.hidden = this.currentScreen !== 'replays';
     this.rankingsPanel.hidden = this.currentScreen !== 'rankings';
@@ -794,6 +961,85 @@ export class StartMenu {
     }
   }
 
+  private normaliseRoomCode(value: string): string {
+    return value.trim().toUpperCase();
+  }
+
+  private async handleRankedAction(action: 'join' | 'refresh' | 'leave'): Promise<void> {
+    const callback = action === 'join'
+      ? this.options.onJoinRankedQueue
+      : action === 'refresh'
+        ? this.options.onRefreshRankedQueue
+        : this.options.onLeaveRankedQueue;
+    if (!callback) {
+      this.applyRankedState({
+        headline: 'Unavailable',
+        detail: 'Ranked queue is not configured for this build.',
+      });
+      return;
+    }
+    this.setRankedBusy(true);
+    try {
+      const state = await callback();
+      this.applyRankedState(state);
+    } catch (error) {
+      this.applyRankedState({
+        headline: 'Queue action failed',
+        detail: this.getErrorMessage(error),
+      });
+    } finally {
+      this.setRankedBusy(false);
+    }
+  }
+
+  private async handleRoomAction(action: 'create' | 'join' | 'refresh' | 'close'): Promise<void> {
+    const roomCode = this.normaliseRoomCode(this.roomCodeInput.value);
+    this.roomCodeInput.value = roomCode;
+    if ((action === 'join' || action === 'refresh' || action === 'close') && !roomCode) {
+      this.applyRoomState({
+        headline: 'Room code required',
+        detail: 'Enter a room code before this action.',
+      });
+      return;
+    }
+    this.setRoomBusy(true);
+    try {
+      let state: OnlineRoomViewState | undefined;
+      if (action === 'create') {
+        if (!this.options.onCreateCustomRoom) {
+          throw new Error('Create room is unavailable in this build.');
+        }
+        state = await this.options.onCreateCustomRoom();
+      } else if (action === 'join') {
+        if (!this.options.onJoinCustomRoom) {
+          throw new Error('Join room is unavailable in this build.');
+        }
+        state = await this.options.onJoinCustomRoom(roomCode);
+      } else if (action === 'refresh') {
+        if (!this.options.onRefreshCustomRoom) {
+          throw new Error('Refresh room is unavailable in this build.');
+        }
+        state = await this.options.onRefreshCustomRoom(roomCode);
+      } else if (action === 'close') {
+        if (!this.options.onCloseCustomRoom) {
+          throw new Error('Close room is unavailable in this build.');
+        }
+        state = await this.options.onCloseCustomRoom(roomCode);
+      }
+      if (state) {
+        this.applyRoomState(state);
+      }
+    } catch (error) {
+      this.applyRoomState({
+        headline: 'Room action failed',
+        detail: this.getErrorMessage(error),
+        roomCode,
+      });
+    } finally {
+      this.setRoomBusy(false);
+    }
+  }
+
   private moveSelection(direction: 1 | -1): void {
     const rows = this.getRowsForCurrentScreen();
     if (rows.length === 0) {
@@ -855,6 +1101,10 @@ export class StartMenu {
       case 'rankings':
       case 'settings':
         this.setScreen('main');
+        return;
+      case 'online_ranked':
+      case 'online_room':
+        this.setScreen('online');
         return;
       case 'match_over':
         this.options.onReturnHome();

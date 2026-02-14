@@ -25,6 +25,8 @@ import {
   createStartMenu,
   type GameMode,
   type OnlineDevMenuTarget,
+  type OnlineRankedViewState,
+  type OnlineRoomViewState,
   type WebAuthMenuAction,
   type WebAuthMenuRequest,
 } from './view/startMenu';
@@ -91,6 +93,57 @@ interface StoredRollbackDiagnosticsEntry {
   mode: GameMode;
   seed: number;
   diagnostics: RollbackDiagnosticsSnapshot;
+}
+
+type QueueType = 'unranked' | 'ranked';
+type RegionId = 'us-east' | 'us-west' | 'eu-west' | 'ap-southeast';
+
+interface MatchStartPayload {
+  sessionId: string;
+  queueType: QueueType;
+  region: RegionId;
+  createdAt: string;
+}
+
+interface QueueTicketView {
+  ticketId: string;
+  accountId: string;
+  queueType: QueueType;
+  regionPreferences: RegionId[];
+  status: 'queued' | 'matched' | 'closed';
+  queuedAt: string;
+  matchedAt?: string;
+  closedAt?: string;
+  closedReason?: string;
+  matchStart?: MatchStartPayload;
+}
+
+interface MatchSessionView {
+  sessionId: string;
+  queueType: QueueType;
+  region: RegionId;
+  status: 'active' | 'resolved';
+  createdAt: string;
+  expiresAt?: string;
+  participants: Array<{
+    accountId: string;
+    side: 'P1' | 'P2';
+    connectionStatus: 'connected' | 'disconnected';
+  }>;
+}
+
+interface RoomView {
+  roomCode: string;
+  hostAccountId: string;
+  status: 'open' | 'active' | 'closed';
+  participants: Array<{
+    accountId: string;
+    role: 'player' | 'spectator';
+  }>;
+  activeSession?: {
+    sessionId: string;
+    phase: 'character_select' | 'ready_check' | 'in_match' | 'completed';
+  };
 }
 
 const pauseMenu = createPauseMenu({
@@ -173,6 +226,205 @@ const onlineDevMenu = onlineDevMenuEnabled
   })
   : null;
 
+function getOnlineAccountIdOrThrow(): string {
+  if (!sessionAccountId) {
+    throw new Error('Sign in or continue as guest first, then retry.');
+  }
+  return sessionAccountId;
+}
+
+async function parseOnlineApiError(response: Response): Promise<string> {
+  try {
+    const body = await response.json() as { error?: string; message?: string };
+    return body.error ?? body.message ?? `Request failed (${response.status})`;
+  } catch {
+    return `Request failed (${response.status})`;
+  }
+}
+
+async function requestOnlineJson<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  accountId: string,
+  body?: unknown,
+): Promise<T> {
+  if (!matchmakingApiBase) {
+    throw new Error('Missing VITE_MATCHMAKING_API_BASE or VITE_PROFILE_API_BASE.');
+  }
+  const headers: Record<string, string> = {
+    'x-account-id': accountId,
+  };
+  let payload: string | undefined;
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json';
+    payload = JSON.stringify(body);
+  }
+  const response = await fetch(`${matchmakingApiBase}${path}`, {
+    method,
+    headers,
+    body: payload,
+  });
+  if (!response.ok) {
+    throw new Error(await parseOnlineApiError(response));
+  }
+  return await response.json() as T;
+}
+
+function getQueueWaitMs(queuedAt: string | undefined): number | null {
+  if (!queuedAt) {
+    return null;
+  }
+  const queuedAtMs = Date.parse(queuedAt);
+  if (!Number.isFinite(queuedAtMs)) {
+    return null;
+  }
+  return Math.max(0, Date.now() - queuedAtMs);
+}
+
+function toRankedViewState(ticket: QueueTicketView | null, session: MatchSessionView | null): OnlineRankedViewState {
+  if (!ticket) {
+    return {
+      headline: 'Not queued',
+      detail: 'Press "Join Ranked Queue" to start matchmaking.',
+    };
+  }
+  if (ticket.status === 'queued') {
+    const waitMs = getQueueWaitMs(ticket.queuedAt);
+    const waitLabel = waitMs !== null ? `${Math.floor(waitMs / 1000)}s` : 'unknown';
+    return {
+      headline: 'Searching for match',
+      detail: `Ticket: ${ticket.ticketId}\nQueue: ${ticket.queueType}\nWait: ${waitLabel}`,
+    };
+  }
+  if (ticket.status === 'matched') {
+    const participantLine = session?.participants?.length
+      ? `Participants: ${session.participants.map((item) => item.accountId).join(', ')}`
+      : 'Participants: pending';
+    return {
+      headline: 'Match found',
+      detail: `Ticket: ${ticket.ticketId}\nSession: ${ticket.matchStart?.sessionId ?? session?.sessionId ?? 'pending'}\n${participantLine}`,
+    };
+  }
+  return {
+    headline: 'Queue closed',
+    detail: `Ticket: ${ticket.ticketId}\nReason: ${ticket.closedReason ?? 'closed'}`,
+  };
+}
+
+function toRoomViewState(room: RoomView | null, fallbackRoomCode?: string): OnlineRoomViewState {
+  if (!room) {
+    return {
+      headline: 'No room loaded',
+      detail: 'Create a room or enter a code to join one.',
+      roomCode: fallbackRoomCode ?? null,
+    };
+  }
+  const players = room.participants.filter((item) => item.role === 'player').length;
+  const spectators = room.participants.filter((item) => item.role === 'spectator').length;
+  return {
+    headline: `Room ${room.roomCode} (${room.status})`,
+    detail: `Host: ${room.hostAccountId}\nPlayers: ${players}\nSpectators: ${spectators}\nSession: ${room.activeSession?.sessionId ?? 'none'}`,
+    roomCode: room.roomCode,
+  };
+}
+
+async function joinRankedQueue(): Promise<OnlineRankedViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  playerRankedTicket = await requestOnlineJson<QueueTicketView>(
+    'POST',
+    '/matchmaking/queue/join',
+    accountId,
+    {
+      queueType: 'ranked',
+      regionPreferences: ['us-east', 'us-west', 'eu-west'],
+      buildVersion: '0.1.0-web',
+      platform: 'web',
+    },
+  );
+  if (playerRankedTicket.matchStart?.sessionId) {
+    playerRankedSession = await requestOnlineJson<MatchSessionView>(
+      'GET',
+      `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
+      accountId,
+    );
+  } else {
+    playerRankedSession = null;
+  }
+  return toRankedViewState(playerRankedTicket, playerRankedSession);
+}
+
+async function refreshRankedQueue(): Promise<OnlineRankedViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  if (!playerRankedTicket) {
+    return toRankedViewState(null, null);
+  }
+  playerRankedTicket = await requestOnlineJson<QueueTicketView>(
+    'GET',
+    `/matchmaking/queue/tickets/${playerRankedTicket.ticketId}`,
+    accountId,
+  );
+  if (playerRankedTicket.matchStart?.sessionId) {
+    playerRankedSession = await requestOnlineJson<MatchSessionView>(
+      'GET',
+      `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
+      accountId,
+    );
+  } else {
+    playerRankedSession = null;
+  }
+  return toRankedViewState(playerRankedTicket, playerRankedSession);
+}
+
+async function leaveRankedQueue(): Promise<OnlineRankedViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  if (!playerRankedTicket) {
+    return toRankedViewState(null, null);
+  }
+  playerRankedTicket = await requestOnlineJson<QueueTicketView>(
+    'POST',
+    '/matchmaking/queue/leave',
+    accountId,
+    { ticketId: playerRankedTicket.ticketId },
+  );
+  playerRankedSession = null;
+  return toRankedViewState(playerRankedTicket, playerRankedSession);
+}
+
+async function createCustomRoom(): Promise<OnlineRoomViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  playerRoom = await requestOnlineJson<RoomView>('POST', '/rooms', accountId, {
+    platform: 'web',
+    allowSpectators: true,
+  });
+  return toRoomViewState(playerRoom);
+}
+
+async function joinCustomRoom(roomCode: string): Promise<OnlineRoomViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  playerRoom = await requestOnlineJson<RoomView>(
+    'POST',
+    `/rooms/${roomCode}/join`,
+    accountId,
+    {
+      platform: 'web',
+      role: 'player',
+    },
+  );
+  return toRoomViewState(playerRoom);
+}
+
+async function refreshCustomRoom(roomCode: string): Promise<OnlineRoomViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  playerRoom = await requestOnlineJson<RoomView>('GET', `/rooms/${roomCode}`, accountId);
+  return toRoomViewState(playerRoom);
+}
+
+async function closeCustomRoom(roomCode: string): Promise<OnlineRoomViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  playerRoom = await requestOnlineJson<RoomView>('POST', `/rooms/${roomCode}/close`, accountId);
+  return toRoomViewState(playerRoom);
+}
+
 const startMenu = createStartMenu({
   initialMode: selectedMode,
   initialLoadout: selectedLoadout,
@@ -191,6 +443,27 @@ const startMenu = createStartMenu({
   },
   onPlayAgain: () => {
     beginMode(selectedMode, selectedLoadout);
+  },
+  onJoinRankedQueue: async () => {
+    return await joinRankedQueue();
+  },
+  onRefreshRankedQueue: async () => {
+    return await refreshRankedQueue();
+  },
+  onLeaveRankedQueue: async () => {
+    return await leaveRankedQueue();
+  },
+  onCreateCustomRoom: async () => {
+    return await createCustomRoom();
+  },
+  onJoinCustomRoom: async (roomCode: string) => {
+    return await joinCustomRoom(roomCode);
+  },
+  onRefreshCustomRoom: async (roomCode: string) => {
+    return await refreshCustomRoom(roomCode);
+  },
+  onCloseCustomRoom: async (roomCode: string) => {
+    return await closeCustomRoom(roomCode);
   },
   onOpenOnlineDevMenu: onlineDevMenuEnabled
     ? (target?: OnlineDevMenuTarget) => {
@@ -217,6 +490,9 @@ let replayAccumulator = 0;
 let replayPaused = true;
 const replaySpeedOptions = [0.25, 0.5, 1, 2, 4];
 let replaySpeedIndex = 2;
+let playerRankedTicket: QueueTicketView | null = null;
+let playerRankedSession: MatchSessionView | null = null;
+let playerRoom: RoomView | null = null;
 
 function formatAccountSummary(session: PlatformAuthSession): string {
   if (!session.isAuthenticated || !session.accountId) {
@@ -368,6 +644,11 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
   sessionAccountId = session.accountId;
   startMenu.setAccountSummary(formatAccountSummary(session));
   startMenu.setAuthState(session.isAuthenticated);
+  if (!session.isAuthenticated) {
+    playerRankedTicket = null;
+    playerRankedSession = null;
+    playerRoom = null;
+  }
   if (session.accountId) {
     const profile = await platform.profile.getProfile(session.accountId);
     if (session.isAuthenticated && profile.displayName) {

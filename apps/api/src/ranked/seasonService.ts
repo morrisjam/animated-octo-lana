@@ -16,6 +16,7 @@ export interface RankedSeasonResetResult {
   archivedSeasonId?: string;
   nextSeasonId?: string;
   snapshotCount?: number;
+  masterSnapshotCount?: number;
 }
 
 interface Queryable {
@@ -166,7 +167,7 @@ export async function runRankedSeasonReset(
       INSERT INTO ranked_season_standings(
         season_id, account_id, region, rank_position,
         rating, matches_played, wins, losses, draws, forfeits,
-        league_tier, league_points, provisional, captured_at
+        league_tier, league_points, mr_points, provisional, captured_at
       )
       SELECT
         $1 AS season_id,
@@ -183,11 +184,13 @@ export async function runRankedSeasonReset(
         r.forfeits,
         l.league_tier,
         l.league_points,
+        m.mr_points,
         CASE WHEN l.placed_at IS NULL THEN TRUE ELSE FALSE END AS provisional,
         NOW() AS captured_at
       FROM ranked_player_ratings r
       LEFT JOIN profiles p ON p.account_id = r.account_id
       LEFT JOIN ranked_league_progression l ON l.account_id = r.account_id
+      LEFT JOIN ranked_master_ratings m ON m.season_id = $1 AND m.account_id = r.account_id
       ON CONFLICT (season_id, account_id) DO UPDATE SET
         region = EXCLUDED.region,
         rank_position = EXCLUDED.rank_position,
@@ -199,12 +202,49 @@ export async function runRankedSeasonReset(
         forfeits = EXCLUDED.forfeits,
         league_tier = EXCLUDED.league_tier,
         league_points = EXCLUDED.league_points,
+        mr_points = EXCLUDED.mr_points,
         provisional = EXCLUDED.provisional,
         captured_at = EXCLUDED.captured_at
     `,
     [expiredSeason.seasonId],
   );
   const snapshotCount = snapshot.rowCount ?? 0;
+  const masterSnapshot = await db.query(
+    `
+      INSERT INTO ranked_master_season_standings(
+        season_id, account_id, rank_position, mr_points,
+        matches_played, wins, losses, draws, forfeits, entered_at, captured_at
+      )
+      SELECT
+        season_id,
+        account_id,
+        ROW_NUMBER() OVER (
+          ORDER BY mr_points DESC, wins DESC, matches_played DESC, account_id ASC
+        ) AS rank_position,
+        mr_points,
+        matches_played,
+        wins,
+        losses,
+        draws,
+        forfeits,
+        entered_at,
+        NOW() AS captured_at
+      FROM ranked_master_ratings
+      WHERE season_id = $1
+      ON CONFLICT (season_id, account_id) DO UPDATE SET
+        rank_position = EXCLUDED.rank_position,
+        mr_points = EXCLUDED.mr_points,
+        matches_played = EXCLUDED.matches_played,
+        wins = EXCLUDED.wins,
+        losses = EXCLUDED.losses,
+        draws = EXCLUDED.draws,
+        forfeits = EXCLUDED.forfeits,
+        entered_at = EXCLUDED.entered_at,
+        captured_at = EXCLUDED.captured_at
+    `,
+    [expiredSeason.seasonId],
+  );
+  const masterSnapshotCount = masterSnapshot.rowCount ?? 0;
 
   await db.query(
     `
@@ -228,10 +268,12 @@ export async function runRankedSeasonReset(
 
   await db.query(
     `
-      INSERT INTO ranked_season_reset_runs(archived_season_id, next_season_id, snapshot_count, completed_at)
-      VALUES ($1, $2, $3, NOW())
+      INSERT INTO ranked_season_reset_runs(
+        archived_season_id, next_season_id, snapshot_count, master_snapshot_count, completed_at
+      )
+      VALUES ($1, $2, $3, $4, NOW())
     `,
-    [expiredSeason.seasonId, nextSeason.seasonId, snapshotCount],
+    [expiredSeason.seasonId, nextSeason.seasonId, snapshotCount, masterSnapshotCount],
   );
 
   return {
@@ -239,5 +281,6 @@ export async function runRankedSeasonReset(
     archivedSeasonId: expiredSeason.seasonId,
     nextSeasonId: nextSeason.seasonId,
     snapshotCount,
+    masterSnapshotCount,
   };
 }

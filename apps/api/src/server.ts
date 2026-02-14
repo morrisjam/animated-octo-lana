@@ -61,6 +61,7 @@ import {
   applyLeagueProgression,
   type LeagueTier,
 } from './ranked/leagueService';
+import { applyMasterRatingProgression } from './ranked/masterRatingService';
 
 const app = Fastify({ logger: true });
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
@@ -113,6 +114,9 @@ const rankedReplayRetentionDays = parsePositiveIntegerEnv(process.env.REPLAY_RET
 const casualReplayRetentionDays = parsePositiveIntegerEnv(process.env.REPLAY_RETENTION_DAYS_CASUAL) ?? 90;
 const rankedSeasonDurationDays = resolveRankedSeasonDurationDays(process.env);
 const rankedCalibrationMatchesRequired = parsePositiveIntegerEnv(process.env.RANKED_CALIBRATION_MATCHES) ?? 5;
+const rankedMasterEntryRating = parsePositiveIntegerEnv(process.env.RANKED_MASTER_ENTRY_RATING) ?? 1900;
+const rankedMasterBasePoints = parsePositiveIntegerEnv(process.env.RANKED_MASTER_BASE_POINTS) ?? 1500;
+const rankedMasterQueueWeight = parsePositiveNumberEnv(process.env.RANKED_MR_WEIGHT_RANKED) ?? 1;
 
 interface LinkIdentityBody {
   provider?: string;
@@ -304,6 +308,7 @@ interface RankedLeaderboardQuery {
   region?: string;
   limit?: string;
   offset?: string;
+  track?: string;
 }
 
 function isUuid(value: string | undefined): boolean {
@@ -330,6 +335,17 @@ function parsePositiveIntegerEnv(value: string | undefined): number | undefined 
     return undefined;
   }
   return Math.floor(parsed);
+}
+
+function parsePositiveNumberEnv(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
 }
 
 function parseCorsOrigins(value: string | undefined): string[] {
@@ -599,6 +615,14 @@ function parseLeaderboardRegion(value: string | undefined): string | null {
     return null;
   }
   return region;
+}
+
+function parseLeaderboardTrack(value: string | undefined): 'rating' | 'master' {
+  if (!value) {
+    return 'rating';
+  }
+  const parsed = value.trim().toLowerCase();
+  return parsed === 'master' ? 'master' : 'rating';
 }
 
 type SocialPresenceVisibility = 'friends' | 'private';
@@ -3299,6 +3323,57 @@ app.post('/ranked/results', async (request, reply) => {
         placedAt: rawRow.placed_at,
       });
     }
+    const activeSeason = await ensureActiveSeason(client, new Date(), rankedSeasonDurationDays);
+    const masterRows = await client.query(
+      `
+      SELECT
+        account_id,
+        mr_points,
+        matches_played,
+        wins,
+        losses,
+        draws,
+        forfeits,
+        entered_at
+      FROM ranked_master_ratings
+      WHERE season_id = $1
+        AND account_id = ANY($2::uuid[])
+      FOR UPDATE
+      `,
+      [
+        activeSeason.seasonId,
+        [p1Participant.accountId, p2Participant.accountId],
+      ],
+    );
+    const masterStateByAccount = new Map<string, {
+      mrPoints: number | null;
+      matchesPlayed: number;
+      wins: number;
+      losses: number;
+      draws: number;
+      forfeits: number;
+      enteredAt: string | null;
+    }>();
+    for (const rawRow of masterRows.rows as Array<{
+      account_id: string;
+      mr_points: number;
+      matches_played: number;
+      wins: number;
+      losses: number;
+      draws: number;
+      forfeits: number;
+      entered_at: string;
+    }>) {
+      masterStateByAccount.set(rawRow.account_id, {
+        mrPoints: Number(rawRow.mr_points),
+        matchesPlayed: Number(rawRow.matches_played),
+        wins: Number(rawRow.wins),
+        losses: Number(rawRow.losses),
+        draws: Number(rawRow.draws),
+        forfeits: Number(rawRow.forfeits),
+        enteredAt: rawRow.entered_at,
+      });
+    }
 
     const ratingResult = applyRankedRatingUpdate({
       participants: [
@@ -3308,7 +3383,6 @@ app.post('/ranked/results', async (request, reply) => {
       outcome,
       winnerAccountId,
     });
-    const activeSeason = await ensureActiveSeason(client, new Date(), rankedSeasonDurationDays);
 
     await client.query(
       `
@@ -3338,6 +3412,12 @@ app.post('/ranked/results', async (request, reply) => {
       postLeaguePoints: number | null;
       provisional: boolean;
     }> = [];
+    const masterDeltaViews: Array<{
+      accountId: string;
+      preMrPoints: number | null;
+      postMrPoints: number | null;
+      enteredMasterTrack: boolean;
+    }> = [];
     for (const update of ratingResult.updates) {
       const currentLeagueState = leagueStateByAccount.get(update.accountId) ?? {
         leagueTier: null,
@@ -3361,14 +3441,41 @@ app.post('/ranked/results', async (request, reply) => {
         provisional: leagueProgress.provisional,
       });
       leagueStateByAccount.set(update.accountId, leagueProgress.post);
+      const currentMasterState = masterStateByAccount.get(update.accountId) ?? {
+        mrPoints: null,
+        matchesPlayed: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        forfeits: 0,
+        enteredAt: null,
+      };
+      const masterProgress = applyMasterRatingProgression({
+        state: currentMasterState,
+        postRating: update.postRating,
+        ratingDelta: update.delta,
+        result: update.result,
+        occurredAtIso: row.created_at,
+        entryRatingThreshold: rankedMasterEntryRating,
+        basePoints: rankedMasterBasePoints,
+        queueWeight: rankedMasterQueueWeight,
+      });
+      masterDeltaViews.push({
+        accountId: update.accountId,
+        preMrPoints: masterProgress.pre.mrPoints,
+        postMrPoints: masterProgress.post.mrPoints,
+        enteredMasterTrack: masterProgress.enteredMasterTrack,
+      });
+      masterStateByAccount.set(update.accountId, masterProgress.post);
 
       await client.query(
         `
         INSERT INTO ranked_match_rating_deltas(
           match_id, account_id, side, pre_rating, post_rating, rating_delta, result,
-          pre_league_tier, post_league_tier, pre_league_points, post_league_points
+          pre_league_tier, post_league_tier, pre_league_points, post_league_points,
+          pre_mr_points, post_mr_points
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         `,
         [
           body.matchId,
@@ -3382,6 +3489,8 @@ app.post('/ranked/results', async (request, reply) => {
           leagueProgress.post.leagueTier,
           leagueProgress.pre.leaguePoints,
           leagueProgress.post.leaguePoints,
+          masterProgress.pre.mrPoints,
+          masterProgress.post.mrPoints,
         ],
       );
 
@@ -3429,10 +3538,43 @@ app.post('/ranked/results', async (request, reply) => {
           leagueProgress.post.placedAt,
         ],
       );
+      if (masterProgress.post.enteredAt) {
+        await client.query(
+          `
+          INSERT INTO ranked_master_ratings(
+            season_id, account_id, mr_points, matches_played,
+            wins, losses, draws, forfeits, entered_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          ON CONFLICT (season_id, account_id)
+          DO UPDATE SET
+            mr_points = EXCLUDED.mr_points,
+            matches_played = EXCLUDED.matches_played,
+            wins = EXCLUDED.wins,
+            losses = EXCLUDED.losses,
+            draws = EXCLUDED.draws,
+            forfeits = EXCLUDED.forfeits,
+            entered_at = LEAST(ranked_master_ratings.entered_at, EXCLUDED.entered_at),
+            updated_at = NOW()
+          `,
+          [
+            activeSeason.seasonId,
+            update.accountId,
+            masterProgress.post.mrPoints,
+            masterProgress.post.matchesPlayed,
+            masterProgress.post.wins,
+            masterProgress.post.losses,
+            masterProgress.post.draws,
+            masterProgress.post.forfeits,
+            masterProgress.post.enteredAt,
+          ],
+        );
+      }
     }
 
     await client.query('COMMIT');
     const leagueDeltaByAccount = new Map(leagueDeltaViews.map((entry) => [entry.accountId, entry]));
+    const masterDeltaByAccount = new Map(masterDeltaViews.map((entry) => [entry.accountId, entry]));
     reply.code(201);
     return {
       submissionId: row.submission_id,
@@ -3443,6 +3585,7 @@ app.post('/ranked/results', async (request, reply) => {
       reviewStatus,
       ratingDeltas: ratingResult.updates.map((update) => ({
         ...leagueDeltaByAccount.get(update.accountId),
+        ...masterDeltaByAccount.get(update.accountId),
         accountId: update.accountId,
         side: participantByAccountId.get(update.accountId)?.side ?? update.side,
         preRating: update.preRating,
@@ -3495,6 +3638,7 @@ app.get('/ranked/progression', async (request, reply) => {
     matches_played: number | null;
     league_tier: LeagueTier | null;
     league_points: number | null;
+    mr_points: number | null;
     provisional: boolean;
     calibration_matches_played: number;
     calibration_matches_required: number;
@@ -3508,6 +3652,7 @@ app.get('/ranked/progression', async (request, reply) => {
           matches_played,
           league_tier,
           league_points,
+          mr_points,
           provisional,
           NULL::integer AS calibration_matches_played,
           NULL::integer AS calibration_matches_required,
@@ -3524,6 +3669,7 @@ app.get('/ranked/progression', async (request, reply) => {
         matches_played: number;
         league_tier: LeagueTier | null;
         league_points: number | null;
+        mr_points: number | null;
         provisional: boolean;
         calibration_matches_played: number;
         calibration_matches_required: number;
@@ -3538,16 +3684,18 @@ app.get('/ranked/progression', async (request, reply) => {
           r.matches_played,
           l.league_tier,
           l.league_points,
+          m.mr_points,
           CASE WHEN l.placed_at IS NULL THEN TRUE ELSE FALSE END AS provisional,
           COALESCE(l.calibration_matches_played, 0) AS calibration_matches_played,
           COALESCE(l.calibration_matches_required, 5) AS calibration_matches_required,
-          GREATEST(r.updated_at, COALESCE(l.updated_at, r.updated_at)) AS updated_at
+          GREATEST(r.updated_at, COALESCE(l.updated_at, r.updated_at), COALESCE(m.updated_at, r.updated_at)) AS updated_at
         FROM ranked_player_ratings r
         LEFT JOIN ranked_league_progression l ON l.account_id = r.account_id
+        LEFT JOIN ranked_master_ratings m ON m.season_id = $2 AND m.account_id = r.account_id
         WHERE r.account_id = $1
         LIMIT 1
       `,
-      [accountId],
+      [accountId, season.seasonId],
     );
     ratingRow = live.rowCount
       ? live.rows[0] as {
@@ -3555,6 +3703,7 @@ app.get('/ranked/progression', async (request, reply) => {
         matches_played: number;
         league_tier: LeagueTier | null;
         league_points: number | null;
+        mr_points: number | null;
         provisional: boolean;
         calibration_matches_played: number;
         calibration_matches_required: number;
@@ -3574,6 +3723,8 @@ app.get('/ranked/progression', async (request, reply) => {
         d.post_league_tier,
         d.pre_league_points,
         d.post_league_points,
+        d.pre_mr_points,
+        d.post_mr_points,
         d.created_at
       FROM ranked_match_rating_deltas d
       INNER JOIN ranked_matches m ON m.match_id = d.match_id
@@ -3588,6 +3739,7 @@ app.get('/ranked/progression', async (request, reply) => {
   const rating = ratingRow?.rating ?? null;
   const leagueTier = ratingRow?.league_tier ?? null;
   const leaguePoints = ratingRow?.league_points ?? null;
+  const mrPoints = ratingRow?.mr_points ?? null;
   const calibrationMatchesPlayed = ratingRow?.calibration_matches_played ?? 0;
   const calibrationMatchesRequired = ratingRow?.calibration_matches_required ?? 5;
   const provisional = ratingRow ? Boolean(ratingRow.provisional) : true;
@@ -3605,7 +3757,7 @@ app.get('/ranked/progression', async (request, reply) => {
       rating,
       leagueTier,
       leaguePoints,
-      mrPoints: null,
+      mrPoints,
       provisional,
       placement: {
         calibrationMatchesPlayed,
@@ -3624,6 +3776,8 @@ app.get('/ranked/progression', async (request, reply) => {
         post_league_tier: LeagueTier | null;
         pre_league_points: number | null;
         post_league_points: number | null;
+        pre_mr_points: number | null;
+        post_mr_points: number | null;
         created_at: string;
       };
       return {
@@ -3636,6 +3790,8 @@ app.get('/ranked/progression', async (request, reply) => {
         postLeagueTier: entry.post_league_tier,
         preLeaguePoints: entry.pre_league_points,
         postLeaguePoints: entry.post_league_points,
+        preMrPoints: entry.pre_mr_points,
+        postMrPoints: entry.post_mr_points,
         occurredAt: entry.created_at,
       };
     }),
@@ -3668,6 +3824,186 @@ app.get('/ranked/leaderboard', async (request, reply) => {
   const parsedOffset = parseNonNegativeInteger(query.offset);
   const offset = parsedOffset ?? 0;
   const region = parseLeaderboardRegion(query.region);
+  const track = parseLeaderboardTrack(query.track);
+
+  if (track === 'master') {
+    if (season.state === 'archived') {
+      const totalResult = await db.query(
+        `
+          SELECT COUNT(*) AS count
+          FROM ranked_master_season_standings s
+          LEFT JOIN profiles p ON p.account_id = s.account_id
+          WHERE s.season_id = $1
+            AND (
+              $2::text IS NULL
+              OR COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') = $2
+            )
+        `,
+        [season.seasonId, region],
+      );
+      const total = Number((totalResult.rows[0] as { count: string }).count);
+      const rows = await db.query(
+        `
+          SELECT
+            s.rank_position,
+            s.account_id,
+            COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') AS region,
+            s.mr_points,
+            s.matches_played,
+            s.wins,
+            s.losses,
+            s.draws,
+            s.forfeits,
+            s.entered_at,
+            s.captured_at
+          FROM ranked_master_season_standings s
+          LEFT JOIN profiles p ON p.account_id = s.account_id
+          WHERE s.season_id = $1
+            AND (
+              $2::text IS NULL
+              OR COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') = $2
+            )
+          ORDER BY s.rank_position ASC, s.account_id ASC
+          LIMIT $3 OFFSET $4
+        `,
+        [season.seasonId, region, limit, offset],
+      );
+      return {
+        season: {
+          seasonId: season.seasonId,
+          startsAt: season.startsAt,
+          endsAt: season.endsAt,
+          state: season.state,
+        },
+        filter: {
+          region,
+          track,
+        },
+        page: {
+          limit,
+          offset,
+          total,
+        },
+        items: rows.rows.map((row) => {
+          const entry = row as {
+            rank_position: number;
+            account_id: string;
+            region: string;
+            mr_points: number;
+            matches_played: number;
+            wins: number;
+            losses: number;
+            draws: number;
+            forfeits: number;
+            entered_at: string;
+            captured_at: string;
+          };
+          return {
+            rank: entry.rank_position,
+            accountId: entry.account_id,
+            region: entry.region,
+            mrPoints: entry.mr_points,
+            matchesPlayed: entry.matches_played,
+            wins: entry.wins,
+            losses: entry.losses,
+            draws: entry.draws,
+            forfeits: entry.forfeits,
+            enteredAt: entry.entered_at,
+            updatedAt: entry.captured_at,
+          };
+        }),
+      };
+    }
+
+    const totalResult = await db.query(
+      `
+        SELECT COUNT(*) AS count
+        FROM ranked_master_ratings m
+        LEFT JOIN profiles p ON p.account_id = m.account_id
+        WHERE m.season_id = $1
+          AND (
+            $2::text IS NULL
+            OR COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') = $2
+          )
+      `,
+      [season.seasonId, region],
+    );
+    const total = Number((totalResult.rows[0] as { count: string }).count);
+    const rows = await db.query(
+      `
+        WITH ranked_rows AS (
+          SELECT
+            ROW_NUMBER() OVER (
+              ORDER BY m.mr_points DESC, m.wins DESC, m.matches_played DESC, m.account_id ASC
+            ) AS rank_position,
+            m.account_id,
+            COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') AS region,
+            m.mr_points,
+            m.matches_played,
+            m.wins,
+            m.losses,
+            m.draws,
+            m.forfeits,
+            m.entered_at,
+            m.updated_at
+          FROM ranked_master_ratings m
+          LEFT JOIN profiles p ON p.account_id = m.account_id
+          WHERE m.season_id = $1
+        )
+        SELECT *
+        FROM ranked_rows
+        WHERE ($2::text IS NULL OR region = $2)
+        ORDER BY rank_position ASC, account_id ASC
+        LIMIT $3 OFFSET $4
+      `,
+      [season.seasonId, region, limit, offset],
+    );
+    return {
+      season: {
+        seasonId: season.seasonId,
+        startsAt: season.startsAt,
+        endsAt: season.endsAt,
+        state: season.state,
+      },
+      filter: {
+        region,
+        track,
+      },
+      page: {
+        limit,
+        offset,
+        total,
+      },
+      items: rows.rows.map((row) => {
+        const entry = row as {
+          rank_position: number;
+          account_id: string;
+          region: string;
+          mr_points: number;
+          matches_played: number;
+          wins: number;
+          losses: number;
+          draws: number;
+          forfeits: number;
+          entered_at: string;
+          updated_at: string;
+        };
+        return {
+          rank: entry.rank_position,
+          accountId: entry.account_id,
+          region: entry.region,
+          mrPoints: entry.mr_points,
+          matchesPlayed: entry.matches_played,
+          wins: entry.wins,
+          losses: entry.losses,
+          draws: entry.draws,
+          forfeits: entry.forfeits,
+          enteredAt: entry.entered_at,
+          updatedAt: entry.updated_at,
+        };
+      }),
+    };
+  }
 
   if (season.state === 'archived') {
     const totalResult = await db.query(
@@ -3694,6 +4030,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
           forfeits,
           league_tier,
           league_points,
+          mr_points,
           provisional,
           captured_at
         FROM ranked_season_standings
@@ -3713,6 +4050,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
       },
       filter: {
         region,
+        track,
       },
       page: {
         limit,
@@ -3732,6 +4070,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
           forfeits: number;
           league_tier: LeagueTier | null;
           league_points: number | null;
+          mr_points: number | null;
           provisional: boolean;
           captured_at: string;
         };
@@ -3747,6 +4086,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
           forfeits: entry.forfeits,
           leagueTier: entry.league_tier,
           leaguePoints: entry.league_points,
+          mrPoints: entry.mr_points,
           provisional: entry.provisional,
           updatedAt: entry.captured_at,
         };
@@ -3784,11 +4124,13 @@ app.get('/ranked/leaderboard', async (request, reply) => {
           r.forfeits,
           l.league_tier,
           l.league_points,
+          m.mr_points,
           CASE WHEN l.placed_at IS NULL THEN TRUE ELSE FALSE END AS provisional,
           r.updated_at
         FROM ranked_player_ratings r
         LEFT JOIN profiles p ON p.account_id = r.account_id
         LEFT JOIN ranked_league_progression l ON l.account_id = r.account_id
+        LEFT JOIN ranked_master_ratings m ON m.season_id = $2 AND m.account_id = r.account_id
       )
       SELECT *
       FROM ranked_rows
@@ -3796,7 +4138,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
       ORDER BY rank_position ASC, account_id ASC
       LIMIT $2 OFFSET $3
     `,
-    [region, limit, offset],
+    [region, season.seasonId, limit, offset],
   );
 
   return {
@@ -3808,6 +4150,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
     },
     filter: {
       region,
+      track,
     },
     page: {
       limit,
@@ -3827,6 +4170,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
         forfeits: number;
         league_tier: LeagueTier | null;
         league_points: number | null;
+        mr_points: number | null;
         provisional: boolean;
         updated_at: string;
       };
@@ -3842,6 +4186,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
         forfeits: entry.forfeits,
         leagueTier: entry.league_tier,
         leaguePoints: entry.league_points,
+        mrPoints: entry.mr_points,
         provisional: entry.provisional,
         updatedAt: entry.updated_at,
       };

@@ -40,6 +40,9 @@ Optional:
 - `RANKED_SEASON_DURATION_DAYS` defaults to `90`.
 - `RANKED_SEASON_RESET_ADMIN_KEY` optional admin key required by `POST /ranked/seasons/reset`.
 - `RANKED_CALIBRATION_MATCHES` defaults to `5` (matches before initial league placement).
+- `RANKED_MASTER_ENTRY_RATING` defaults to `1900`.
+- `RANKED_MASTER_BASE_POINTS` defaults to `1500`.
+- `RANKED_MR_WEIGHT_RANKED` defaults to `1`.
 
 API scripts auto-load `.env` from repo root. Create it once:
 
@@ -121,7 +124,7 @@ npm run api:season-reset
 - `POST /matchmaking/sessions/reconnect` reconnect with session token and one-time reconnect attempt id.
 - `POST /ranked/results` submit ranked match result with session token validation, suspicious review flagging, and Elo-like rating updates.
 - `GET /ranked/progression` read ranked progression snapshot for current or requested season.
-- `GET /ranked/leaderboard` read ranked leaderboard with pagination (`limit`, `offset`) and optional `region` filter.
+- `GET /ranked/leaderboard` read ranked leaderboard with pagination (`limit`, `offset`), optional `region` filter, and optional `track=master`.
 - `POST /ranked/seasons/reset` archive expired active season standings and roll to next season (`x-admin-key` required).
 - `POST /matchmaking/network/connection-telemetry` store direct or relay path telemetry by region.
 - `GET /matchmaking/network/connection-telemetry/summary` read telemetry summary with optional `region` and `queueType` filters.
@@ -304,6 +307,8 @@ Ranked result submission:
 - Season reset job archives standings, stamps historical matches by season, and creates the next active season window.
 - League ladder progression tracks `Iron`, `Bronze`, `Silver`, `Gold`, `Platinum` with league-point promotion and demotion.
 - Placement flow assigns the initial league tier after configurable calibration matches.
+- Master track entry is threshold-based (`RANKED_MASTER_ENTRY_RATING`) and MR points update per ranked match with configurable weighting (`RANKED_MR_WEIGHT_RANKED`).
+- Season reset snapshots both base standings (`ranked_season_standings`) and master standings (`ranked_master_season_standings`); new seasons start with no master entries until players re-qualify.
 - Reconnect grace window is configurable in queue service configuration.
 - NAT config uses STUN and optional TURN relay servers from environment values.
 - Telemetry endpoint tracks direct vs relay connection outcomes by region.

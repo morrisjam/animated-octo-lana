@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gravity Well Prototype</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="hud">
+      <div class="fuel-row">
+        <div class="panel">
+          <div class="label">P1 Fuel</div>
+          <div class="bar"><div id="p1Fuel" class="fill p1"></div></div>
+          <div id="p1Breaks" class="meta">Breaks: 2</div>
+        </div>
+        <div class="panel right">
+          <div class="label">P2 Fuel</div>
+          <div class="bar"><div id="p2Fuel" class="fill p2"></div></div>
+          <div id="p2Breaks" class="meta">Breaks: 2</div>
+        </div>
+      </div>
+      <div id="status">Rite of Descent — First to dunk a 0-fuel target wins.</div>
+      <div id="controls">
+        <strong>Controls</strong>
+        <span>P1: WASD move · F boost · G super boost · R projectile · T launch · Y dunk · H parry · J break</span>
+        <span>P2: IJKL move · O boost · P super boost · [ projectile · ] launch · \\ dunk · ' parry · ; break</span>
+      </div>
+    </div>
+    <canvas id="game"></canvas>
+    <script type="module" src="src/game.js"></script>
+  </body>
+</html>

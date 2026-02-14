@@ -27,6 +27,8 @@ import {
   type OnlineDevMenuTarget,
   type OnlineRankedViewState,
   type OnlineRoomViewState,
+  type RankedSnapshotViewState,
+  type ReplayArchiveViewState,
   type WebAuthMenuAction,
   type WebAuthMenuRequest,
 } from './view/startMenu';
@@ -146,6 +148,40 @@ interface RoomView {
   };
 }
 
+interface ReplayParticipantView {
+  accountId: string;
+  result?: string;
+  characterId?: string;
+}
+
+interface ReplaySearchItemView {
+  replayId: string;
+  queueType?: QueueType | string;
+  startedAt?: string;
+  endedAt?: string;
+  player?: ReplayParticipantView;
+  opponent?: ReplayParticipantView;
+}
+
+interface ReplaySearchResponseView {
+  items: ReplaySearchItemView[];
+}
+
+interface ReplayPayloadResponseView {
+  replayId: string;
+  payload: unknown;
+}
+
+interface RankedProgressionView {
+  seasonId: string | null;
+  rating: number | null;
+  leagueTier: string | null;
+  leaguePoints: number | null;
+  mrPoints: number | null;
+  provisional: boolean | null;
+  updatedAt: string | null;
+}
+
 const pauseMenu = createPauseMenu({
   getTuning: () => state.tuning,
   setTuning: (tuning) => {
@@ -248,6 +284,19 @@ async function requestOnlineJson<T>(
   accountId: string,
   body?: unknown,
 ): Promise<T> {
+  const response = await requestOnlineRaw(method, path, accountId, body);
+  if (!response.ok) {
+    throw new Error(await parseOnlineApiError(response));
+  }
+  return await response.json() as T;
+}
+
+async function requestOnlineRaw(
+  method: 'GET' | 'POST',
+  path: string,
+  accountId: string,
+  body?: unknown,
+): Promise<Response> {
   if (!matchmakingApiBase) {
     throw new Error('Missing VITE_MATCHMAKING_API_BASE or VITE_PROFILE_API_BASE.');
   }
@@ -264,10 +313,7 @@ async function requestOnlineJson<T>(
     headers,
     body: payload,
   });
-  if (!response.ok) {
-    throw new Error(await parseOnlineApiError(response));
-  }
-  return await response.json() as T;
+  return response;
 }
 
 function getQueueWaitMs(queuedAt: string | undefined): number | null {
@@ -425,6 +471,155 @@ async function closeCustomRoom(roomCode: string): Promise<OnlineRoomViewState> {
   return toRoomViewState(playerRoom);
 }
 
+function formatReplayArchiveDetail(items: ReplaySearchItemView[]): string {
+  if (items.length === 0) {
+    return 'No replays found for this account yet.';
+  }
+  return items
+    .slice(0, 10)
+    .map((item, index) => {
+      const opponent = item.opponent?.accountId ?? 'unknown';
+      const result = item.player?.result ?? 'unknown';
+      const queue = item.queueType ?? 'unknown';
+      return `${index + 1}. ${item.replayId} | ${queue} | vs ${opponent} | ${result}`;
+    })
+    .join('\n');
+}
+
+async function refreshReplayArchive(): Promise<ReplayArchiveViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  const path = `/replays/search?playerId=${encodeURIComponent(accountId)}&limit=10`;
+  const response = await requestOnlineJson<ReplaySearchResponseView>('GET', path, accountId);
+  playerReplayItems = Array.isArray(response.items) ? response.items : [];
+  return {
+    headline: playerReplayItems.length > 0
+      ? `Loaded ${playerReplayItems.length} replay(s)`
+      : 'No replays found',
+    detail: formatReplayArchiveDetail(playerReplayItems),
+  };
+}
+
+async function openLatestReplay(): Promise<ReplayArchiveViewState> {
+  if (playerReplayItems.length === 0) {
+    await refreshReplayArchive();
+  }
+  const latest = playerReplayItems[0];
+  if (!latest) {
+    return {
+      headline: 'No replay available',
+      detail: 'No replay records available to open.',
+    };
+  }
+  const accountId = getOnlineAccountIdOrThrow();
+  const payloadResponse = await requestOnlineJson<ReplayPayloadResponseView>(
+    'GET',
+    `/replays/${latest.replayId}/payload`,
+    accountId,
+  );
+  const opened = beginReplayReviewFromPayload(payloadResponse.payload, `archive:${payloadResponse.replayId}`);
+  if (!opened) {
+    throw new Error(`Replay payload validation failed for ${payloadResponse.replayId}.`);
+  }
+  return {
+    headline: `Opened replay ${payloadResponse.replayId}`,
+    detail: formatReplayArchiveDetail(playerReplayItems),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function stringOrNull(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function booleanOrNull(value: unknown): boolean | null {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const lowered = value.trim().toLowerCase();
+    if (lowered === 'true') {
+      return true;
+    }
+    if (lowered === 'false') {
+      return false;
+    }
+  }
+  return null;
+}
+
+function parseRankedProgression(payload: unknown): RankedProgressionView | null {
+  const root = asRecord(payload);
+  if (!root) {
+    return null;
+  }
+  const current = asRecord(root.current) ?? root;
+  return {
+    seasonId: stringOrNull(current.seasonId) ?? stringOrNull(root.seasonId),
+    rating: numberOrNull(current.rating),
+    leagueTier: stringOrNull(current.leagueTier),
+    leaguePoints: numberOrNull(current.leaguePoints),
+    mrPoints: numberOrNull(current.mrPoints),
+    provisional: booleanOrNull(current.provisional),
+    updatedAt: stringOrNull(current.updatedAt) ?? stringOrNull(root.updatedAt),
+  };
+}
+
+function toRankedSnapshotViewState(snapshot: RankedProgressionView | null, source: 'api' | 'profile' | 'none'): RankedSnapshotViewState {
+  if (!snapshot) {
+    return {
+      headline: 'No ranked data',
+      detail: 'No ranked progression data is available yet.',
+    };
+  }
+  const sourceLabel = source === 'api' ? 'Ranked API' : 'Profile fallback';
+  return {
+    headline: `${snapshot.leagueTier ?? 'Unranked'} | Rating ${snapshot.rating ?? 'n/a'}`,
+    detail: `Source: ${sourceLabel}\nSeason: ${snapshot.seasonId ?? 'current'}\nLeague Points: ${snapshot.leaguePoints ?? 'n/a'}\nMR Points: ${snapshot.mrPoints ?? 'n/a'}\nProvisional: ${snapshot.provisional ?? false}\nUpdated: ${snapshot.updatedAt ?? 'unknown'}`,
+  };
+}
+
+async function refreshRankedSnapshot(): Promise<RankedSnapshotViewState> {
+  const accountId = getOnlineAccountIdOrThrow();
+  const rankedResponse = await requestOnlineRaw('GET', '/ranked/progression', accountId);
+  if (rankedResponse.ok) {
+    const payload = await rankedResponse.json() as unknown;
+    playerRankedSnapshot = parseRankedProgression(payload);
+    return toRankedSnapshotViewState(playerRankedSnapshot, 'api');
+  }
+  if (rankedResponse.status !== 404 && rankedResponse.status !== 501) {
+    throw new Error(await parseOnlineApiError(rankedResponse));
+  }
+
+  const profile = await platform.profile.getProfile(accountId);
+  const settings = asRecord(profile.settings);
+  const rankedSettings = asRecord(settings?.ranked) ?? asRecord(settings?.rankedProgression);
+  playerRankedSnapshot = rankedSettings ? parseRankedProgression(rankedSettings) : null;
+  return toRankedSnapshotViewState(playerRankedSnapshot, playerRankedSnapshot ? 'profile' : 'none');
+}
+
 const startMenu = createStartMenu({
   initialMode: selectedMode,
   initialLoadout: selectedLoadout,
@@ -465,6 +660,15 @@ const startMenu = createStartMenu({
   onCloseCustomRoom: async (roomCode: string) => {
     return await closeCustomRoom(roomCode);
   },
+  onRefreshReplayArchive: async () => {
+    return await refreshReplayArchive();
+  },
+  onOpenLatestReplay: async () => {
+    return await openLatestReplay();
+  },
+  onRefreshRankedSnapshot: async () => {
+    return await refreshRankedSnapshot();
+  },
   onOpenOnlineDevMenu: onlineDevMenuEnabled
     ? (target?: OnlineDevMenuTarget) => {
       openOnlineDevMenu(target);
@@ -493,6 +697,8 @@ let replaySpeedIndex = 2;
 let playerRankedTicket: QueueTicketView | null = null;
 let playerRankedSession: MatchSessionView | null = null;
 let playerRoom: RoomView | null = null;
+let playerReplayItems: ReplaySearchItemView[] = [];
+let playerRankedSnapshot: RankedProgressionView | null = null;
 
 function formatAccountSummary(session: PlatformAuthSession): string {
   if (!session.isAuthenticated || !session.accountId) {
@@ -581,6 +787,13 @@ async function bootstrapPlatformProfile(): Promise<void> {
     sessionAccountId = session.accountId;
     startMenu.setAccountSummary(formatAccountSummary(session));
     startMenu.setAuthState(session.isAuthenticated);
+    if (!session.isAuthenticated) {
+      playerRankedTicket = null;
+      playerRankedSession = null;
+      playerRoom = null;
+      playerReplayItems = [];
+      playerRankedSnapshot = null;
+    }
     if (!session.accountId) {
       return;
     }
@@ -644,6 +857,8 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
     playerRankedTicket = null;
     playerRankedSession = null;
     playerRoom = null;
+    playerReplayItems = [];
+    playerRankedSnapshot = null;
   }
   if (session.accountId) {
     const profile = await platform.profile.getProfile(session.accountId);

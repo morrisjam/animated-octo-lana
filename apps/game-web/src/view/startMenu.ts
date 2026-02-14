@@ -25,6 +25,14 @@ export interface OnlineRoomViewState {
   detail: string;
   roomCode?: string | null;
 }
+export interface ReplayArchiveViewState {
+  headline: string;
+  detail: string;
+}
+export interface RankedSnapshotViewState {
+  headline: string;
+  detail: string;
+}
 
 type StartScreen =
   | 'title'
@@ -53,6 +61,9 @@ interface StartMenuOptions {
   onJoinCustomRoom?(roomCode: string): Promise<OnlineRoomViewState> | OnlineRoomViewState;
   onRefreshCustomRoom?(roomCode: string): Promise<OnlineRoomViewState> | OnlineRoomViewState;
   onCloseCustomRoom?(roomCode: string): Promise<OnlineRoomViewState> | OnlineRoomViewState;
+  onRefreshReplayArchive?(): Promise<ReplayArchiveViewState> | ReplayArchiveViewState;
+  onOpenLatestReplay?(): Promise<ReplayArchiveViewState> | ReplayArchiveViewState;
+  onRefreshRankedSnapshot?(): Promise<RankedSnapshotViewState> | RankedSnapshotViewState;
   onOpenOnlineDevMenu?(target?: OnlineDevMenuTarget): void;
   onOpenReplayReview?(): void;
   onReturnHome(): void;
@@ -202,6 +213,13 @@ export class StartMenu {
   private readonly roomJoinButton: HTMLButtonElement;
   private readonly roomRefreshButton: HTMLButtonElement;
   private readonly roomCloseButton: HTMLButtonElement;
+  private readonly replayStatusHeadline: HTMLDivElement;
+  private readonly replayStatusDetail: HTMLPreElement;
+  private readonly replayRefreshButton: HTMLButtonElement;
+  private readonly replayOpenLatestButton: HTMLButtonElement;
+  private readonly rankingsStatusHeadline: HTMLDivElement;
+  private readonly rankingsStatusDetail: HTMLPreElement;
+  private readonly rankingsRefreshButton: HTMLButtonElement;
   private readonly localModeButton: HTMLButtonElement;
   private readonly p1CharacterButton: HTMLButtonElement;
   private readonly p2CharacterButton: HTMLButtonElement;
@@ -223,6 +241,8 @@ export class StartMenu {
   private authBusy = false;
   private rankedBusy = false;
   private roomBusy = false;
+  private replayBusy = false;
+  private rankingsBusy = false;
 
   private readonly keydownHandler = (event: KeyboardEvent): void => {
     if (this.root.hidden) {
@@ -520,26 +540,40 @@ export class StartMenu {
     this.localPanel.append(localModeRow.row, localP1Row.row, localP2Row.row, this.localCharacterList, localStartRow.row, localBackRow.row);
     this.registerRows('local', [localModeRow.row, localP1Row.row, localP2Row.row, localStartRow.row, localBackRow.row]);
 
-    const replayArchiveRow = this.createActionRow('Replay Archive', () => {
-      this.options.onOpenOnlineDevMenu?.('replay');
+    const replayStatusPanel = this.createStatusPanel('Replay Archive');
+    this.replayStatusHeadline = replayStatusPanel.headline;
+    this.replayStatusDetail = replayStatusPanel.detail;
+    this.replaysPanel.appendChild(replayStatusPanel.root);
+    const replayRefreshRow = this.createActionRow('Refresh Replay Archive', async () => {
+      await this.handleReplayAction('refresh');
     });
+    this.replayRefreshButton = replayRefreshRow.button;
+    const replayOpenLatestRow = this.createActionRow('Open Latest Replay', async () => {
+      await this.handleReplayAction('open_latest');
+    });
+    this.replayOpenLatestButton = replayOpenLatestRow.button;
     const replayFixtureRow = this.createActionRow('Replay Review (Smoke Fixture)', () => {
       this.options.onOpenReplayReview?.();
     });
     const replayBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
-    this.replaysPanel.append(replayArchiveRow.row, replayFixtureRow.row, replayBackRow.row);
-    this.registerRows('replays', [replayArchiveRow.row, replayFixtureRow.row, replayBackRow.row]);
+    this.replaysPanel.append(replayRefreshRow.row, replayOpenLatestRow.row, replayFixtureRow.row, replayBackRow.row);
+    this.registerRows('replays', [replayRefreshRow.row, replayOpenLatestRow.row, replayFixtureRow.row, replayBackRow.row]);
 
-    const rankingsSnapshotRow = this.createActionRow('Ranked Snapshot', () => {
-      this.options.onOpenOnlineDevMenu?.('ranked');
+    const rankingsStatusPanel = this.createStatusPanel('Ranked Snapshot');
+    this.rankingsStatusHeadline = rankingsStatusPanel.headline;
+    this.rankingsStatusDetail = rankingsStatusPanel.detail;
+    this.rankingsPanel.appendChild(rankingsStatusPanel.root);
+    const rankingsRefreshRow = this.createActionRow('Refresh Ranked Snapshot', async () => {
+      await this.handleRankingsRefreshAction();
     });
+    this.rankingsRefreshButton = rankingsRefreshRow.button;
     const rankingsBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
-    this.rankingsPanel.append(rankingsSnapshotRow.row, rankingsBackRow.row);
-    this.registerRows('rankings', [rankingsSnapshotRow.row, rankingsBackRow.row]);
+    this.rankingsPanel.append(rankingsRefreshRow.row, rankingsBackRow.row);
+    this.registerRows('rankings', [rankingsRefreshRow.row, rankingsBackRow.row]);
 
     const settingsSessionRow = document.createElement('div');
     settingsSessionRow.className = 'start-menu-row';
@@ -640,6 +674,14 @@ export class StartMenu {
       headline: 'No room loaded',
       detail: 'Create a room or enter a code to join one.',
       roomCode: null,
+    });
+    this.applyReplayState({
+      headline: 'Replay archive idle',
+      detail: 'Press "Refresh Replay Archive" to load recent matches.',
+    });
+    this.applyRankingsState({
+      headline: 'No ranked snapshot loaded',
+      detail: 'Press "Refresh Ranked Snapshot" to load progression.',
     });
     this.setMatchSelection(0);
     this.pollGamepads();
@@ -762,6 +804,16 @@ export class StartMenu {
     }
   }
 
+  private applyReplayState(state: ReplayArchiveViewState): void {
+    this.replayStatusHeadline.textContent = state.headline;
+    this.replayStatusDetail.textContent = state.detail;
+  }
+
+  private applyRankingsState(state: RankedSnapshotViewState): void {
+    this.rankingsStatusHeadline.textContent = state.headline;
+    this.rankingsStatusDetail.textContent = state.detail;
+  }
+
   private setRankedBusy(busy: boolean): void {
     this.rankedBusy = busy;
     this.rankedJoinButton.disabled = busy;
@@ -776,6 +828,17 @@ export class StartMenu {
     this.roomJoinButton.disabled = busy;
     this.roomRefreshButton.disabled = busy;
     this.roomCloseButton.disabled = busy;
+  }
+
+  private setReplayBusy(busy: boolean): void {
+    this.replayBusy = busy;
+    this.replayRefreshButton.disabled = busy;
+    this.replayOpenLatestButton.disabled = busy;
+  }
+
+  private setRankingsBusy(busy: boolean): void {
+    this.rankingsBusy = busy;
+    this.rankingsRefreshButton.disabled = busy;
   }
 
   private createActionRow(label: string, onActivate: () => void | Promise<void>, primary = false): { row: HTMLDivElement; button: HTMLButtonElement } {
@@ -1062,6 +1125,53 @@ export class StartMenu {
       });
     } finally {
       this.setRoomBusy(false);
+    }
+  }
+
+  private async handleReplayAction(action: 'refresh' | 'open_latest'): Promise<void> {
+    const callback = action === 'refresh'
+      ? this.options.onRefreshReplayArchive
+      : this.options.onOpenLatestReplay;
+    if (!callback) {
+      this.applyReplayState({
+        headline: 'Replay unavailable',
+        detail: 'Replay archive is not configured for this build.',
+      });
+      return;
+    }
+    this.setReplayBusy(true);
+    try {
+      const state = await callback();
+      this.applyReplayState(state);
+    } catch (error) {
+      this.applyReplayState({
+        headline: 'Replay action failed',
+        detail: this.getErrorMessage(error),
+      });
+    } finally {
+      this.setReplayBusy(false);
+    }
+  }
+
+  private async handleRankingsRefreshAction(): Promise<void> {
+    if (!this.options.onRefreshRankedSnapshot) {
+      this.applyRankingsState({
+        headline: 'Ranked snapshot unavailable',
+        detail: 'Ranked progression API is not configured for this build.',
+      });
+      return;
+    }
+    this.setRankingsBusy(true);
+    try {
+      const state = await this.options.onRefreshRankedSnapshot();
+      this.applyRankingsState(state);
+    } catch (error) {
+      this.applyRankingsState({
+        headline: 'Ranked snapshot failed',
+        detail: this.getErrorMessage(error),
+      });
+    } finally {
+      this.setRankingsBusy(false);
     }
   }
 

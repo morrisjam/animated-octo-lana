@@ -16,12 +16,12 @@ import { sanitiseTuning } from './sim/tuning';
 import type { PlayerId, PlayersById } from './sim/types';
 import { createHud, type RollbackDiagnosticsView } from './view/hud';
 import { createPauseMenu } from './view/pauseMenu';
-import { createOnlineDevMenu, type OnlineDiagnosticsUpdate } from './view/onlineDevMenu';
+import { createOnlineDevMenu, type OnlineDiagnosticsUpdate, type OnlineDevSectionId } from './view/onlineDevMenu';
 import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay';
 import { createReplayViewer } from './view/replayViewer';
 import { renderFrame } from './view/render';
 import { createScene, resizeScene } from './view/scene';
-import { createStartMenu, type GameMode } from './view/startMenu';
+import { createStartMenu, type GameMode, type OnlineDevMenuTarget, type WebAuthMenuAction } from './view/startMenu';
 
 type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev';
 interface StoredSettings {
@@ -176,8 +176,8 @@ const startMenu = createStartMenu({
     beginMode(mode, loadout);
   },
   onOpenWebAuth: platform.kind === 'web'
-    ? () => {
-      void openWebAuthFlow();
+    ? async (action?: WebAuthMenuAction) => {
+      await openWebAuthFlow(action);
     }
     : undefined,
   onReturnHome: () => {
@@ -187,8 +187,8 @@ const startMenu = createStartMenu({
     beginMode(selectedMode, selectedLoadout);
   },
   onOpenOnlineDevMenu: onlineDevMenuEnabled
-    ? () => {
-      openOnlineDevMenu();
+    ? (target?: OnlineDevMenuTarget) => {
+      openOnlineDevMenu(target);
     }
     : undefined,
   onOpenReplayReview: () => {
@@ -321,18 +321,23 @@ function getErrorMessage(error: unknown): string {
   return 'Unexpected authentication failure.';
 }
 
-async function openWebAuthFlow(): Promise<void> {
+async function openWebAuthFlow(preferredAction?: WebAuthMenuAction): Promise<void> {
   const auth = platform.auth;
   if (!auth.signIn || !auth.signUp || !auth.signOut) {
     window.alert('Web auth is unavailable for this platform build.');
     return;
   }
 
-  const actionRaw = window.prompt('Account action: signin, signup, or signout', 'signin');
-  if (!actionRaw) {
-    return;
+  let action: string;
+  if (preferredAction) {
+    action = preferredAction;
+  } else {
+    const actionRaw = window.prompt('Account action: signin, signup, or signout', 'signin');
+    if (!actionRaw) {
+      return;
+    }
+    action = actionRaw.trim().toLowerCase();
   }
-  const action = actionRaw.trim().toLowerCase();
 
   try {
     let session: PlatformAuthSession | null = null;
@@ -472,10 +477,19 @@ function returnToHome(): void {
   accumulator = 0;
 }
 
-function openOnlineDevMenu(): void {
+function openOnlineDevMenu(section?: OnlineDevMenuTarget): void {
   if (!onlineDevMenu) {
     return;
   }
+  const sectionId: OnlineDevSectionId | undefined = section
+    ? ({
+      matchmaking: 'matchmaking',
+      rooms: 'rooms',
+      replay: 'replay',
+      ranked: 'ranked',
+      social: 'social',
+    } as const)[section]
+    : undefined;
   appPhase = 'online_dev';
   void platform.presence.setStatus('online_dev');
   pauseMenu.setPaused(false);
@@ -485,7 +499,7 @@ function openOnlineDevMenu(): void {
   replayViewer.hide();
   hudRoot.style.visibility = 'hidden';
   hud.setTrainingFrameDataVisible(false);
-  onlineDevMenu.show();
+  onlineDevMenu.show(sectionId);
 }
 
 function closeOnlineDevMenu(): void {

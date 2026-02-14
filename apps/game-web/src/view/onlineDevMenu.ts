@@ -1,4 +1,4 @@
-type OnlineDevSectionId = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
+export type OnlineDevSectionId = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
 type QueueType = 'unranked' | 'ranked';
 type RegionId = 'us-east' | 'us-west' | 'eu-west' | 'ap-southeast';
 type ConnectionPath = 'direct' | 'relay' | 'unknown';
@@ -1365,10 +1365,16 @@ export class OnlineDevMenu {
     this.pollGamepads();
   }
 
-  public show(): void {
+  public show(sectionId?: OnlineDevSectionId): void {
     this.root.hidden = false;
     this.prevPadStateByIndex.clear();
     this.populateReplayPlayerDefault();
+    if (sectionId) {
+      const index = SECTIONS.findIndex((section) => section.id === sectionId);
+      if (index >= 0) {
+        this.selectedIndex = index;
+      }
+    }
     this.setSelectedIndex(this.selectedIndex);
     this.focusSectionList();
     this.ensurePolling();

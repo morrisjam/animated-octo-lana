@@ -8,6 +8,10 @@ import {
 import type { PlayerId, PlayersById } from '../sim/types';
 
 export type GameMode = 'endless' | 'best_of_3' | 'training';
+export type WebAuthMenuAction = 'signin' | 'signup' | 'signout';
+export type OnlineDevMenuTarget = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
+
+type StartScreen = 'title' | 'login' | 'main' | 'online' | 'local' | 'replays' | 'rankings' | 'settings' | 'match_over';
 
 interface StartMenuOptions {
   initialMode?: GameMode;
@@ -15,8 +19,8 @@ interface StartMenuOptions {
   enabledModes?: GameMode[];
   initialAccountSummary?: string;
   onStartMode(mode: GameMode, loadout: PlayersById<CharacterId>): void;
-  onOpenWebAuth?(): void;
-  onOpenOnlineDevMenu?(): void;
+  onOpenWebAuth?(action?: WebAuthMenuAction): Promise<void> | void;
+  onOpenOnlineDevMenu?(target?: OnlineDevMenuTarget): void;
   onOpenReplayReview?(): void;
   onReturnHome(): void;
   onPlayAgain(): void;
@@ -61,9 +65,9 @@ function readPadState(gamepad: Gamepad): PadState {
     down: dpadDown || axisY > threshold,
     left: dpadLeft || axisX < -threshold,
     right: dpadRight || axisX > threshold,
-    confirm: readButton(gamepad, 0), // A
-    back: readButton(gamepad, 1), // B
-    start: readButton(gamepad, 9) || readButton(gamepad, 16), // Start/Menu
+    confirm: readButton(gamepad, 0),
+    back: readButton(gamepad, 1),
+    start: readButton(gamepad, 9) || readButton(gamepad, 16),
   };
 }
 
@@ -103,219 +107,254 @@ function getNextMode(current: GameMode, enabledModes: GameMode[], direction: 1 |
 
 export class StartMenu {
   private readonly root: HTMLDivElement;
-  private readonly homePanel: HTMLDivElement;
-  private readonly matchOverPanel: HTMLDivElement;
   private readonly roundBanner: HTMLDivElement;
-  private readonly homeRows: HTMLElement[] = [];
-  private readonly modeButtons = new Map<GameMode, HTMLButtonElement>();
-  private readonly p1CharacterLabel: HTMLDivElement;
-  private readonly p2CharacterLabel: HTMLDivElement;
-  private readonly p1CharacterMeta: HTMLDivElement;
-  private readonly p2CharacterMeta: HTMLDivElement;
-  private readonly characterList: HTMLDivElement;
+
+  private readonly titlePanel: HTMLDivElement;
+  private readonly loginPanel: HTMLDivElement;
+  private readonly mainPanel: HTMLDivElement;
+  private readonly onlinePanel: HTMLDivElement;
+  private readonly localPanel: HTMLDivElement;
+  private readonly replaysPanel: HTMLDivElement;
+  private readonly rankingsPanel: HTMLDivElement;
+  private readonly settingsPanel: HTMLDivElement;
+  private readonly matchOverPanel: HTMLDivElement;
+
+  private readonly rowsByScreen = new Map<StartScreen, HTMLElement[]>();
+  private readonly rowIndexByScreen = new Map<StartScreen, number>();
+
+  private readonly accountSummaryLabel: HTMLDivElement;
+  private readonly localModeButton: HTMLButtonElement;
+  private readonly p1CharacterButton: HTMLButtonElement;
+  private readonly p2CharacterButton: HTMLButtonElement;
+  private readonly localCharacterList: HTMLDivElement;
+
   private readonly matchButtons: HTMLButtonElement[] = [];
   private readonly matchTitle: HTMLHeadingElement;
   private readonly matchSubtitle: HTMLParagraphElement;
-  private readonly prevPadStateByIndex = new Map<number, PadState>();
-  private readonly startRowIndex: number;
-  private readonly replayRowIndex: number | null;
-  private readonly onlineDevRowIndex: number | null;
-  private readonly accountRowIndex: number | null;
-  private readonly accountButton: HTMLButtonElement | null;
 
-  private currentMode: GameMode;
-  private readonly enabledModes: GameMode[];
-  private currentLoadout: PlayersById<CharacterId>;
-  private homeRow = 0;
-  private matchSelection = 0;
-  private activePanel: 'home' | 'match_over' = 'home';
+  private readonly prevPadStateByIndex = new Map<number, PadState>();
+  private currentScreen: StartScreen = 'title';
   private rafId = 0;
+
+  private readonly enabledModes: GameMode[];
+  private currentMode: GameMode;
+  private currentLoadout: PlayersById<CharacterId>;
+  private accountSummary: string;
+
   private readonly keydownHandler = (event: KeyboardEvent): void => {
     if (this.root.hidden) {
       return;
     }
 
-    if (this.activePanel === 'home') {
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        this.homeRow = this.clampHomeRow(this.homeRow - 1);
-        this.refreshHomeUI();
-        return;
-      }
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        this.homeRow = this.clampHomeRow(this.homeRow + 1);
-        this.refreshHomeUI();
-        return;
-      }
-      if (event.key === 'ArrowLeft') {
-        event.preventDefault();
-        this.applyHomeHorizontal(-1);
-        return;
-      }
-      if (event.key === 'ArrowRight') {
-        event.preventDefault();
-        this.applyHomeHorizontal(1);
-        return;
-      }
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        this.activateHomeRow();
-      }
-      return;
-    }
-
     if (event.key === 'ArrowUp') {
       event.preventDefault();
-      this.setMatchSelection(this.matchSelection - 1);
+      this.moveSelection(-1);
       return;
     }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      this.setMatchSelection(this.matchSelection + 1);
+      this.moveSelection(1);
+      return;
+    }
+    if (event.key === 'ArrowLeft') {
+      if (this.currentScreen === 'local') {
+        event.preventDefault();
+        this.applyLocalHorizontal(-1);
+      }
+      return;
+    }
+    if (event.key === 'ArrowRight') {
+      if (this.currentScreen === 'local') {
+        event.preventDefault();
+        this.applyLocalHorizontal(1);
+      }
       return;
     }
     if (event.key === 'Escape' || event.key === 'Backspace') {
       event.preventDefault();
-      this.options.onReturnHome();
+      this.handleBackAction();
       return;
     }
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      this.matchButtons[this.matchSelection].click();
+      this.activateSelection();
     }
   };
 
-  constructor(private readonly options: StartMenuOptions) {
+  public constructor(private readonly options: StartMenuOptions) {
     this.enabledModes = sanitiseEnabledModes(options.enabledModes);
     this.currentMode = options.initialMode && this.enabledModes.includes(options.initialMode)
       ? options.initialMode
       : this.enabledModes[0];
     this.currentLoadout = cloneLoadout(options.initialLoadout ?? DEFAULT_CHARACTER_LOADOUT);
+    this.accountSummary = options.initialAccountSummary ?? 'Guest Account';
 
     this.root = document.createElement('div');
     this.root.className = 'start-menu';
     this.root.hidden = true;
 
-    this.homePanel = document.createElement('div');
-    this.homePanel.className = 'start-panel start-home-panel';
-    this.root.appendChild(this.homePanel);
+    this.titlePanel = this.createPanel('Gravity Well', 'Press continue to enter the portal.');
+    this.loginPanel = this.createPanel('Login', 'Sign in, sign up, or continue as guest.');
+    this.mainPanel = this.createPanel('Main Menu', 'Choose a category.');
+    this.onlinePanel = this.createPanel('Online', 'Matchmaking and custom rooms.');
+    this.localPanel = this.createPanel('Local', 'Local match setup.');
+    this.replaysPanel = this.createPanel('Replays', 'Review archived and fixture replays.');
+    this.rankingsPanel = this.createPanel('Rankings', 'Ranked snapshot and leaderboard entry point.');
+    this.settingsPanel = this.createPanel('Settings', 'Account and social options.');
 
-    const title = document.createElement('h1');
-    title.textContent = 'Gravity Well';
-    const subtitle = document.createElement('p');
-    subtitle.textContent = 'Choose mode and character archetypes before each match.';
-    this.homePanel.append(title, subtitle);
+    const continueRow = this.createActionRow('Continue', () => {
+      this.setScreen('login');
+    });
+    this.titlePanel.appendChild(continueRow.row);
+    this.registerRows('title', [continueRow.row]);
 
-    const modeRow = document.createElement('div');
-    modeRow.className = 'start-menu-row';
-    modeRow.appendChild(this.createRowLabel('Mode'));
-    const modeActions = document.createElement('div');
-    modeActions.className = 'start-mode-actions';
-    for (const mode of this.enabledModes) {
-      const button = this.createModeButton(mode, MODE_LABELS[mode]);
-      this.modeButtons.set(mode, button);
-      modeActions.appendChild(button);
-    }
-    modeRow.appendChild(modeActions);
-    this.homePanel.appendChild(modeRow);
-    this.homeRows.push(modeRow);
+    const signInRow = this.createActionRow('Sign In', async () => {
+      await this.handleAuthAction('signin');
+    });
+    const signUpRow = this.createActionRow('Sign Up', async () => {
+      await this.handleAuthAction('signup');
+    });
+    const guestRow = this.createActionRow('Continue as Guest', () => {
+      this.setScreen('main');
+    });
+    const loginBackRow = this.createActionRow('Back', () => {
+      this.setScreen('title');
+    });
+    this.loginPanel.append(signInRow.row, signUpRow.row, guestRow.row, loginBackRow.row);
+    this.registerRows('login', [signInRow.row, signUpRow.row, guestRow.row, loginBackRow.row]);
 
-    const p1Row = document.createElement('div');
-    p1Row.className = 'start-menu-row';
-    p1Row.appendChild(this.createRowLabel('P1 Character'));
-    const p1Picker = this.createCharacterPicker('P1');
-    this.p1CharacterLabel = p1Picker.label;
-    this.p1CharacterMeta = p1Picker.meta;
-    p1Row.appendChild(p1Picker.root);
-    this.homePanel.appendChild(p1Row);
-    this.homeRows.push(p1Row);
+    const mainAccountRow = document.createElement('div');
+    mainAccountRow.className = 'start-menu-row';
+    this.accountSummaryLabel = document.createElement('div');
+    this.accountSummaryLabel.className = 'start-row-label';
+    this.accountSummaryLabel.textContent = this.accountSummary;
+    mainAccountRow.appendChild(this.accountSummaryLabel);
+    this.mainPanel.appendChild(mainAccountRow);
 
-    const p2Row = document.createElement('div');
-    p2Row.className = 'start-menu-row';
-    p2Row.appendChild(this.createRowLabel('P2 Character'));
-    const p2Picker = this.createCharacterPicker('P2');
-    this.p2CharacterLabel = p2Picker.label;
-    this.p2CharacterMeta = p2Picker.meta;
-    p2Row.appendChild(p2Picker.root);
-    this.homePanel.appendChild(p2Row);
-    this.homeRows.push(p2Row);
+    const mainOnlineRow = this.createActionRow('Online', () => {
+      this.setScreen('online');
+    });
+    const mainLocalRow = this.createActionRow('Local', () => {
+      this.setScreen('local');
+    });
+    const mainReplaysRow = this.createActionRow('Replays', () => {
+      this.setScreen('replays');
+    });
+    const mainRankingsRow = this.createActionRow('Rankings', () => {
+      this.setScreen('rankings');
+    });
+    const mainSettingsRow = this.createActionRow('Settings', () => {
+      this.setScreen('settings');
+    });
+    const mainBackRow = this.createActionRow('Back', () => {
+      this.setScreen('login');
+    });
 
-    const startRow = document.createElement('div');
-    startRow.className = 'start-menu-row';
-    const startButton = document.createElement('button');
-    startButton.type = 'button';
-    startButton.className = 'start-action primary';
-    startButton.textContent = 'Start Match';
-    startButton.addEventListener('click', () => this.startMatch());
-    startRow.appendChild(startButton);
-    this.homePanel.appendChild(startRow);
-    this.homeRows.push(startRow);
-    this.startRowIndex = this.homeRows.length - 1;
+    this.mainPanel.append(
+      mainOnlineRow.row,
+      mainLocalRow.row,
+      mainReplaysRow.row,
+      mainRankingsRow.row,
+      mainSettingsRow.row,
+      mainBackRow.row,
+    );
+    this.registerRows('main', [
+      mainOnlineRow.row,
+      mainLocalRow.row,
+      mainReplaysRow.row,
+      mainRankingsRow.row,
+      mainSettingsRow.row,
+      mainBackRow.row,
+    ]);
 
-    let accountRowIndex: number | null = null;
-    let accountButton: HTMLButtonElement | null = null;
-    if (this.options.onOpenWebAuth) {
-      const accountRow = document.createElement('div');
-      accountRow.className = 'start-menu-row';
-      accountRow.appendChild(this.createRowLabel('Account'));
-      accountButton = document.createElement('button');
-      accountButton.type = 'button';
-      accountButton.className = 'start-action';
-      accountButton.textContent = this.options.initialAccountSummary ?? 'Guest Account (Sign In / Sign Up)';
-      accountButton.addEventListener('click', () => this.openWebAuth());
-      accountRow.appendChild(accountButton);
-      this.homePanel.appendChild(accountRow);
-      this.homeRows.push(accountRow);
-      accountRowIndex = this.homeRows.length - 1;
-    }
-    this.accountRowIndex = accountRowIndex;
-    this.accountButton = accountButton;
+    const onlineRankedRow = this.createActionRow('Ranked', () => {
+      this.options.onOpenOnlineDevMenu?.('matchmaking');
+    });
+    const onlineRoomRow = this.createActionRow('Custom Room', () => {
+      this.options.onOpenOnlineDevMenu?.('rooms');
+    });
+    const onlineBackRow = this.createActionRow('Back', () => {
+      this.setScreen('main');
+    });
+    this.onlinePanel.append(onlineRankedRow.row, onlineRoomRow.row, onlineBackRow.row);
+    this.registerRows('online', [onlineRankedRow.row, onlineRoomRow.row, onlineBackRow.row]);
 
-    let onlineDevRowIndex: number | null = null;
-    if (this.options.onOpenOnlineDevMenu) {
-      const onlineDevRow = document.createElement('div');
-      onlineDevRow.className = 'start-menu-row';
-      const onlineDevButton = document.createElement('button');
-      onlineDevButton.type = 'button';
-      onlineDevButton.className = 'start-action';
-      onlineDevButton.textContent = 'Online Dev Menu';
-      onlineDevButton.addEventListener('click', () => this.openOnlineDevMenu());
-      onlineDevRow.appendChild(onlineDevButton);
-      this.homePanel.appendChild(onlineDevRow);
-      this.homeRows.push(onlineDevRow);
-      onlineDevRowIndex = this.homeRows.length - 1;
-    }
-    this.onlineDevRowIndex = onlineDevRowIndex;
+    const localModeRow = this.createActionRow('', () => {
+      this.currentMode = getNextMode(this.currentMode, this.enabledModes, 1);
+      this.refreshLocalRows();
+    });
+    this.localModeButton = localModeRow.button;
 
-    let replayRowIndex: number | null = null;
-    if (this.options.onOpenReplayReview) {
-      const replayRow = document.createElement('div');
-      replayRow.className = 'start-menu-row';
-      const replayButton = document.createElement('button');
-      replayButton.type = 'button';
-      replayButton.className = 'start-action';
-      replayButton.textContent = 'Replay Review (Smoke Fixture)';
-      replayButton.addEventListener('click', () => this.openReplayReview());
-      replayRow.appendChild(replayButton);
-      this.homePanel.appendChild(replayRow);
-      this.homeRows.push(replayRow);
-      replayRowIndex = this.homeRows.length - 1;
-    }
-    this.replayRowIndex = replayRowIndex;
+    const localP1Row = this.createActionRow('', () => {
+      this.shiftCharacter('P1', 1);
+    });
+    this.p1CharacterButton = localP1Row.button;
+
+    const localP2Row = this.createActionRow('', () => {
+      this.shiftCharacter('P2', 1);
+    });
+    this.p2CharacterButton = localP2Row.button;
+
+    this.localCharacterList = document.createElement('div');
+    this.localCharacterList.className = 'start-character-list';
+
+    const localStartRow = this.createActionRow('Start Local Match', () => {
+      this.startLocalMatch();
+    }, true);
+    const localBackRow = this.createActionRow('Back', () => {
+      this.setScreen('main');
+    });
+
+    this.localPanel.append(localModeRow.row, localP1Row.row, localP2Row.row, this.localCharacterList, localStartRow.row, localBackRow.row);
+    this.registerRows('local', [localModeRow.row, localP1Row.row, localP2Row.row, localStartRow.row, localBackRow.row]);
+
+    const replayArchiveRow = this.createActionRow('Replay Archive', () => {
+      this.options.onOpenOnlineDevMenu?.('replay');
+    });
+    const replayFixtureRow = this.createActionRow('Replay Review (Smoke Fixture)', () => {
+      this.options.onOpenReplayReview?.();
+    });
+    const replayBackRow = this.createActionRow('Back', () => {
+      this.setScreen('main');
+    });
+    this.replaysPanel.append(replayArchiveRow.row, replayFixtureRow.row, replayBackRow.row);
+    this.registerRows('replays', [replayArchiveRow.row, replayFixtureRow.row, replayBackRow.row]);
+
+    const rankingsSnapshotRow = this.createActionRow('Ranked Snapshot', () => {
+      this.options.onOpenOnlineDevMenu?.('ranked');
+    });
+    const rankingsBackRow = this.createActionRow('Back', () => {
+      this.setScreen('main');
+    });
+    this.rankingsPanel.append(rankingsSnapshotRow.row, rankingsBackRow.row);
+    this.registerRows('rankings', [rankingsSnapshotRow.row, rankingsBackRow.row]);
+
+    const settingsAccountRow = this.createActionRow('Account', async () => {
+      await this.handleAuthAction('signin');
+    });
+    const settingsSocialRow = this.createActionRow('Social', () => {
+      this.options.onOpenOnlineDevMenu?.('social');
+    });
+    const settingsBackRow = this.createActionRow('Back', () => {
+      this.setScreen('main');
+    });
+    this.settingsPanel.append(settingsAccountRow.row, settingsSocialRow.row, settingsBackRow.row);
+    this.registerRows('settings', [settingsAccountRow.row, settingsSocialRow.row, settingsBackRow.row]);
 
     const padHint = document.createElement('p');
     padHint.className = 'start-pad-hint';
-    padHint.textContent = 'Controls: D-pad/left stick to move, A/Enter to confirm, B/Esc to go back, Start to begin.';
-    this.homePanel.appendChild(padHint);
-
-    this.characterList = document.createElement('div');
-    this.characterList.className = 'start-character-list';
-    this.homePanel.appendChild(this.characterList);
-    this.renderCharacterList();
+    padHint.textContent = 'Controls: Up/Down to navigate, Left/Right to adjust local selectors, A/Enter confirm, B/Esc back.';
+    this.mainPanel.appendChild(padHint.cloneNode(true));
+    this.onlinePanel.appendChild(padHint.cloneNode(true));
+    this.localPanel.appendChild(padHint.cloneNode(true));
+    this.replaysPanel.appendChild(padHint.cloneNode(true));
+    this.rankingsPanel.appendChild(padHint.cloneNode(true));
+    this.settingsPanel.appendChild(padHint.cloneNode(true));
+    this.loginPanel.appendChild(padHint.cloneNode(true));
+    this.titlePanel.appendChild(padHint.cloneNode(true));
 
     this.matchOverPanel = document.createElement('div');
-    this.matchOverPanel.className = 'start-panel start-match-panel';
+    this.matchOverPanel.className = 'start-panel';
     this.matchOverPanel.hidden = true;
     this.root.appendChild(this.matchOverPanel);
 
@@ -340,6 +379,17 @@ export class StartMenu {
     this.matchButtons.push(playAgainButton, homeButton);
     this.matchOverPanel.append(playAgainButton, homeButton);
 
+    this.root.append(
+      this.titlePanel,
+      this.loginPanel,
+      this.mainPanel,
+      this.onlinePanel,
+      this.localPanel,
+      this.replaysPanel,
+      this.rankingsPanel,
+      this.settingsPanel,
+    );
+
     this.roundBanner = document.createElement('div');
     this.roundBanner.className = 'round-banner';
     this.roundBanner.hidden = true;
@@ -347,27 +397,25 @@ export class StartMenu {
 
     document.body.append(this.root, this.roundBanner);
 
-    this.refreshHomeUI();
+    window.addEventListener('keydown', this.keydownHandler);
+    this.refreshLocalRows();
+    this.setScreen('title');
     this.setMatchSelection(0);
-    this.bindKeyboardNavigation();
     this.pollGamepads();
   }
 
-  showHome(): void {
-    this.activePanel = 'home';
+  public showHome(): void {
     this.root.hidden = false;
-    this.homePanel.hidden = false;
-    this.matchOverPanel.hidden = true;
     this.prevPadStateByIndex.clear();
-    this.refreshHomeUI();
+    this.setScreen('title');
   }
 
-  hideHome(): void {
+  public hideHome(): void {
     this.root.hidden = true;
     this.prevPadStateByIndex.clear();
   }
 
-  showRoundBanner(winner: PlayerId, subtitle: string): void {
+  public showRoundBanner(winner: PlayerId, subtitle: string): void {
     const titleElement = this.roundBanner.querySelector<HTMLDivElement>('.round-banner-title');
     const subtitleElement = this.roundBanner.querySelector<HTMLDivElement>('.round-banner-subtitle');
     if (titleElement) {
@@ -379,91 +427,149 @@ export class StartMenu {
     this.roundBanner.hidden = false;
   }
 
-  hideRoundBanner(): void {
+  public hideRoundBanner(): void {
     this.roundBanner.hidden = true;
   }
 
-  showMatchOver(winner: PlayerId, p1Wins: number, p2Wins: number): void {
+  public showMatchOver(winner: PlayerId, p1Wins: number, p2Wins: number): void {
     this.root.hidden = false;
-    this.activePanel = 'match_over';
-    this.homePanel.hidden = true;
-    this.matchOverPanel.hidden = false;
+    this.currentScreen = 'match_over';
     this.prevPadStateByIndex.clear();
     this.matchTitle.textContent = `${winner} wins the match`;
     this.matchSubtitle.textContent = `Final rounds: P1 ${p1Wins} - ${p2Wins} P2`;
     this.setMatchSelection(0);
+    this.refreshPanelVisibility();
   }
 
-  private createRowLabel(text: string): HTMLDivElement {
-    const label = document.createElement('div');
-    label.className = 'start-row-label';
-    label.textContent = text;
-    return label;
+  public dispose(): void {
+    if (this.rafId) {
+      window.cancelAnimationFrame(this.rafId);
+    }
+    window.removeEventListener('keydown', this.keydownHandler);
+    this.root.remove();
+    this.roundBanner.remove();
   }
 
-  private createModeButton(mode: GameMode, label: string): HTMLButtonElement {
+  public setAccountSummary(summary: string): void {
+    this.accountSummary = summary;
+    this.accountSummaryLabel.textContent = summary;
+  }
+
+  private createPanel(title: string, subtitle: string): HTMLDivElement {
+    const panel = document.createElement('div');
+    panel.className = 'start-panel start-home-panel';
+    panel.hidden = true;
+
+    const heading = document.createElement('h1');
+    heading.textContent = title;
+    const sub = document.createElement('p');
+    sub.textContent = subtitle;
+    panel.append(heading, sub);
+
+    return panel;
+  }
+
+  private createActionRow(label: string, onActivate: () => void | Promise<void>, primary = false): { row: HTMLDivElement; button: HTMLButtonElement } {
+    const row = document.createElement('div');
+    row.className = 'start-menu-row';
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'start-mode-btn';
+    button.className = primary ? 'start-action primary' : 'start-action';
     button.textContent = label;
     button.addEventListener('click', () => {
-      this.currentMode = mode;
-      this.refreshHomeUI();
+      const result = onActivate();
+      if (result instanceof Promise) {
+        void result;
+      }
     });
-    return button;
+    row.appendChild(button);
+    return { row, button };
   }
 
-  private createCharacterPicker(playerId: PlayerId): { root: HTMLDivElement; label: HTMLDivElement; meta: HTMLDivElement } {
-    const root = document.createElement('div');
-    root.className = 'start-character-picker';
-
-    const prev = document.createElement('button');
-    prev.type = 'button';
-    prev.className = 'start-character-step';
-    prev.textContent = 'Prev';
-    prev.addEventListener('click', () => this.shiftCharacter(playerId, -1));
-
-    const valueWrap = document.createElement('div');
-    valueWrap.className = 'start-character-value';
-
-    const label = document.createElement('div');
-    label.className = 'start-character-name';
-
-    const meta = document.createElement('div');
-    meta.className = 'start-character-meta';
-
-    valueWrap.append(label, meta);
-
-    const next = document.createElement('button');
-    next.type = 'button';
-    next.className = 'start-character-step';
-    next.textContent = 'Next';
-    next.addEventListener('click', () => this.shiftCharacter(playerId, 1));
-
-    root.append(prev, valueWrap, next);
-    return { root, label, meta };
+  private registerRows(screen: StartScreen, rows: HTMLElement[]): void {
+    this.rowsByScreen.set(screen, rows);
+    if (!this.rowIndexByScreen.has(screen)) {
+      this.rowIndexByScreen.set(screen, 0);
+    }
   }
 
-  private refreshHomeUI(): void {
-    for (const [mode, button] of this.modeButtons.entries()) {
-      button.classList.toggle('active', this.currentMode === mode);
+  private setScreen(screen: StartScreen): void {
+    this.currentScreen = screen;
+    this.refreshPanelVisibility();
+    this.refreshRowHighlights();
+  }
+
+  private refreshPanelVisibility(): void {
+    this.titlePanel.hidden = this.currentScreen !== 'title';
+    this.loginPanel.hidden = this.currentScreen !== 'login';
+    this.mainPanel.hidden = this.currentScreen !== 'main';
+    this.onlinePanel.hidden = this.currentScreen !== 'online';
+    this.localPanel.hidden = this.currentScreen !== 'local';
+    this.replaysPanel.hidden = this.currentScreen !== 'replays';
+    this.rankingsPanel.hidden = this.currentScreen !== 'rankings';
+    this.settingsPanel.hidden = this.currentScreen !== 'settings';
+    this.matchOverPanel.hidden = this.currentScreen !== 'match_over';
+  }
+
+  private getRowsForCurrentScreen(): HTMLElement[] {
+    if (this.currentScreen === 'match_over') {
+      return this.matchButtons;
+    }
+    return this.rowsByScreen.get(this.currentScreen) ?? [];
+  }
+
+  private getCurrentRowIndex(): number {
+    if (this.currentScreen === 'match_over') {
+      return this.matchButtons.findIndex((button) => button.classList.contains('active'));
+    }
+    return this.rowIndexByScreen.get(this.currentScreen) ?? 0;
+  }
+
+  private setCurrentRowIndex(index: number): void {
+    const rows = this.getRowsForCurrentScreen();
+    if (rows.length === 0) {
+      return;
+    }
+    const next = Math.max(0, Math.min(rows.length - 1, index));
+    if (this.currentScreen === 'match_over') {
+      this.setMatchSelection(next);
+      return;
+    }
+    this.rowIndexByScreen.set(this.currentScreen, next);
+    this.refreshRowHighlights();
+  }
+
+  private refreshRowHighlights(): void {
+    for (const [screen, rows] of this.rowsByScreen.entries()) {
+      const activeIndex = this.currentScreen === screen
+        ? (this.rowIndexByScreen.get(screen) ?? 0)
+        : -1;
+      for (let i = 0; i < rows.length; i += 1) {
+        rows[i].classList.toggle('active', i === activeIndex);
+      }
     }
 
-    const p1Character = CHARACTER_BY_ID[this.currentLoadout.P1];
-    const p2Character = CHARACTER_BY_ID[this.currentLoadout.P2];
-    this.p1CharacterLabel.textContent = p1Character.displayName;
-    this.p2CharacterLabel.textContent = p2Character.displayName;
-    this.p1CharacterMeta.textContent = `${p1Character.blurb} (${p1Character.mechanicsTag})`;
-    this.p2CharacterMeta.textContent = `${p2Character.blurb} (${p2Character.mechanicsTag})`;
-
-    for (let i = 0; i < this.homeRows.length; i += 1) {
-      this.homeRows[i].classList.toggle('active', this.homeRow === i);
+    if (this.currentScreen === 'match_over') {
+      const selected = this.getCurrentRowIndex();
+      for (let i = 0; i < this.matchButtons.length; i += 1) {
+        this.matchButtons[i].classList.toggle('active', i === selected);
+      }
+    } else {
+      for (const button of this.matchButtons) {
+        button.classList.remove('active');
+      }
     }
-    this.renderCharacterList();
   }
 
-  private renderCharacterList(): void {
-    this.characterList.innerHTML = '';
+  private refreshLocalRows(): void {
+    this.localModeButton.textContent = `Mode: ${MODE_LABELS[this.currentMode]}`;
+
+    const p1 = CHARACTER_BY_ID[this.currentLoadout.P1];
+    const p2 = CHARACTER_BY_ID[this.currentLoadout.P2];
+    this.p1CharacterButton.textContent = `P1: ${p1.displayName} (${p1.mechanicsTag})`;
+    this.p2CharacterButton.textContent = `P2: ${p2.displayName} (${p2.mechanicsTag})`;
+
+    this.localCharacterList.innerHTML = '';
     for (const character of CHARACTERS) {
       const item = document.createElement('div');
       item.className = 'start-character-item';
@@ -483,79 +589,104 @@ export class StartMenu {
       blurb.className = 'start-character-item-blurb';
       blurb.textContent = character.mechanicsTag;
       item.append(name, blurb);
-      this.characterList.appendChild(item);
+      this.localCharacterList.appendChild(item);
     }
+
+    this.refreshRowHighlights();
   }
 
   private shiftCharacter(playerId: PlayerId, direction: 1 | -1): void {
     const current = this.currentLoadout[playerId];
     this.currentLoadout[playerId] = cycleCharacter(current, direction);
-    this.refreshHomeUI();
+    this.refreshLocalRows();
   }
 
-  private startMatch(): void {
+  private startLocalMatch(): void {
     this.options.onStartMode(this.currentMode, cloneLoadout(this.currentLoadout));
   }
 
-  private setMatchSelection(index: number): void {
-    this.matchSelection = Math.max(0, Math.min(this.matchButtons.length - 1, index));
-    for (let i = 0; i < this.matchButtons.length; i += 1) {
-      this.matchButtons[i].classList.toggle('active', i === this.matchSelection);
-    }
-  }
-
-  private bindKeyboardNavigation(): void {
-    window.addEventListener('keydown', this.keydownHandler);
-  }
-
-  private applyHomeHorizontal(direction: 1 | -1): void {
-    if (this.homeRow === 0) {
-      if (this.enabledModes.length > 1) {
-        this.currentMode = getNextMode(this.currentMode, this.enabledModes, direction);
-        this.refreshHomeUI();
-      }
+  private async handleAuthAction(action: WebAuthMenuAction): Promise<void> {
+    if (!this.options.onOpenWebAuth) {
+      this.setScreen('main');
       return;
     }
-    if (this.homeRow === 1) {
+    await this.options.onOpenWebAuth(action);
+    this.setScreen('main');
+  }
+
+  private moveSelection(direction: 1 | -1): void {
+    const rows = this.getRowsForCurrentScreen();
+    if (rows.length === 0) {
+      return;
+    }
+    const current = this.getCurrentRowIndex();
+    const next = (current + direction + rows.length) % rows.length;
+    this.setCurrentRowIndex(next);
+  }
+
+  private activateSelection(): void {
+    const rows = this.getRowsForCurrentScreen();
+    if (rows.length === 0) {
+      return;
+    }
+    if (this.currentScreen === 'match_over') {
+      const matchButton = rows[this.getCurrentRowIndex()] as HTMLButtonElement;
+      matchButton?.click();
+      return;
+    }
+
+    const row = rows[this.getCurrentRowIndex()];
+    const button = row.querySelector<HTMLButtonElement>('button');
+    button?.click();
+  }
+
+  private applyLocalHorizontal(direction: 1 | -1): void {
+    if (this.currentScreen !== 'local') {
+      return;
+    }
+    const rowIndex = this.getCurrentRowIndex();
+    if (rowIndex === 0) {
+      this.currentMode = getNextMode(this.currentMode, this.enabledModes, direction);
+      this.refreshLocalRows();
+      return;
+    }
+    if (rowIndex === 1) {
       this.shiftCharacter('P1', direction);
       return;
     }
-    if (this.homeRow === 2) {
+    if (rowIndex === 2) {
       this.shiftCharacter('P2', direction);
     }
   }
 
-  private activateHomeRow(): void {
-    if (this.homeRow === 0) {
-      if (this.enabledModes.length > 1) {
-        this.currentMode = getNextMode(this.currentMode, this.enabledModes, 1);
-        this.refreshHomeUI();
-      }
-      return;
+  private handleBackAction(): void {
+    switch (this.currentScreen) {
+      case 'title':
+        return;
+      case 'login':
+        this.setScreen('title');
+        return;
+      case 'main':
+        this.setScreen('login');
+        return;
+      case 'online':
+      case 'local':
+      case 'replays':
+      case 'rankings':
+      case 'settings':
+        this.setScreen('main');
+        return;
+      case 'match_over':
+        this.options.onReturnHome();
+        return;
+      default:
+        return;
     }
-    if (this.homeRow === 1) {
-      this.shiftCharacter('P1', 1);
-      return;
-    }
-    if (this.homeRow === 2) {
-      this.shiftCharacter('P2', 1);
-      return;
-    }
-    if (this.homeRow === this.startRowIndex) {
-      this.startMatch();
-      return;
-    }
-    if (this.accountRowIndex !== null && this.homeRow === this.accountRowIndex) {
-      this.openWebAuth();
-      return;
-    }
-    if (this.onlineDevRowIndex !== null && this.homeRow === this.onlineDevRowIndex) {
-      this.openOnlineDevMenu();
-      return;
-    }
-    if (this.replayRowIndex !== null && this.homeRow === this.replayRowIndex) {
-      this.openReplayReview();
-    }
+  }
+
+  private setMatchSelection(index: number): void {
+    this.rowIndexByScreen.set('match_over', Math.max(0, Math.min(this.matchButtons.length - 1, index)));
+    this.refreshRowHighlights();
   }
 
   private wasPressed(padIndex: number, state: PadState, key: keyof PadState): boolean {
@@ -563,119 +694,43 @@ export class StartMenu {
     return state[key] && !previous?.[key];
   }
 
-  private handleHomePad(padIndex: number, state: PadState, isPrimary: boolean): void {
-    if (isPrimary) {
-      if (this.wasPressed(padIndex, state, 'up')) {
-        this.homeRow = this.clampHomeRow(this.homeRow - 1);
-        this.refreshHomeUI();
-      }
-      if (this.wasPressed(padIndex, state, 'down')) {
-        this.homeRow = this.clampHomeRow(this.homeRow + 1);
-        this.refreshHomeUI();
-      }
-      if (this.wasPressed(padIndex, state, 'left')) {
-        this.applyHomeHorizontal(-1);
-      }
-      if (this.wasPressed(padIndex, state, 'right')) {
-        this.applyHomeHorizontal(1);
-      }
-      if (this.wasPressed(padIndex, state, 'confirm')) {
-        this.activateHomeRow();
-      }
-      if (this.wasPressed(padIndex, state, 'start')) {
-        this.startMatch();
-      }
-      return;
-    }
-
-    if (this.wasPressed(padIndex, state, 'left')) {
-      this.shiftCharacter('P2', -1);
-    }
-    if (this.wasPressed(padIndex, state, 'right') || this.wasPressed(padIndex, state, 'confirm')) {
-      this.shiftCharacter('P2', 1);
-    }
-    if (this.wasPressed(padIndex, state, 'start')) {
-      this.startMatch();
-    }
-  }
-
-  private openReplayReview(): void {
-    this.options.onOpenReplayReview?.();
-  }
-
-  private openWebAuth(): void {
-    this.options.onOpenWebAuth?.();
-  }
-
-  private openOnlineDevMenu(): void {
-    this.options.onOpenOnlineDevMenu?.();
-  }
-
-  private clampHomeRow(value: number): number {
-    const max = Math.max(0, this.homeRows.length - 1);
-    if (value <= 0) {
-      return 0;
-    }
-    if (value >= max) {
-      return max;
-    }
-    return value;
-  }
-
-  private handleMatchPad(padIndex: number, state: PadState): void {
-    if (this.wasPressed(padIndex, state, 'up')) {
-      this.setMatchSelection(this.matchSelection - 1);
-    }
-    if (this.wasPressed(padIndex, state, 'down')) {
-      this.setMatchSelection(this.matchSelection + 1);
-    }
-    if (this.wasPressed(padIndex, state, 'confirm') || this.wasPressed(padIndex, state, 'start')) {
-      this.matchButtons[this.matchSelection].click();
-    }
-    if (this.wasPressed(padIndex, state, 'back')) {
-      this.options.onReturnHome();
-    }
-  }
-
   private pollGamepads = (): void => {
-    if (this.root.hidden || !navigator.getGamepads) {
-      this.rafId = window.requestAnimationFrame(this.pollGamepads);
-      return;
-    }
-
-    const pads = navigator.getGamepads();
-    let connectedOrder = 0;
-    for (let i = 0; i < pads.length; i += 1) {
-      const pad = pads[i];
-      if (!pad) {
-        continue;
+    if (!this.root.hidden && navigator.getGamepads) {
+      const pads = navigator.getGamepads();
+      const primaryPad = pads.find((pad) => Boolean(pad)) ?? null;
+      if (primaryPad) {
+        const state = readPadState(primaryPad);
+        if (this.wasPressed(primaryPad.index, state, 'up')) {
+          this.moveSelection(-1);
+        }
+        if (this.wasPressed(primaryPad.index, state, 'down')) {
+          this.moveSelection(1);
+        }
+        if (this.wasPressed(primaryPad.index, state, 'left')) {
+          this.applyLocalHorizontal(-1);
+        }
+        if (this.wasPressed(primaryPad.index, state, 'right')) {
+          this.applyLocalHorizontal(1);
+        }
+        if (this.wasPressed(primaryPad.index, state, 'confirm')) {
+          this.activateSelection();
+        }
+        if (this.wasPressed(primaryPad.index, state, 'back')) {
+          this.handleBackAction();
+        }
+        if (this.wasPressed(primaryPad.index, state, 'start')) {
+          if (this.currentScreen === 'local') {
+            this.startLocalMatch();
+          } else if (this.currentScreen === 'match_over') {
+            this.activateSelection();
+          }
+        }
+        this.prevPadStateByIndex.set(primaryPad.index, state);
       }
-      const state = readPadState(pad);
-      if (this.activePanel === 'home') {
-        this.handleHomePad(pad.index, state, connectedOrder === 0);
-      } else {
-        this.handleMatchPad(pad.index, state);
-      }
-      this.prevPadStateByIndex.set(pad.index, state);
-      connectedOrder += 1;
     }
 
     this.rafId = window.requestAnimationFrame(this.pollGamepads);
   };
-
-  dispose(): void {
-    if (this.rafId) {
-      window.cancelAnimationFrame(this.rafId);
-    }
-    window.removeEventListener('keydown', this.keydownHandler);
-  }
-
-  public setAccountSummary(summary: string): void {
-    if (!this.accountButton) {
-      return;
-    }
-    this.accountButton.textContent = summary;
-  }
 }
 
 export function createStartMenu(options: StartMenuOptions): StartMenu {

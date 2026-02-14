@@ -6,8 +6,23 @@ export interface PlatformAuthSession {
   isAuthenticated: boolean;
 }
 
+export interface WebAuthSignupRequest {
+  email: string;
+  password: string;
+  displayName?: string | null;
+  upgradeCurrentGuest?: boolean;
+}
+
+export interface WebAuthSigninRequest {
+  email: string;
+  password: string;
+}
+
 export interface PlatformAuthService {
   getSession(): Promise<PlatformAuthSession>;
+  signUp?(request: WebAuthSignupRequest): Promise<PlatformAuthSession>;
+  signIn?(request: WebAuthSigninRequest): Promise<PlatformAuthSession>;
+  signOut?(): Promise<PlatformAuthSession>;
 }
 
 export interface PlatformStorageService {

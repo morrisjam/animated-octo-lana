@@ -8,7 +8,7 @@ import {
   type RollbackDiagnosticsSnapshot,
 } from './net/rollbackSession';
 import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT, type CharacterId } from './sim/characters';
-import { createPlatformServices } from './platform';
+import { createPlatformServices, type PlatformAuthSession } from './platform';
 import { validateReplayPayload } from './sim/replay';
 import { buildReplayReviewData, type ReplayReviewData } from './sim/replayReview';
 import { createInitialState, getRenderSnapshot, step } from './sim/sim';
@@ -171,9 +171,15 @@ const startMenu = createStartMenu({
   initialMode: selectedMode,
   initialLoadout: selectedLoadout,
   enabledModes,
+  initialAccountSummary: 'Guest Account',
   onStartMode: (mode, loadout) => {
     beginMode(mode, loadout);
   },
+  onOpenWebAuth: platform.kind === 'web'
+    ? () => {
+      void openWebAuthFlow();
+    }
+    : undefined,
   onReturnHome: () => {
     returnToHome();
   },
@@ -205,6 +211,14 @@ let replayAccumulator = 0;
 let replayPaused = true;
 const replaySpeedOptions = [0.25, 0.5, 1, 2, 4];
 let replaySpeedIndex = 2;
+
+function formatAccountSummary(session: PlatformAuthSession): string {
+  if (!session.isAuthenticated || !session.accountId) {
+    return `Guest Account (${session.accountId ?? 'local'})`;
+  }
+  const name = session.displayName?.trim();
+  return name ? `Signed in: ${name}` : `Signed in: ${session.accountId}`;
+}
 
 function getEnabledModes(): GameMode[] {
   const modes: GameMode[] = ['endless', 'best_of_3'];
@@ -287,12 +301,98 @@ async function bootstrapPlatformProfile(): Promise<void> {
   try {
     const session = await platform.auth.getSession();
     sessionAccountId = session.accountId;
+    startMenu.setAccountSummary(formatAccountSummary(session));
     if (!session.accountId) {
       return;
     }
-    await platform.profile.getProfile(session.accountId);
+    const profile = await platform.profile.getProfile(session.accountId);
+    if (session.isAuthenticated && profile.displayName) {
+      startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
+    }
   } catch {
     // Profile bootstrap fallback is intentionally silent for prototype flow.
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return 'Unexpected authentication failure.';
+}
+
+async function openWebAuthFlow(): Promise<void> {
+  const auth = platform.auth;
+  if (!auth.signIn || !auth.signUp || !auth.signOut) {
+    window.alert('Web auth is unavailable for this platform build.');
+    return;
+  }
+
+  const actionRaw = window.prompt('Account action: signin, signup, or signout', 'signin');
+  if (!actionRaw) {
+    return;
+  }
+  const action = actionRaw.trim().toLowerCase();
+
+  try {
+    let session: PlatformAuthSession | null = null;
+    if (action === 'signout') {
+      session = await auth.signOut();
+      window.alert('Signed out. Guest session restored.');
+    } else if (action === 'signin') {
+      const email = window.prompt('Email:', '')?.trim();
+      if (!email) {
+        return;
+      }
+      const password = window.prompt('Password (prototype prompt, not masked):', '');
+      if (password === null) {
+        return;
+      }
+      session = await auth.signIn({ email, password });
+      window.alert('Sign-in successful.');
+    } else if (action === 'signup') {
+      const email = window.prompt('Email:', '')?.trim();
+      if (!email) {
+        return;
+      }
+      const password = window.prompt('Password (min 8 chars, prototype prompt not masked):', '');
+      if (password === null) {
+        return;
+      }
+      const displayNameRaw = window.prompt('Display name (optional):', '');
+      if (displayNameRaw === null) {
+        return;
+      }
+      const currentSession = await auth.getSession();
+      const canUpgradeGuest = !currentSession.isAuthenticated && Boolean(currentSession.accountId);
+      const upgradeCurrentGuest = canUpgradeGuest
+        ? window.confirm('Upgrade current guest account to this new web sign-in?')
+        : false;
+      session = await auth.signUp({
+        email,
+        password,
+        displayName: displayNameRaw.trim() || null,
+        upgradeCurrentGuest,
+      });
+      window.alert(upgradeCurrentGuest ? 'Sign-up successful. Guest account upgraded.' : 'Sign-up successful.');
+    } else {
+      window.alert('Unknown action. Type signin, signup, or signout.');
+      return;
+    }
+
+    if (!session) {
+      return;
+    }
+    sessionAccountId = session.accountId;
+    startMenu.setAccountSummary(formatAccountSummary(session));
+    if (session.accountId) {
+      const profile = await platform.profile.getProfile(session.accountId);
+      if (session.isAuthenticated && profile.displayName) {
+        startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
+      }
+    }
+  } catch (error) {
+    window.alert(`Auth request failed: ${getErrorMessage(error)}`);
   }
 }
 

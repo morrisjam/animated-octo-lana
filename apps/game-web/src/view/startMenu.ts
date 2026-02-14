@@ -13,7 +13,9 @@ interface StartMenuOptions {
   initialMode?: GameMode;
   initialLoadout?: PlayersById<CharacterId>;
   enabledModes?: GameMode[];
+  initialAccountSummary?: string;
   onStartMode(mode: GameMode, loadout: PlayersById<CharacterId>): void;
+  onOpenWebAuth?(): void;
   onOpenOnlineDevMenu?(): void;
   onOpenReplayReview?(): void;
   onReturnHome(): void;
@@ -118,6 +120,8 @@ export class StartMenu {
   private readonly startRowIndex: number;
   private readonly replayRowIndex: number | null;
   private readonly onlineDevRowIndex: number | null;
+  private readonly accountRowIndex: number | null;
+  private readonly accountButton: HTMLButtonElement | null;
 
   private currentMode: GameMode;
   private readonly enabledModes: GameMode[];
@@ -193,6 +197,25 @@ export class StartMenu {
     this.homePanel.appendChild(startRow);
     this.homeRows.push(startRow);
     this.startRowIndex = this.homeRows.length - 1;
+
+    let accountRowIndex: number | null = null;
+    let accountButton: HTMLButtonElement | null = null;
+    if (this.options.onOpenWebAuth) {
+      const accountRow = document.createElement('div');
+      accountRow.className = 'start-menu-row';
+      accountRow.appendChild(this.createRowLabel('Account'));
+      accountButton = document.createElement('button');
+      accountButton.type = 'button';
+      accountButton.className = 'start-action';
+      accountButton.textContent = this.options.initialAccountSummary ?? 'Guest Account (Sign In / Sign Up)';
+      accountButton.addEventListener('click', () => this.openWebAuth());
+      accountRow.appendChild(accountButton);
+      this.homePanel.appendChild(accountRow);
+      this.homeRows.push(accountRow);
+      accountRowIndex = this.homeRows.length - 1;
+    }
+    this.accountRowIndex = accountRowIndex;
+    this.accountButton = accountButton;
 
     let onlineDevRowIndex: number | null = null;
     if (this.options.onOpenOnlineDevMenu) {
@@ -516,6 +539,10 @@ export class StartMenu {
       this.startMatch();
       return;
     }
+    if (this.accountRowIndex !== null && this.homeRow === this.accountRowIndex) {
+      this.openWebAuth();
+      return;
+    }
     if (this.onlineDevRowIndex !== null && this.homeRow === this.onlineDevRowIndex) {
       this.openOnlineDevMenu();
       return;
@@ -568,6 +595,10 @@ export class StartMenu {
 
   private openReplayReview(): void {
     this.options.onOpenReplayReview?.();
+  }
+
+  private openWebAuth(): void {
+    this.options.onOpenWebAuth?.();
   }
 
   private openOnlineDevMenu(): void {
@@ -630,6 +661,13 @@ export class StartMenu {
     if (this.rafId) {
       window.cancelAnimationFrame(this.rafId);
     }
+  }
+
+  public setAccountSummary(summary: string): void {
+    if (!this.accountButton) {
+      return;
+    }
+    this.accountButton.textContent = summary;
   }
 }
 

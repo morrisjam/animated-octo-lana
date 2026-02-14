@@ -55,6 +55,13 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Ranked panel supports progression snapshot inspection (rating/league/LP/MR/provisional) with recent pre/post delta rows and profile-settings fallback when ranked APIs are unavailable.
 - `VITE_FEATURE_ONLINE_DIAGNOSTICS=true` enables a live diagnostics overlay with rollback/network/session counters and `Export JSON` capture.
 
+## Web auth flow (prototype)
+
+- Home menu includes an `Account` action in web builds.
+- Selecting it opens a prompt-driven flow for `signin`, `signup`, or `signout`.
+- `signup` supports guest upgrade when your current session is a guest account and you confirm upgrade.
+- API recovery responses (duplicate email, disabled account, invalid credentials) are surfaced in the prompt error message.
+
 ## Client architecture
 
 - `src/sim`: deterministic simulation and rules.

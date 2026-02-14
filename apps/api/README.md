@@ -8,6 +8,8 @@ Set `DATABASE_URL` to a PostgreSQL connection string.
 
 Optional:
 - `API_PORT` defaults to `8787`.
+- `PORT` overrides `API_PORT` when provided by your hosting platform.
+- `API_CORS_ORIGINS` is a comma-separated browser origin allowlist (defaults to localhost dev URLs).
 - `MATCHMAKING_TICKET_TTL_SECONDS` defaults to `90`.
 - `MATCHMAKING_SESSION_TTL_SECONDS` defaults to `30`.
 - `MATCHMAKING_SESSION_TOKEN_TTL_SECONDS` defaults to session TTL.

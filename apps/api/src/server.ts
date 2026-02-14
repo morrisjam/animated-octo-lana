@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import { randomUUID } from 'node:crypto';
 import { db } from './db';
 import {
@@ -41,6 +42,16 @@ import {
 } from './auth/webAuth';
 
 const app = Fastify({ logger: true });
+const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
+app.register(cors, {
+  origin: (origin, callback) => {
+    if (!origin || allowedCorsOrigins.includes('*') || allowedCorsOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('Origin not allowed by CORS'), false);
+  },
+});
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PROVIDERS = new Set(['steam', 'web']);
@@ -215,6 +226,16 @@ function parsePositiveIntegerEnv(value: string | undefined): number | undefined 
     return undefined;
   }
   return Math.floor(parsed);
+}
+
+function parseCorsOrigins(value: string | undefined): string[] {
+  if (!value) {
+    return ['http://localhost:5173', 'http://127.0.0.1:5173'];
+  }
+  return value
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
 }
 
 function parseConnectionPath(value: unknown): ConnectionPath | null {
@@ -2049,7 +2070,7 @@ app.put('/profile', async (request, reply) => {
   return result.rows[0];
 });
 
-const port = Number(process.env.API_PORT ?? 8787);
+const port = Number(process.env.PORT ?? process.env.API_PORT ?? 8787);
 app.listen({ port, host: '0.0.0.0' }).catch((error) => {
   app.log.error(error);
   process.exit(1);

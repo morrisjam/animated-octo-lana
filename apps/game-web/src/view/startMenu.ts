@@ -130,6 +130,61 @@ export class StartMenu {
   private matchSelection = 0;
   private activePanel: 'home' | 'match_over' = 'home';
   private rafId = 0;
+  private readonly keydownHandler = (event: KeyboardEvent): void => {
+    if (this.root.hidden) {
+      return;
+    }
+
+    if (this.activePanel === 'home') {
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.homeRow = this.clampHomeRow(this.homeRow - 1);
+        this.refreshHomeUI();
+        return;
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this.homeRow = this.clampHomeRow(this.homeRow + 1);
+        this.refreshHomeUI();
+        return;
+      }
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        this.applyHomeHorizontal(-1);
+        return;
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        this.applyHomeHorizontal(1);
+        return;
+      }
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        this.activateHomeRow();
+      }
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      this.setMatchSelection(this.matchSelection - 1);
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      this.setMatchSelection(this.matchSelection + 1);
+      return;
+    }
+    if (event.key === 'Escape' || event.key === 'Backspace') {
+      event.preventDefault();
+      this.options.onReturnHome();
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      this.matchButtons[this.matchSelection].click();
+    }
+  };
 
   constructor(private readonly options: StartMenuOptions) {
     this.enabledModes = sanitiseEnabledModes(options.enabledModes);
@@ -251,7 +306,7 @@ export class StartMenu {
 
     const padHint = document.createElement('p');
     padHint.className = 'start-pad-hint';
-    padHint.textContent = 'Pad controls: D-pad/left stick to move, A to confirm, Start to begin.';
+    padHint.textContent = 'Controls: D-pad/left stick to move, A/Enter to confirm, B/Esc to go back, Start to begin.';
     this.homePanel.appendChild(padHint);
 
     this.characterList = document.createElement('div');
@@ -450,56 +505,7 @@ export class StartMenu {
   }
 
   private bindKeyboardNavigation(): void {
-    window.addEventListener('keydown', (event) => {
-      if (this.root.hidden) {
-        return;
-      }
-
-      if (this.activePanel === 'home') {
-        if (event.key === 'ArrowUp') {
-          event.preventDefault();
-          this.homeRow = this.clampHomeRow(this.homeRow - 1);
-          this.refreshHomeUI();
-          return;
-        }
-        if (event.key === 'ArrowDown') {
-          event.preventDefault();
-          this.homeRow = this.clampHomeRow(this.homeRow + 1);
-          this.refreshHomeUI();
-          return;
-        }
-        if (event.key === 'ArrowLeft') {
-          event.preventDefault();
-          this.applyHomeHorizontal(-1);
-          return;
-        }
-        if (event.key === 'ArrowRight') {
-          event.preventDefault();
-          this.applyHomeHorizontal(1);
-          return;
-        }
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          this.activateHomeRow();
-        }
-        return;
-      }
-
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        this.setMatchSelection(this.matchSelection - 1);
-        return;
-      }
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        this.setMatchSelection(this.matchSelection + 1);
-        return;
-      }
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        this.matchButtons[this.matchSelection].click();
-      }
-    });
+    window.addEventListener('keydown', this.keydownHandler);
   }
 
   private applyHomeHorizontal(direction: 1 | -1): void {
@@ -661,6 +667,7 @@ export class StartMenu {
     if (this.rafId) {
       window.cancelAnimationFrame(this.rafId);
     }
+    window.removeEventListener('keydown', this.keydownHandler);
   }
 
   public setAccountSummary(summary: string): void {

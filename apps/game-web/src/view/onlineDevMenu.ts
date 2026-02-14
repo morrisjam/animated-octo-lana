@@ -26,6 +26,8 @@ interface OnlineDevMenuOptions {
 interface PadState {
   up: boolean;
   down: boolean;
+  left: boolean;
+  right: boolean;
   confirm: boolean;
   back: boolean;
   start: boolean;
@@ -341,14 +343,19 @@ function readButton(gamepad: Gamepad, index: number, threshold = 0.35): boolean 
 }
 
 function readPadState(gamepad: Gamepad): PadState {
+  const axisX = gamepad.axes[0] ?? 0;
   const axisY = gamepad.axes[1] ?? 0;
   const threshold = 0.55;
   const dpadUp = readButton(gamepad, 12);
   const dpadDown = readButton(gamepad, 13);
+  const dpadLeft = readButton(gamepad, 14);
+  const dpadRight = readButton(gamepad, 15);
 
   return {
     up: dpadUp || axisY < -threshold,
     down: dpadDown || axisY > threshold,
+    left: dpadLeft || axisX < -threshold,
+    right: dpadRight || axisX > threshold,
     confirm: readButton(gamepad, 0),
     back: readButton(gamepad, 1),
     start: readButton(gamepad, 9) || readButton(gamepad, 16),
@@ -367,6 +374,25 @@ async function parseErrorMessage(response: Response): Promise<string> {
 
 function stableStringify(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  if (target instanceof HTMLTextAreaElement) {
+    return true;
+  }
+  if (target instanceof HTMLSelectElement) {
+    return true;
+  }
+  if (target instanceof HTMLInputElement) {
+    return !['button', 'submit', 'reset', 'checkbox', 'radio'].includes(target.type);
+  }
+  return false;
 }
 
 export class OnlineDevMenu {
@@ -457,7 +483,9 @@ export class OnlineDevMenu {
   private readonly socialFriendsOutput: HTMLPreElement;
   private readonly socialRequestsOutput: HTMLPreElement;
   private readonly socialInvitesOutput: HTMLPreElement;
+  private readonly controlFocusIndexBySection = new Map<OnlineDevSectionId, number>();
   private selectedIndex = 0;
+  private navigationMode: 'sections' | 'controls' = 'sections';
   private rafId = 0;
   private pollIntervalId: number | null = null;
   private pendingMatchmakingRequest = false;
@@ -487,24 +515,63 @@ export class OnlineDevMenu {
     if (this.root.hidden) {
       return;
     }
+    if (isEditableTarget(event.target)) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.focusSectionList();
+      }
+      return;
+    }
     if (event.key === 'ArrowUp') {
       event.preventDefault();
-      this.setSelectedIndex(this.selectedIndex - 1);
+      if (this.navigationMode === 'controls') {
+        this.moveControlFocus(-1);
+      } else {
+        this.setSelectedIndex(this.selectedIndex - 1);
+        this.focusSectionList();
+      }
       return;
     }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      this.setSelectedIndex(this.selectedIndex + 1);
+      if (this.navigationMode === 'controls') {
+        this.moveControlFocus(1);
+      } else {
+        this.setSelectedIndex(this.selectedIndex + 1);
+        this.focusSectionList();
+      }
+      return;
+    }
+    if (event.key === 'ArrowLeft') {
+      if (this.navigationMode === 'controls') {
+        event.preventDefault();
+        this.nudgeFocusedControl(-1);
+      }
+      return;
+    }
+    if (event.key === 'ArrowRight') {
+      if (this.navigationMode === 'controls') {
+        event.preventDefault();
+        this.nudgeFocusedControl(1);
+      }
       return;
     }
     if (event.key === 'Escape' || event.key === 'Backspace') {
       event.preventDefault();
-      this.options.onClose();
+      if (this.navigationMode === 'controls') {
+        this.focusSectionList();
+      } else {
+        this.options.onClose();
+      }
       return;
     }
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      this.sectionButtons[this.selectedIndex]?.focus();
+      if (this.navigationMode === 'controls') {
+        this.activateFocusedControl();
+      } else {
+        this.focusFirstSectionControl();
+      }
     }
   };
 
@@ -537,7 +604,9 @@ export class OnlineDevMenu {
       button.className = 'online-dev-item';
       button.textContent = section.title;
       button.addEventListener('click', () => {
+        this.navigationMode = 'sections';
         this.setSelectedIndex(index);
+        button.focus();
       });
       list.appendChild(button);
       this.sectionButtons.push(button);
@@ -1249,7 +1318,7 @@ export class OnlineDevMenu {
 
     const hint = document.createElement('p');
     hint.className = 'online-dev-hint';
-    hint.textContent = 'Controls: Up/Down or D-pad to switch section. Esc/B to close.';
+    hint.textContent = 'Controls: Up/Down to navigate, Enter/A to select, Left/Right to adjust selectors, Esc/B to back.';
     panel.appendChild(hint);
 
     const closeButton = document.createElement('button');
@@ -1260,6 +1329,23 @@ export class OnlineDevMenu {
     panel.appendChild(closeButton);
 
     document.body.appendChild(this.root);
+    this.root.addEventListener('focusin', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const sectionId = this.getSelectedSectionId();
+      const controls = this.getSectionControls(sectionId);
+      const controlIndex = controls.indexOf(target);
+      if (controlIndex >= 0) {
+        this.navigationMode = 'controls';
+        this.controlFocusIndexBySection.set(sectionId, controlIndex);
+        return;
+      }
+      if (this.sectionButtons.includes(target as HTMLButtonElement)) {
+        this.navigationMode = 'sections';
+      }
+    });
     const connection = (navigator as Navigator & { connection?: { rtt?: number } }).connection;
     if (connection && typeof connection.rtt === 'number' && Number.isFinite(connection.rtt) && connection.rtt >= 0) {
       this.telemetryRttInput.value = String(Math.round(connection.rtt));
@@ -1284,6 +1370,7 @@ export class OnlineDevMenu {
     this.prevPadStateByIndex.clear();
     this.populateReplayPlayerDefault();
     this.setSelectedIndex(this.selectedIndex);
+    this.focusSectionList();
     this.ensurePolling();
     this.emitDiagnosticsUpdate();
     if (!this.socialAccount && !this.pendingSocialRequest) {
@@ -1294,6 +1381,7 @@ export class OnlineDevMenu {
   public hide(): void {
     this.root.hidden = true;
     this.prevPadStateByIndex.clear();
+    this.navigationMode = 'sections';
     this.stopPolling();
     this.emitDiagnosticsUpdate();
   }
@@ -1345,6 +1433,172 @@ export class OnlineDevMenu {
     this.replayPanel.hidden = section.id !== 'replay';
     this.rankedPanel.hidden = section.id !== 'ranked';
     this.socialPanel.hidden = section.id !== 'social';
+    if (this.navigationMode === 'controls' && this.getSectionControls(section.id).length === 0) {
+      this.navigationMode = 'sections';
+    }
+  }
+
+  private getSelectedSectionId(): OnlineDevSectionId {
+    return SECTIONS[this.selectedIndex]?.id ?? 'matchmaking';
+  }
+
+  private getSectionRoot(sectionId: OnlineDevSectionId): HTMLElement {
+    switch (sectionId) {
+      case 'matchmaking':
+        return this.matchmakingPanel;
+      case 'rooms':
+        return this.roomsPanel;
+      case 'replay':
+        return this.replayPanel;
+      case 'ranked':
+        return this.rankedPanel;
+      case 'social':
+        return this.socialPanel;
+      default:
+        return this.matchmakingPanel;
+    }
+  }
+
+  private getSectionControls(sectionId: OnlineDevSectionId): HTMLElement[] {
+    const root = this.getSectionRoot(sectionId);
+    const elements = Array.from(
+      root.querySelectorAll<HTMLElement>('button, select, input, textarea'),
+    );
+    return elements.filter((element) => {
+      if (element.hidden) {
+        return false;
+      }
+      if (element instanceof HTMLInputElement && element.type === 'hidden') {
+        return false;
+      }
+      if ('disabled' in element && (element as HTMLButtonElement | HTMLInputElement | HTMLSelectElement).disabled) {
+        return false;
+      }
+      if (element.offsetParent === null && element !== document.activeElement) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  private focusSectionList(): void {
+    this.navigationMode = 'sections';
+    const button = this.sectionButtons[this.selectedIndex];
+    button?.focus();
+  }
+
+  private focusFirstSectionControl(): void {
+    const sectionId = this.getSelectedSectionId();
+    const controls = this.getSectionControls(sectionId);
+    if (controls.length === 0) {
+      this.focusSectionList();
+      return;
+    }
+    const preferred = this.controlFocusIndexBySection.get(sectionId) ?? 0;
+    const clamped = Math.max(0, Math.min(controls.length - 1, preferred));
+    this.navigationMode = 'controls';
+    this.controlFocusIndexBySection.set(sectionId, clamped);
+    controls[clamped].focus();
+  }
+
+  private moveControlFocus(delta: 1 | -1): void {
+    const sectionId = this.getSelectedSectionId();
+    const controls = this.getSectionControls(sectionId);
+    if (controls.length === 0) {
+      this.focusSectionList();
+      return;
+    }
+    const active = document.activeElement as HTMLElement | null;
+    const currentFromActive = active ? controls.indexOf(active) : -1;
+    const current = currentFromActive >= 0
+      ? currentFromActive
+      : (this.controlFocusIndexBySection.get(sectionId) ?? 0);
+    const next = (current + delta + controls.length) % controls.length;
+    this.navigationMode = 'controls';
+    this.controlFocusIndexBySection.set(sectionId, next);
+    controls[next].focus();
+  }
+
+  private getFocusedControl(): HTMLElement | null {
+    const sectionId = this.getSelectedSectionId();
+    const controls = this.getSectionControls(sectionId);
+    if (controls.length === 0) {
+      return null;
+    }
+    const active = document.activeElement as HTMLElement | null;
+    if (active && controls.includes(active)) {
+      return active;
+    }
+    const index = this.controlFocusIndexBySection.get(sectionId) ?? 0;
+    const clamped = Math.max(0, Math.min(controls.length - 1, index));
+    this.controlFocusIndexBySection.set(sectionId, clamped);
+    return controls[clamped];
+  }
+
+  private activateFocusedControl(): void {
+    const control = this.getFocusedControl();
+    if (!control) {
+      this.focusSectionList();
+      return;
+    }
+    if (control instanceof HTMLSelectElement) {
+      this.nudgeFocusedControl(1);
+      return;
+    }
+    if (control instanceof HTMLInputElement) {
+      if (control.type === 'checkbox') {
+        control.checked = !control.checked;
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+      if (['button', 'submit', 'reset'].includes(control.type)) {
+        control.click();
+        return;
+      }
+      control.focus();
+      control.select?.();
+      return;
+    }
+    if (control instanceof HTMLButtonElement) {
+      control.click();
+      return;
+    }
+    control.focus();
+  }
+
+  private nudgeFocusedControl(delta: 1 | -1): void {
+    const control = this.getFocusedControl();
+    if (!control) {
+      return;
+    }
+    if (control instanceof HTMLSelectElement) {
+      const optionCount = control.options.length;
+      if (optionCount === 0) {
+        return;
+      }
+      const nextIndex = (control.selectedIndex + delta + optionCount) % optionCount;
+      control.selectedIndex = nextIndex;
+      control.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+    if (control instanceof HTMLInputElement) {
+      if (control.type === 'checkbox') {
+        control.checked = delta > 0;
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+      if (control.type === 'number' || control.type === 'range') {
+        if (delta > 0) {
+          control.stepUp();
+        } else {
+          control.stepDown();
+        }
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
   }
 
   private getSelectedRegions(): RegionId[] {
@@ -2701,17 +2955,43 @@ export class OnlineDevMenu {
           continue;
         }
         const state = readPadState(pad);
-        if (this.wasPressed(pad.index, state, 'up')) {
-          this.setSelectedIndex(this.selectedIndex - 1);
-        }
-        if (this.wasPressed(pad.index, state, 'down')) {
-          this.setSelectedIndex(this.selectedIndex + 1);
-        }
-        if (this.wasPressed(pad.index, state, 'back') || this.wasPressed(pad.index, state, 'start')) {
-          this.options.onClose();
-        }
-        if (this.wasPressed(pad.index, state, 'confirm')) {
-          this.sectionButtons[this.selectedIndex]?.focus();
+        if (this.navigationMode === 'sections') {
+          if (this.wasPressed(pad.index, state, 'up')) {
+            this.setSelectedIndex(this.selectedIndex - 1);
+            this.focusSectionList();
+          }
+          if (this.wasPressed(pad.index, state, 'down')) {
+            this.setSelectedIndex(this.selectedIndex + 1);
+            this.focusSectionList();
+          }
+          if (this.wasPressed(pad.index, state, 'confirm')) {
+            this.focusFirstSectionControl();
+          }
+          if (this.wasPressed(pad.index, state, 'back') || this.wasPressed(pad.index, state, 'start')) {
+            this.options.onClose();
+          }
+        } else {
+          if (this.wasPressed(pad.index, state, 'up')) {
+            this.moveControlFocus(-1);
+          }
+          if (this.wasPressed(pad.index, state, 'down')) {
+            this.moveControlFocus(1);
+          }
+          if (this.wasPressed(pad.index, state, 'left')) {
+            this.nudgeFocusedControl(-1);
+          }
+          if (this.wasPressed(pad.index, state, 'right')) {
+            this.nudgeFocusedControl(1);
+          }
+          if (this.wasPressed(pad.index, state, 'confirm')) {
+            this.activateFocusedControl();
+          }
+          if (this.wasPressed(pad.index, state, 'back')) {
+            this.focusSectionList();
+          }
+          if (this.wasPressed(pad.index, state, 'start')) {
+            this.options.onClose();
+          }
         }
         this.prevPadStateByIndex.set(pad.index, state);
       }

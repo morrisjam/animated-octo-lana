@@ -142,6 +142,12 @@ npm run api:test
 - `POST /friends/invites/send` send friend invite for room or queue context.
 - `GET /friends/invites` list active incoming friend invites.
 - `POST /friends/invites/:inviteId/cancel` cancel invite as sender or target.
+- `GET /social/privacy` read social privacy settings for authenticated account.
+- `PUT /social/privacy` update social privacy (`presenceVisibility`, `invitePermissions`).
+- `GET /social/moderation/controls` list muted/blocked controls owned by authenticated account.
+- `POST /social/moderation/mute` mute target account for social actions.
+- `POST /social/moderation/unmute` unmute target account.
+- `POST /social/moderation/unblock` unblock target account while preserving mute state.
 
 ## Matchmaking queue request example
 
@@ -223,6 +229,24 @@ Friend invite send (room):
 }
 ```
 
+Social privacy update:
+
+```json
+{
+  "presenceVisibility": "friends",
+  "invitePermissions": "friends"
+}
+```
+
+Social mute target:
+
+```json
+{
+  "targetAccountId": "22222222-2222-4222-8222-222222222222",
+  "reason": "spam_invites"
+}
+```
+
 ## Notes
 
 - Valid providers are `steam` and `web`.
@@ -239,6 +263,9 @@ Friend invite send (room):
 - Presence endpoint exposes privacy-safe activity fields (`queueType` or in-room boolean, not room code) for friend presence views.
 - Friend invite payload includes context plus web and Steam deep links for queue and room invites.
 - Presence and invite flows are rate-limited and audited in `presence_invite_events`.
+- Social privacy settings support `presenceVisibility` (`friends` or `private`) and `invitePermissions` (`friends` or `none`).
+- Block and mute controls are enforced for friend requests and invites in both sender and target directions.
+- Moderation actions and policy rejections are audited in `social_moderation_events` with actor, target, reason, metadata, and timestamp.
 - Supported queue regions are `us-east`, `us-west`, `eu-west`, and `ap-southeast`.
 - Queue match payload includes session token and peer metadata for handshake bootstrapping.
 - Session tokens expire and reconnect attempts use one-time ids for replay protection.

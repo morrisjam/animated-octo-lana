@@ -243,6 +243,16 @@ interface FriendRequestsQuery {
   status?: string;
 }
 
+interface SocialPrivacyUpdateBody {
+  presenceVisibility?: string;
+  invitePermissions?: string;
+}
+
+interface SocialModerationTargetBody {
+  targetAccountId?: string;
+  reason?: string;
+}
+
 interface PresenceUpdateBody {
   status?: string;
   activityType?: string;
@@ -519,6 +529,136 @@ function parsePositiveInteger(value: string | undefined): number | null {
   return parsed;
 }
 
+type SocialPresenceVisibility = 'friends' | 'private';
+type SocialInvitePermissions = 'friends' | 'none';
+
+interface SocialPrivacySettings {
+  presenceVisibility: SocialPresenceVisibility;
+  invitePermissions: SocialInvitePermissions;
+  updatedAt: string | null;
+  updatedByAccountId: string | null;
+}
+
+interface SocialModerationControl {
+  blocked: boolean;
+  muted: boolean;
+  reason: string | null;
+}
+
+const DEFAULT_SOCIAL_PRIVACY_SETTINGS: SocialPrivacySettings = {
+  presenceVisibility: 'friends',
+  invitePermissions: 'friends',
+  updatedAt: null,
+  updatedByAccountId: null,
+};
+
+function parseSocialPresenceVisibility(value: string | undefined): SocialPresenceVisibility | null {
+  if (!value) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'friends' || normalised === 'private') {
+    return normalised;
+  }
+  return null;
+}
+
+function parseSocialInvitePermissions(value: string | undefined): SocialInvitePermissions | null {
+  if (!value) {
+    return null;
+  }
+  const normalised = value.trim().toLowerCase();
+  if (normalised === 'friends' || normalised === 'none') {
+    return normalised;
+  }
+  return null;
+}
+
+async function getSocialPrivacySettings(accountId: string): Promise<SocialPrivacySettings> {
+  const result = await db.query(
+    `
+      SELECT presence_visibility, invite_permissions, updated_at, updated_by_account_id
+      FROM social_privacy_settings
+      WHERE account_id = $1
+      LIMIT 1
+    `,
+    [accountId],
+  );
+  if (!result.rowCount) {
+    return DEFAULT_SOCIAL_PRIVACY_SETTINGS;
+  }
+  const row = result.rows[0] as {
+    presence_visibility: SocialPresenceVisibility;
+    invite_permissions: SocialInvitePermissions;
+    updated_at: unknown;
+    updated_by_account_id: string | null;
+  };
+  return {
+    presenceVisibility: row.presence_visibility,
+    invitePermissions: row.invite_permissions,
+    updatedAt: row.updated_at ? toIsoString(row.updated_at) : null,
+    updatedByAccountId: row.updated_by_account_id ?? null,
+  };
+}
+
+async function getSocialModerationControl(ownerAccountId: string, targetAccountId: string): Promise<SocialModerationControl> {
+  const result = await db.query(
+    `
+      SELECT blocked, muted, reason
+      FROM social_moderation_controls
+      WHERE owner_account_id = $1 AND target_account_id = $2
+      LIMIT 1
+    `,
+    [ownerAccountId, targetAccountId],
+  );
+  if (!result.rowCount) {
+    return {
+      blocked: false,
+      muted: false,
+      reason: null,
+    };
+  }
+  const row = result.rows[0] as { blocked: boolean; muted: boolean; reason: string | null };
+  return {
+    blocked: row.blocked,
+    muted: row.muted,
+    reason: row.reason ?? null,
+  };
+}
+
+async function upsertSocialModerationControl(
+  ownerAccountId: string,
+  targetAccountId: string,
+  values: { blocked?: boolean; muted?: boolean; reason?: string | null },
+): Promise<SocialModerationControl> {
+  const result = await db.query(
+    `
+      INSERT INTO social_moderation_controls(owner_account_id, target_account_id, blocked, muted, reason, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (owner_account_id, target_account_id)
+      DO UPDATE SET
+        blocked = COALESCE($3, social_moderation_controls.blocked),
+        muted = COALESCE($4, social_moderation_controls.muted),
+        reason = COALESCE($5, social_moderation_controls.reason),
+        updated_at = NOW()
+      RETURNING blocked, muted, reason
+    `,
+    [
+      ownerAccountId,
+      targetAccountId,
+      values.blocked ?? null,
+      values.muted ?? null,
+      values.reason ?? null,
+    ],
+  );
+  const row = result.rows[0] as { blocked: boolean; muted: boolean; reason: string | null };
+  return {
+    blocked: row.blocked,
+    muted: row.muted,
+    reason: row.reason ?? null,
+  };
+}
+
 function parsePresenceStatus(value: string | undefined): PresenceStatus | null {
   if (!value) {
     return null;
@@ -594,6 +734,34 @@ async function logPresenceInviteEvent(
     );
   } catch {
     // Presence/invite audit logging must not fail request handling in prototype stage.
+  }
+}
+
+async function logSocialModerationEvent(
+  event: {
+    actorAccountId: string | null;
+    targetAccountId?: string | null;
+    action: 'mute' | 'unmute' | 'block' | 'unblock' | 'privacy_updated' | 'friend_request_blocked' | 'invite_blocked';
+    reason?: string | null;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  try {
+    await db.query(
+      `
+        INSERT INTO social_moderation_events(actor_account_id, target_account_id, action, reason, metadata)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
+      `,
+      [
+        event.actorAccountId,
+        event.targetAccountId ?? null,
+        event.action,
+        event.reason ?? null,
+        JSON.stringify(event.metadata ?? {}),
+      ],
+    );
+  } catch {
+    // Moderation event logging must not fail request handling in prototype stage.
   }
 }
 
@@ -1516,6 +1684,239 @@ app.post('/auth/steam/exchange', async (request, reply) => {
   }
 });
 
+app.get('/social/privacy', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (!await ensureAccountExists(accountId)) {
+    reply.code(404);
+    return { error: 'Account not found.' };
+  }
+
+  const privacy = await getSocialPrivacySettings(accountId);
+  return {
+    accountId,
+    presenceVisibility: privacy.presenceVisibility,
+    invitePermissions: privacy.invitePermissions,
+    updatedAt: privacy.updatedAt,
+    updatedByAccountId: privacy.updatedByAccountId,
+  };
+});
+
+app.put('/social/privacy', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (!await ensureAccountExists(accountId)) {
+    reply.code(404);
+    return { error: 'Account not found.' };
+  }
+
+  const body = (request.body ?? {}) as SocialPrivacyUpdateBody;
+  const providedPresenceVisibility = body.presenceVisibility !== undefined
+    ? parseSocialPresenceVisibility(body.presenceVisibility)
+    : null;
+  const providedInvitePermissions = body.invitePermissions !== undefined
+    ? parseSocialInvitePermissions(body.invitePermissions)
+    : null;
+
+  if (body.presenceVisibility !== undefined && !providedPresenceVisibility) {
+    reply.code(400);
+    return { error: 'presenceVisibility must be friends or private.' };
+  }
+  if (body.invitePermissions !== undefined && !providedInvitePermissions) {
+    reply.code(400);
+    return { error: 'invitePermissions must be friends or none.' };
+  }
+  if (body.presenceVisibility === undefined && body.invitePermissions === undefined) {
+    reply.code(400);
+    return { error: 'At least one privacy setting must be provided.' };
+  }
+
+  await db.query(
+    `
+      INSERT INTO social_privacy_settings(account_id, presence_visibility, invite_permissions, updated_at, updated_by_account_id)
+      VALUES (
+        $1,
+        COALESCE($2, $3),
+        COALESCE($4, $5),
+        NOW(),
+        $1
+      )
+      ON CONFLICT (account_id)
+      DO UPDATE SET
+        presence_visibility = COALESCE($2, social_privacy_settings.presence_visibility),
+        invite_permissions = COALESCE($4, social_privacy_settings.invite_permissions),
+        updated_at = NOW(),
+        updated_by_account_id = $1
+    `,
+    [
+      accountId,
+      providedPresenceVisibility,
+      DEFAULT_SOCIAL_PRIVACY_SETTINGS.presenceVisibility,
+      providedInvitePermissions,
+      DEFAULT_SOCIAL_PRIVACY_SETTINGS.invitePermissions,
+    ],
+  );
+
+  const updated = await getSocialPrivacySettings(accountId);
+  await logSocialModerationEvent({
+    actorAccountId: accountId,
+    action: 'privacy_updated',
+    metadata: {
+      presenceVisibility: updated.presenceVisibility,
+      invitePermissions: updated.invitePermissions,
+    },
+  });
+  return {
+    accountId,
+    presenceVisibility: updated.presenceVisibility,
+    invitePermissions: updated.invitePermissions,
+    updatedAt: updated.updatedAt,
+    updatedByAccountId: updated.updatedByAccountId,
+  };
+});
+
+app.get('/social/moderation/controls', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const rows = await db.query(
+    `
+      SELECT smc.target_account_id, smc.blocked, smc.muted, smc.reason, smc.updated_at, p.display_name
+      FROM social_moderation_controls smc
+      LEFT JOIN profiles p ON p.account_id = smc.target_account_id
+      WHERE smc.owner_account_id = $1
+        AND (smc.blocked = TRUE OR smc.muted = TRUE)
+      ORDER BY smc.updated_at DESC
+    `,
+    [accountId],
+  );
+
+  return {
+    controls: rows.rows,
+    count: rows.rowCount ?? 0,
+  };
+});
+
+app.post('/social/moderation/mute', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const body = (request.body ?? {}) as SocialModerationTargetBody;
+  const targetAccountId = String(body.targetAccountId ?? '').trim();
+  if (!isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID.' };
+  }
+  if (targetAccountId === accountId) {
+    reply.code(400);
+    return { error: 'Cannot mute yourself.' };
+  }
+  if (!await ensureAccountExists(targetAccountId)) {
+    reply.code(404);
+    return { error: 'Target account not found.' };
+  }
+  const reason = String(body.reason ?? '').trim() || null;
+  const control = await upsertSocialModerationControl(accountId, targetAccountId, {
+    muted: true,
+    reason,
+  });
+  await logSocialModerationEvent({
+    actorAccountId: accountId,
+    targetAccountId,
+    action: 'mute',
+    reason,
+  });
+  return {
+    targetAccountId,
+    ...control,
+  };
+});
+
+app.post('/social/moderation/unmute', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const body = (request.body ?? {}) as SocialModerationTargetBody;
+  const targetAccountId = String(body.targetAccountId ?? '').trim();
+  if (!isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID.' };
+  }
+  if (targetAccountId === accountId) {
+    reply.code(400);
+    return { error: 'Cannot unmute yourself.' };
+  }
+  if (!await ensureAccountExists(targetAccountId)) {
+    reply.code(404);
+    return { error: 'Target account not found.' };
+  }
+  const reason = String(body.reason ?? '').trim() || null;
+  const control = await upsertSocialModerationControl(accountId, targetAccountId, {
+    muted: false,
+    reason,
+  });
+  await logSocialModerationEvent({
+    actorAccountId: accountId,
+    targetAccountId,
+    action: 'unmute',
+    reason,
+  });
+  return {
+    targetAccountId,
+    ...control,
+  };
+});
+
+app.post('/social/moderation/unblock', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const body = (request.body ?? {}) as SocialModerationTargetBody;
+  const targetAccountId = String(body.targetAccountId ?? '').trim();
+  if (!isUuid(targetAccountId)) {
+    reply.code(400);
+    return { error: 'targetAccountId must be a UUID.' };
+  }
+  if (targetAccountId === accountId) {
+    reply.code(400);
+    return { error: 'Cannot unblock yourself.' };
+  }
+  if (!await ensureAccountExists(targetAccountId)) {
+    reply.code(404);
+    return { error: 'Target account not found.' };
+  }
+  const reason = String(body.reason ?? '').trim() || null;
+  const control = await upsertSocialModerationControl(accountId, targetAccountId, {
+    blocked: false,
+    reason,
+  });
+  await logSocialModerationEvent({
+    actorAccountId: accountId,
+    targetAccountId,
+    action: 'unblock',
+    reason,
+  });
+  return {
+    targetAccountId,
+    ...control,
+  };
+});
+
 app.post('/presence', async (request, reply) => {
   const accountId = getAuthenticatedAccountId(request);
   if (!accountId) {
@@ -1610,19 +2011,38 @@ app.get('/friends/presence', async (request, reply) => {
     display_name: string | null;
     created_at: unknown;
   }>;
-  const presenceEntries = presenceInviteService.listPresence(friendRows.map((row) => row.friend_account_id));
+  const friendAccountIds = friendRows.map((row) => row.friend_account_id);
+  const presenceEntries = presenceInviteService.listPresence(friendAccountIds);
   const presenceByAccountId = new Map(presenceEntries.map((entry) => [entry.accountId, entry]));
+  const privacyByAccountId = new Map<string, SocialPresenceVisibility>();
+  if (friendAccountIds.length > 0) {
+    const privacyRows = await db.query(
+      `
+        SELECT account_id, presence_visibility
+        FROM social_privacy_settings
+        WHERE account_id = ANY($1::uuid[])
+      `,
+      [friendAccountIds],
+    );
+    for (const row of privacyRows.rows as Array<{ account_id: string; presence_visibility: SocialPresenceVisibility }>) {
+      privacyByAccountId.set(row.account_id, row.presence_visibility);
+    }
+  }
 
   return {
     friends: friendRows.map((row) => {
       const presence = presenceByAccountId.get(row.friend_account_id);
+      const visibility = privacyByAccountId.get(row.friend_account_id) ?? DEFAULT_SOCIAL_PRIVACY_SETTINGS.presenceVisibility;
+      const hiddenByPrivacy = visibility === 'private';
+      const status = hiddenByPrivacy ? 'offline' : (presence?.status ?? 'offline');
+      const activity = hiddenByPrivacy ? { type: 'offline' } : (presence?.activity ?? { type: 'offline' });
       return {
         accountId: row.friend_account_id,
         displayName: row.display_name,
-        status: presence?.status ?? 'offline',
-        activity: presence?.activity ?? { type: 'offline' },
-        updatedAt: presence?.updatedAt ?? null,
-        isOnline: presence ? presence.status !== 'offline' : false,
+        status,
+        activity,
+        updatedAt: hiddenByPrivacy ? null : (presence?.updatedAt ?? null),
+        isOnline: status !== 'offline',
       };
     }),
     count: friendRows.length,
@@ -1649,6 +2069,62 @@ app.post('/friends/invites/send', async (request, reply) => {
   if (!await ensureAccountExists(targetAccountId)) {
     reply.code(404);
     return { error: 'Target account not found.' };
+  }
+  const actorControl = await getSocialModerationControl(accountId, targetAccountId);
+  if (actorControl.blocked || actorControl.muted) {
+    const reason = actorControl.blocked
+      ? 'sender_blocked_target'
+      : 'sender_muted_target';
+    await logSocialModerationEvent({
+      actorAccountId: accountId,
+      targetAccountId,
+      action: 'invite_blocked',
+      reason,
+      metadata: {
+        source: 'sender_control',
+      },
+    });
+    reply.code(409);
+    return {
+      error: actorControl.blocked
+        ? 'You have blocked this account. Unblock before sending invites.'
+        : 'You have muted this account. Unmute before sending invites.',
+    };
+  }
+  const targetControl = await getSocialModerationControl(targetAccountId, accountId);
+  if (targetControl.blocked || targetControl.muted) {
+    const reason = targetControl.blocked
+      ? 'target_blocked_sender'
+      : 'target_muted_sender';
+    await logSocialModerationEvent({
+      actorAccountId: accountId,
+      targetAccountId,
+      action: 'invite_blocked',
+      reason,
+      metadata: {
+        source: 'target_control',
+      },
+    });
+    reply.code(403);
+    return {
+      error: targetControl.blocked
+        ? 'This account has blocked you.'
+        : 'This account has muted you and is not accepting invites.',
+    };
+  }
+  const targetPrivacy = await getSocialPrivacySettings(targetAccountId);
+  if (targetPrivacy.invitePermissions === 'none') {
+    await logSocialModerationEvent({
+      actorAccountId: accountId,
+      targetAccountId,
+      action: 'invite_blocked',
+      reason: 'invite_permissions_none',
+      metadata: {
+        invitePermissions: targetPrivacy.invitePermissions,
+      },
+    });
+    reply.code(403);
+    return { error: 'This account is not accepting friend invites.' };
   }
   if (!await areFriends(accountId, targetAccountId)) {
     await logPresenceInviteEvent({
@@ -1840,6 +2316,48 @@ app.post('/friends/requests/send', async (request, reply) => {
     reply.code(404);
     return { error: 'Target account not found.' };
   }
+  const actorControl = await getSocialModerationControl(accountId, targetAccountId);
+  if (actorControl.blocked || actorControl.muted) {
+    const reason = actorControl.blocked
+      ? 'sender_blocked_target'
+      : 'sender_muted_target';
+    await logSocialModerationEvent({
+      actorAccountId: accountId,
+      targetAccountId,
+      action: 'friend_request_blocked',
+      reason,
+      metadata: {
+        source: 'sender_control',
+      },
+    });
+    reply.code(409);
+    return {
+      error: actorControl.blocked
+        ? 'You have blocked this account. Unblock before sending friend requests.'
+        : 'You have muted this account. Unmute before sending friend requests.',
+    };
+  }
+  const targetControl = await getSocialModerationControl(targetAccountId, accountId);
+  if (targetControl.blocked || targetControl.muted) {
+    const reason = targetControl.blocked
+      ? 'target_blocked_sender'
+      : 'target_muted_sender';
+    await logSocialModerationEvent({
+      actorAccountId: accountId,
+      targetAccountId,
+      action: 'friend_request_blocked',
+      reason,
+      metadata: {
+        source: 'target_control',
+      },
+    });
+    reply.code(403);
+    return {
+      error: targetControl.blocked
+        ? 'This account has blocked you.'
+        : 'This account has muted you and is not accepting friend requests.',
+    };
+  }
 
   const pair = orderAccountPair(accountId, targetAccountId);
   const existingFriendship = await db.query(
@@ -1887,30 +2405,6 @@ app.post('/friends/requests/send', async (request, reply) => {
       error: 'Incoming friend request already exists from this account.',
       recovery: `Accept request ${String((existingIncoming.rows[0] as { request_id: number }).request_id)} instead.`,
     };
-  }
-
-  const existingBlock = await db.query(
-    `
-      SELECT requester_account_id
-      FROM friend_requests
-      WHERE (
-        (requester_account_id = $1 AND target_account_id = $2)
-        OR (requester_account_id = $2 AND target_account_id = $1)
-      )
-      AND status = 'blocked'
-      ORDER BY updated_at DESC
-      LIMIT 1
-    `,
-    [accountId, targetAccountId],
-  );
-  if (existingBlock.rowCount) {
-    const blocker = (existingBlock.rows[0] as { requester_account_id: string }).requester_account_id;
-    if (blocker === accountId) {
-      reply.code(409);
-      return { error: 'You have blocked this account. Unblock flow is required before sending friend requests.' };
-    }
-    reply.code(403);
-    return { error: 'This account has blocked you.' };
   }
 
   const created = await db.query(
@@ -2210,8 +2704,31 @@ app.post('/friends/block', async (request, reply) => {
       `,
       [accountId, targetAccountId, blockReason],
     );
+    await client.query(
+      `
+        INSERT INTO social_moderation_controls(owner_account_id, target_account_id, blocked, muted, reason, updated_at)
+        VALUES ($1, $2, TRUE, COALESCE((
+          SELECT muted
+          FROM social_moderation_controls
+          WHERE owner_account_id = $1 AND target_account_id = $2
+          LIMIT 1
+        ), FALSE), $3, NOW())
+        ON CONFLICT (owner_account_id, target_account_id)
+        DO UPDATE SET
+          blocked = TRUE,
+          reason = COALESCE($3, social_moderation_controls.reason),
+          updated_at = NOW()
+      `,
+      [accountId, targetAccountId, blockReason],
+    );
 
     await client.query('COMMIT');
+    await logSocialModerationEvent({
+      actorAccountId: accountId,
+      targetAccountId,
+      action: 'block',
+      reason: blockReason,
+    });
     return {
       blocked: true,
       request: blockInsert.rows[0],

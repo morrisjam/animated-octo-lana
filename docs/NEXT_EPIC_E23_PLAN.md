@@ -57,4 +57,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S1.16` (Asset budgets and validation checks) is complete.
 - `S1.17` (Audio event bus and routing) is complete.
 - `S1.18` (Adaptive music state system) is complete.
-- Next recommended slice: `S1.19` Voice line and callout system.
+- `S1.19` (Voice line and callout system) is complete.
+- Next recommended slice: `S1.20` Mix, loudness, and accessibility controls.

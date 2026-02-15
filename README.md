@@ -71,6 +71,7 @@ npm run migrate -w @gravity-well/api
 - Asset budget validation: `docs/ASSET_BUDGET_VALIDATION.md`
 - Audio event bus and routing: `docs/AUDIO_EVENT_BUS_ROUTING.md`
 - Adaptive music state system: `docs/ADAPTIVE_MUSIC_STATE_SYSTEM.md`
+- Voice line and callout system: `docs/VOICE_LINE_CALLOUT_SYSTEM.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

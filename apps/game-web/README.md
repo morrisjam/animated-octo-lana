@@ -149,6 +149,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - VFX combat events in `src/view/vfx/runtime.ts` emit typed combat audio events through `src/main.ts` wiring, not clip-path logic in sim.
 - Missing route diagnostics are explicit; debug mode uses strict fail behavior.
 - Adaptive music state controller (`src/view/audio/musicState.ts`) switches `menu`, `neutral`, `launch`, and `end` states with configurable fades.
+- Voice callout system (`src/view/audio/voiceLines.ts`) provides locale fallback, priority, cooldown, and anti-spam line selection per character voice profile.
 
 ## Replay scripts
 

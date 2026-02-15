@@ -54,6 +54,10 @@ const DEFAULT_ROUTE_TABLE: AudioRouteTable = {
     bus: 'voice',
     cue: { waveform: 'triangle', frequencyHz: 320, durationSeconds: 0.15, gain: 0.014 },
   },
+  'voice.callout': {
+    bus: 'voice',
+    cue: { waveform: 'triangle', frequencyHz: 300, durationSeconds: 0.14, gain: 0.013 },
+  },
 };
 
 type MissingEventPolicy = 'warn' | 'throw';

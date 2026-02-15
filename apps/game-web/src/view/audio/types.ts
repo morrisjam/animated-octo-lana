@@ -13,7 +13,8 @@ export type AudioEventType =
   | 'music.neutral'
   | 'music.launch'
   | 'music.end'
-  | 'voice.round_start';
+  | 'voice.round_start'
+  | 'voice.callout';
 
 export interface AudioToneCue {
   waveform: OscillatorType;

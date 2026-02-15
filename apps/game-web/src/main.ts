@@ -31,6 +31,7 @@ import { createScene, resizeScene } from './view/scene';
 import { createAudioSystem } from './view/audio/system';
 import type { CombatVfxEvent } from './view/vfx/types';
 import { createMusicStateController, type MusicState } from './view/audio/musicState';
+import { createVoiceCalloutSystem } from './view/audio/voiceLines';
 import {
   createStartMenu,
   type GameMode,
@@ -105,6 +106,12 @@ if (!matchInfo || !hudRoot) {
 const audioSystem = createAudioSystem({
   missingEventPolicy: runtimeConfig.features.debugToolsEnabled ? 'throw' : 'warn',
 });
+const voiceCalloutSystem = createVoiceCalloutSystem({
+  locale: typeof navigator?.language === 'string' ? navigator.language : 'en-US',
+  emitAudioEvent: (event) => {
+    audioSystem.emit(event);
+  },
+});
 const sceneContext = createScene(canvas, {
   onCombatAudioCue: (event, cue) => {
     audioSystem.emit({
@@ -118,6 +125,21 @@ const sceneContext = createScene(canvas, {
         gain: cue.gain,
       },
     });
+    const calloutEvent = event.type === 'launch'
+      ? 'launch_hit'
+      : event.type === 'parry'
+        ? 'parry_success'
+        : event.type === 'dunk'
+          ? 'dunk_hit'
+          : null;
+    if (calloutEvent) {
+      voiceCalloutSystem.trigger({
+        playerId: event.playerId,
+        characterId: event.characterId,
+        event: calloutEvent,
+        timeSeconds: performance.now() / 1000,
+      });
+    }
   },
 });
 const hud = createHud();
@@ -1165,6 +1187,12 @@ function resetRoundState(): void {
   const showDebugDiagnostics = runtimeConfig.features.debugToolsEnabled;
   hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
   hud.updateRollbackDiagnostics(showDebugDiagnostics && rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null);
+  voiceCalloutSystem.trigger({
+    playerId: 'P1',
+    characterId: state.players.P1.characterId,
+    event: 'round_start',
+    timeSeconds: performance.now() / 1000,
+  });
 }
 
 function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
@@ -1559,6 +1587,12 @@ function onRoundWin(winner: PlayerId): void {
   if (p1RoundWins >= 2 || p2RoundWins >= 2) {
     persistRollbackDiagnostics('match_over');
     appPhase = 'match_over';
+    voiceCalloutSystem.trigger({
+      playerId: winner,
+      characterId: state.players[winner].characterId,
+      event: 'match_win',
+      timeSeconds: performance.now() / 1000,
+    });
     void platform.presence.setStatus('match_over');
     startMenu.showMatchOver(winner, p1RoundWins, p2RoundWins);
     hudRoot.style.visibility = 'hidden';

@@ -23,6 +23,7 @@ Route gameplay/view audio through typed events and named buses, without clip-pat
   - `music.end`
 - Voice:
   - `voice.round_start`
+  - `voice.callout`
 
 Combat events are emitted from VFX runtime callback wiring in `src/main.ts` when render combat events fire.
 

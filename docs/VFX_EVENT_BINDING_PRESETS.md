@@ -33,5 +33,4 @@ Each preset can define:
 ## Runtime notes
 - Render loop emits VFX events each frame and updates transient effect lifetimes.
 - Timeline rewinds (round reset, replay seek) clear active transient VFX safely.
-- Audio cues use a lightweight WebAudio oscillator fallback path and no-op on unsupported contexts.
-
+- Audio cue data is emitted as typed combat audio events and routed by the shared audio event bus (`src/view/audio`).

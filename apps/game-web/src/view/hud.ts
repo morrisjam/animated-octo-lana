@@ -29,6 +29,8 @@ export interface RuntimeMemoryDiagnosticsView {
   vfxBudgeted: number;
   vfxActive: number;
   projectilesActive: number;
+  audioEventsRouted: number;
+  audioMissingRoutes: number;
 }
 
 export interface HudController {
@@ -138,6 +140,7 @@ export function createHud(): HudController {
         rows.push(
           `<div class="row">Asset bytes loaded: ${memoryDiagnostics.assetBytesLoaded} | Texture budgeted: ${memoryDiagnostics.textureBytesBudgeted} | Mesh triangles budgeted: ${memoryDiagnostics.meshTrianglesBudgeted}</div>`,
           `<div class="row">VFX emitters budgeted: ${memoryDiagnostics.vfxBudgeted} | VFX active: ${memoryDiagnostics.vfxActive} | Projectiles active: ${memoryDiagnostics.projectilesActive}</div>`,
+          `<div class="row">Audio routed: ${memoryDiagnostics.audioEventsRouted} | Missing audio routes: ${memoryDiagnostics.audioMissingRoutes}</div>`,
         );
       }
 

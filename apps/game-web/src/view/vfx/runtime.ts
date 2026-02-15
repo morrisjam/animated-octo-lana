@@ -27,78 +27,14 @@ interface ActiveCombatVfx {
   endOpacity: number;
 }
 
-class CombatVfxAudioCuePlayer {
-  private context: AudioContext | null = null;
-
-  play(cue: VfxSoundCuePreset, pan: number): void {
-    const context = this.getContext();
-    if (!context) {
-      return;
-    }
-
-    if (context.state === 'suspended') {
-      void context.resume().catch(() => undefined);
-    }
-
-    const oscillator = context.createOscillator();
-    oscillator.type = cue.waveform;
-    oscillator.frequency.value = cue.frequencyHz;
-
-    const gain = context.createGain();
-    const now = context.currentTime;
-    const duration = Math.max(0.03, cue.durationSeconds);
-    const peakGain = Math.max(0.0002, cue.gain);
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.linearRampToValueAtTime(peakGain, now + Math.min(0.02, duration * 0.35));
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-
-    oscillator.connect(gain);
-    this.connectWithOptionalPan(context, gain, pan);
-    oscillator.start(now);
-    oscillator.stop(now + duration);
-  }
-
-  dispose(): void {
-    if (!this.context) {
-      return;
-    }
-    void this.context.close().catch(() => undefined);
-    this.context = null;
-  }
-
-  private getContext(): AudioContext | null {
-    if (this.context) {
-      return this.context;
-    }
-    const globalWindow = globalThis as Window & { webkitAudioContext?: typeof AudioContext };
-    const AudioContextCtor = globalWindow.AudioContext ?? globalWindow.webkitAudioContext;
-    if (!AudioContextCtor) {
-      return null;
-    }
-    try {
-      this.context = new AudioContextCtor();
-    } catch {
-      this.context = null;
-    }
-    return this.context;
-  }
-
-  private connectWithOptionalPan(context: AudioContext, source: AudioNode, pan: number): void {
-    if ('createStereoPanner' in context) {
-      const stereoPanner = context.createStereoPanner();
-      stereoPanner.pan.value = THREE.MathUtils.clamp(pan, -1, 1);
-      source.connect(stereoPanner);
-      stereoPanner.connect(context.destination);
-      return;
-    }
-    source.connect(context.destination);
-  }
+export interface CombatVfxRuntimeOptions {
+  onAudioCue?: (event: CombatVfxEvent, cue: VfxSoundCuePreset) => void;
 }
 
 export interface CombatVfxRuntime {
   scene: THREE.Scene;
   active: ActiveCombatVfx[];
-  audio: CombatVfxAudioCuePlayer;
+  onAudioCue?: (event: CombatVfxEvent, cue: VfxSoundCuePreset) => void;
 }
 
 function createRingMaterial(color: string, opacity: number): THREE.MeshBasicMaterial {
@@ -218,11 +154,11 @@ function disposeEffect(runtime: CombatVfxRuntime, effect: ActiveCombatVfx): void
   effect.material.dispose();
 }
 
-export function createCombatVfxRuntime(scene: THREE.Scene): CombatVfxRuntime {
+export function createCombatVfxRuntime(scene: THREE.Scene, options?: CombatVfxRuntimeOptions): CombatVfxRuntime {
   return {
     scene,
     active: [],
-    audio: new CombatVfxAudioCuePlayer(),
+    onAudioCue: options?.onAudioCue,
   };
 }
 
@@ -276,15 +212,13 @@ export function emitCombatVfxEvents(
     if (preset.flash) {
       spawnEffect(runtime, createFlashNode(event, preset.flash), gameTimeSeconds);
     }
-    if (preset.sound) {
-      const pan = THREE.MathUtils.clamp(event.position.x / 30, -1, 1);
-      runtime.audio.play(preset.sound, pan);
+    if (preset.sound && runtime.onAudioCue) {
+      runtime.onAudioCue(event, preset.sound);
     }
   }
 }
 
 export function disposeCombatVfxRuntime(runtime: CombatVfxRuntime): void {
   clearCombatVfxRuntime(runtime);
-  runtime.audio.dispose();
 }
 

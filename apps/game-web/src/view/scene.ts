@@ -4,6 +4,7 @@ import { ARENA_RADIUS } from '../sim/constants';
 import { DEFAULT_CHARACTER_LOADOUT } from '../sim/characters';
 import { createCharacterVisualHandle, type CharacterVisualHandle } from './characterVisual';
 import { createCombatVfxRuntime, type CombatVfxRuntime } from './vfx/runtime';
+import type { CombatVfxEvent, VfxSoundCuePreset } from './vfx/types';
 
 const MAX_RENDER_PIXEL_RATIO = 1.25;
 
@@ -31,6 +32,10 @@ export interface SceneContext {
   projectileMeshes: Map<number, THREE.Mesh>;
   combatVfxRuntime: CombatVfxRuntime;
   lastRenderSnapshot: RenderSnapshot | null;
+}
+
+export interface SceneOptions {
+  onCombatAudioCue?: (event: CombatVfxEvent, cue: VfxSoundCuePreset) => void;
 }
 
 function getClampedPixelRatio(): number {
@@ -135,7 +140,7 @@ function createPlayerIndicators(scene: THREE.Scene): PlayersById<PlayerIndicator
   };
 }
 
-export function createScene(canvas: HTMLCanvasElement): SceneContext {
+export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): SceneContext {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
   renderer.setPixelRatio(getClampedPixelRatio());
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -156,7 +161,9 @@ export function createScene(canvas: HTMLCanvasElement): SceneContext {
   addStars(scene);
   const { playerVisuals, playerMeshes } = createPlayerVisuals(scene);
   const playerIndicators = createPlayerIndicators(scene);
-  const combatVfxRuntime = createCombatVfxRuntime(scene);
+  const combatVfxRuntime = createCombatVfxRuntime(scene, {
+    onAudioCue: options?.onCombatAudioCue,
+  });
 
   return {
     renderer,

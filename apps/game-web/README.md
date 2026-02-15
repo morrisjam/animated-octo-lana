@@ -142,6 +142,13 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 
 - With debug tools enabled, HUD debug diagnostics include budgeted texture bytes, mesh triangles, VFX emitter counts, active VFX count, projectile count, and preloaded asset bytes.
 
+## Audio event bus and routing
+
+- Typed audio events and buses live under `src/view/audio`.
+- Router supports `master`, `music`, `sfx`, and `voice` buses with WebAudio gain-node routing.
+- VFX combat events in `src/view/vfx/runtime.ts` emit typed combat audio events through `src/main.ts` wiring, not clip-path logic in sim.
+- Missing route diagnostics are explicit; debug mode uses strict fail behavior.
+
 ## Replay scripts
 
 From repo root:

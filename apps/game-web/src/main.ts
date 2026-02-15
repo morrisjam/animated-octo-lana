@@ -28,6 +28,8 @@ import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay'
 import { createReplayViewer } from './view/replayViewer';
 import { renderFrame } from './view/render';
 import { createScene, resizeScene } from './view/scene';
+import { createAudioSystem } from './view/audio/system';
+import type { CombatVfxEvent } from './view/vfx/types';
 import {
   createStartMenu,
   type GameMode,
@@ -58,6 +60,22 @@ const ROLLBACK_DIAGNOSTICS_STORAGE_KEY = 'gravity_well.rollback_diagnostics.v1';
 const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
 
+function toCombatAudioEventType(eventType: CombatVfxEvent['type']): 'combat.boost' | 'combat.launch' | 'combat.parry' | 'combat.projectile' | 'combat.dunk' {
+  switch (eventType) {
+    case 'boost':
+      return 'combat.boost';
+    case 'launch':
+      return 'combat.launch';
+    case 'parry':
+      return 'combat.parry';
+    case 'projectile':
+      return 'combat.projectile';
+    case 'dunk':
+    default:
+      return 'combat.dunk';
+  }
+}
+
 const canvas = document.querySelector<HTMLCanvasElement>('#game');
 if (!canvas) {
   throw new Error('Missing #game canvas element');
@@ -69,7 +87,24 @@ if (!matchInfo || !hudRoot) {
   throw new Error('Missing HUD match elements');
 }
 
-const sceneContext = createScene(canvas);
+const audioSystem = createAudioSystem({
+  missingEventPolicy: runtimeConfig.features.debugToolsEnabled ? 'throw' : 'warn',
+});
+const sceneContext = createScene(canvas, {
+  onCombatAudioCue: (event, cue) => {
+    audioSystem.emit({
+      type: toCombatAudioEventType(event.type),
+      playerId: event.playerId,
+      pan: Math.max(-1, Math.min(1, event.position.x / 30)),
+      cueOverride: {
+        waveform: cue.waveform,
+        frequencyHz: cue.frequencyHz,
+        durationSeconds: cue.durationSeconds,
+        gain: cue.gain,
+      },
+    });
+  },
+});
 const hud = createHud();
 const input = createCombinedInput([
   createKeyboardInput(),
@@ -1128,6 +1163,7 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
       },
     });
   }
+  audioSystem.emit({ type: 'music.match' });
   void platform.presence.setStatus('playing');
   pauseMenu.setPaused(false);
   pauseMenu.setCanRestartTraining(selectedMode === 'training');
@@ -1141,6 +1177,7 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
 function returnToHome(): void {
   persistRollbackDiagnostics('return_home');
   appPhase = 'home';
+  audioSystem.emit({ type: 'music.menu' });
   void platform.presence.setStatus('home');
   pauseMenu.setPaused(false);
   pauseMenu.setCanRestartTraining(false);
@@ -1199,6 +1236,7 @@ function getRollbackDiagnosticsView(session: RollbackSession): RollbackDiagnosti
 }
 
 function getRuntimeMemoryDiagnosticsView(snapshot: RenderSnapshot): RuntimeMemoryDiagnosticsView {
+  const audioDiagnostics = audioSystem.getDiagnostics();
   return {
     assetBytesLoaded: assetPreloadBytesLoaded,
     textureBytesBudgeted: assetBudgetReport.usage.textureBytes,
@@ -1206,6 +1244,8 @@ function getRuntimeMemoryDiagnosticsView(snapshot: RenderSnapshot): RuntimeMemor
     vfxBudgeted: assetBudgetReport.usage.vfxEmitters,
     vfxActive: sceneContext.combatVfxRuntime.active.length,
     projectilesActive: snapshot.projectiles.length,
+    audioEventsRouted: audioDiagnostics.routedEvents,
+    audioMissingRoutes: audioDiagnostics.missingRoutes,
   };
 }
 
@@ -1663,6 +1703,7 @@ syncTrainingFrameDataVisibility();
 void bootstrapPlatformProfile();
 void platform.presence.setStatus('home');
 startMenu.showHome();
+audioSystem.emit({ type: 'music.menu' });
 requestAnimationFrame(tick);
 
 window.addEventListener('resize', () => {
@@ -1675,5 +1716,6 @@ window.addEventListener('beforeunload', () => {
   replayViewer.dispose();
   diagnosticsOverlay?.dispose();
   input.dispose();
+  audioSystem.dispose();
   platform.dispose?.();
 });

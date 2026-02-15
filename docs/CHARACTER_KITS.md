@@ -51,6 +51,7 @@ Each `CharacterDefinition` now includes:
 - Renderer reads special projectile `visualId` from snapshot so projectile art can differ by character.
 - Renderer binds combat events (`boost`, `launch`, `parry`, `projectile`, `dunk`) to data-driven VFX presets (`src/view/vfx`), with per-profile overrides.
 - Asset manifests include budget hints for texture bytes, mesh triangles, and VFX emitters; build-time checks enforce project limits.
+- Audio playback routes through typed audio events and bus routing (`src/view/audio`) instead of hardcoded clip paths in gameplay logic.
 
 ## Extension points
 1. Model and animation loading:

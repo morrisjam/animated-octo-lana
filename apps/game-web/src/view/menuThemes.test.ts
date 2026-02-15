@@ -9,6 +9,7 @@ import {
 describe('menu theme registry', () => {
   test('includes default and resolves unknown ids to default', () => {
     expect(MENU_THEME_IDS.includes(DEFAULT_MENU_THEME_ID)).toBe(true);
+    expect(MENU_THEME_IDS.includes('high_contrast_v1')).toBe(true);
     expect(resolveMenuTheme(undefined).id).toBe(DEFAULT_MENU_THEME_ID);
     expect(resolveMenuTheme('').id).toBe(DEFAULT_MENU_THEME_ID);
     expect(resolveMenuTheme('missing-theme').id).toBe(DEFAULT_MENU_THEME_ID);
@@ -28,5 +29,7 @@ describe('menu theme registry', () => {
     expect(writes.get('--ui-menu-backdrop-start')).toBe(theme.tokens.menuBackdropStart);
     expect(writes.get('--ui-button-active-bg')).toBe(theme.tokens.buttonActiveBg);
     expect(writes.get('--ui-font-family')).toBe(theme.tokens.fontFamily);
+    expect(writes.get('--ui-hud-panel-border')).toBe(theme.tokens.hudPanelBorder);
+    expect(writes.get('--ui-hud-subtitle-text')).toBe(theme.tokens.hudSubtitleText);
   });
 });

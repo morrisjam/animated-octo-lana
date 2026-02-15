@@ -20,6 +20,18 @@ export interface MenuThemeTokenOverrides {
   rowFocusGlow?: string;
   successText?: string;
   dangerText?: string;
+  hudPanelBorder?: string;
+  hudLabelText?: string;
+  hudMetaText?: string;
+  hudTrackBg?: string;
+  hudP1FillStart?: string;
+  hudP2FillStart?: string;
+  hudStatusBorder?: string;
+  hudFrameText?: string;
+  hudFrameHintText?: string;
+  hudSubtitleBg?: string;
+  hudSubtitleBorder?: string;
+  hudSubtitleText?: string;
 }
 
 export interface MenuThemeDefinition {
@@ -56,6 +68,18 @@ export const MENU_THEME_DEFINITIONS: MenuThemeDefinition[] = [
       rowFocusGlow: 'rgba(255, 214, 107, 0.42)',
       successText: '#9de5bb',
       dangerText: '#ff9d9d',
+      hudPanelBorder: 'rgba(255, 193, 118, 0.34)',
+      hudLabelText: '#ffe8cb',
+      hudMetaText: '#d7bc9e',
+      hudTrackBg: 'rgba(255, 235, 209, 0.16)',
+      hudP1FillStart: '#ff8d3a',
+      hudP2FillStart: '#ff4f6f',
+      hudStatusBorder: 'rgba(255, 193, 118, 0.34)',
+      hudFrameText: '#ffdcbc',
+      hudFrameHintText: '#e8bb92',
+      hudSubtitleBg: 'rgba(32, 18, 8, 0.9)',
+      hudSubtitleBorder: 'rgba(255, 193, 118, 0.42)',
+      hudSubtitleText: '#fff0dc',
     },
   },
   {
@@ -84,6 +108,58 @@ export const MENU_THEME_DEFINITIONS: MenuThemeDefinition[] = [
       rowFocusGlow: 'rgba(159, 249, 210, 0.4)',
       successText: '#9de5bb',
       dangerText: '#ffb8b8',
+      hudPanelBorder: 'rgba(133, 232, 255, 0.34)',
+      hudLabelText: '#dbf8ff',
+      hudMetaText: '#95c8d3',
+      hudTrackBg: 'rgba(219, 248, 255, 0.16)',
+      hudP1FillStart: '#21c9ff',
+      hudP2FillStart: '#7487ff',
+      hudStatusBorder: 'rgba(133, 232, 255, 0.34)',
+      hudFrameText: '#c8f2ff',
+      hudFrameHintText: '#9fd8e8',
+      hudSubtitleBg: 'rgba(6, 22, 30, 0.9)',
+      hudSubtitleBorder: 'rgba(133, 232, 255, 0.42)',
+      hudSubtitleText: '#ebfbff',
+    },
+  },
+  {
+    id: 'high_contrast_v1',
+    label: 'High Contrast V1',
+    description: 'Accessibility-forward preset with maximum UI and HUD readability.',
+    tokens: {
+      bg: '#000000',
+      panel: 'rgba(0, 0, 0, 0.94)',
+      text: '#ffffff',
+      mutedText: '#f0f0f0',
+      p1: '#00d1ff',
+      p2: '#ff7a00',
+      warn: '#ffe600',
+      fontFamily: '"Atkinson Hyperlegible", "Segoe UI", sans-serif',
+      menuBackdropStart: 'rgba(0, 0, 0, 0.9)',
+      menuBackdropEnd: 'rgba(0, 0, 0, 0.98)',
+      panelBorder: 'rgba(255, 255, 255, 0.78)',
+      buttonBg: 'rgba(0, 0, 0, 0.96)',
+      buttonBorder: 'rgba(255, 255, 255, 0.72)',
+      buttonActiveBg: 'rgba(255, 230, 0, 0.24)',
+      buttonActiveBorder: 'rgba(255, 230, 0, 0.94)',
+      rowBg: 'rgba(0, 0, 0, 0.9)',
+      rowBorder: 'rgba(255, 255, 255, 0.56)',
+      rowFocusBorder: 'rgba(255, 230, 0, 0.94)',
+      rowFocusGlow: 'rgba(255, 230, 0, 0.5)',
+      successText: '#71ff8f',
+      dangerText: '#ff8f8f',
+      hudPanelBorder: 'rgba(255, 255, 255, 0.78)',
+      hudLabelText: '#ffffff',
+      hudMetaText: '#f0f0f0',
+      hudTrackBg: 'rgba(255, 255, 255, 0.24)',
+      hudP1FillStart: '#00b7e5',
+      hudP2FillStart: '#ff5f00',
+      hudStatusBorder: 'rgba(255, 255, 255, 0.8)',
+      hudFrameText: '#ffffff',
+      hudFrameHintText: '#f0f0f0',
+      hudSubtitleBg: 'rgba(0, 0, 0, 0.98)',
+      hudSubtitleBorder: 'rgba(255, 255, 255, 0.86)',
+      hudSubtitleText: '#ffffff',
     },
   },
 ];

@@ -26,6 +26,18 @@ export interface MenuThemeTokens {
   rowFocusGlow: string;
   successText: string;
   dangerText: string;
+  hudPanelBorder: string;
+  hudLabelText: string;
+  hudMetaText: string;
+  hudTrackBg: string;
+  hudP1FillStart: string;
+  hudP2FillStart: string;
+  hudStatusBorder: string;
+  hudFrameText: string;
+  hudFrameHintText: string;
+  hudSubtitleBg: string;
+  hudSubtitleBorder: string;
+  hudSubtitleText: string;
 }
 
 export interface MenuTheme {
@@ -67,6 +79,18 @@ const DEFAULT_MENU_THEME_TOKENS: MenuThemeTokens = {
   rowFocusGlow: 'rgba(255, 203, 97, 0.35)',
   successText: '#7cd8a9',
   dangerText: '#ff9e9e',
+  hudPanelBorder: 'rgba(167, 195, 255, 0.22)',
+  hudLabelText: '#dbe8ff',
+  hudMetaText: '#b4c9f3',
+  hudTrackBg: 'rgba(255, 255, 255, 0.12)',
+  hudP1FillStart: '#2f8bff',
+  hudP2FillStart: '#ff4a9f',
+  hudStatusBorder: 'rgba(167, 195, 255, 0.22)',
+  hudFrameText: '#c7d8ff',
+  hudFrameHintText: '#9fb7eb',
+  hudSubtitleBg: 'rgba(6, 12, 30, 0.86)',
+  hudSubtitleBorder: 'rgba(167, 195, 255, 0.28)',
+  hudSubtitleText: '#e7f0ff',
 };
 
 const MENU_THEME_CSS_VAR_MAP: Record<keyof MenuThemeTokens, string> = {
@@ -91,6 +115,18 @@ const MENU_THEME_CSS_VAR_MAP: Record<keyof MenuThemeTokens, string> = {
   rowFocusGlow: '--ui-row-focus-glow',
   successText: '--ui-success-text',
   dangerText: '--ui-danger-text',
+  hudPanelBorder: '--ui-hud-panel-border',
+  hudLabelText: '--ui-hud-label-text',
+  hudMetaText: '--ui-hud-meta-text',
+  hudTrackBg: '--ui-hud-track-bg',
+  hudP1FillStart: '--ui-hud-p1-fill-start',
+  hudP2FillStart: '--ui-hud-p2-fill-start',
+  hudStatusBorder: '--ui-hud-status-border',
+  hudFrameText: '--ui-hud-frame-text',
+  hudFrameHintText: '--ui-hud-frame-hint-text',
+  hudSubtitleBg: '--ui-hud-subtitle-bg',
+  hudSubtitleBorder: '--ui-hud-subtitle-border',
+  hudSubtitleText: '--ui-hud-subtitle-text',
 };
 
 function mergeTokens(overrides: MenuThemeTokenOverrides): MenuThemeTokens {

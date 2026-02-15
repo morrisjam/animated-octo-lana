@@ -21,6 +21,18 @@
   --ui-row-focus-glow: rgba(255, 203, 97, 0.35);
   --ui-success-text: #7cd8a9;
   --ui-danger-text: #ff9e9e;
+  --ui-hud-panel-border: rgba(167, 195, 255, 0.22);
+  --ui-hud-label-text: #dbe8ff;
+  --ui-hud-meta-text: #b4c9f3;
+  --ui-hud-track-bg: rgba(255, 255, 255, 0.12);
+  --ui-hud-p1-fill-start: #2f8bff;
+  --ui-hud-p2-fill-start: #ff4a9f;
+  --ui-hud-status-border: rgba(167, 195, 255, 0.22);
+  --ui-hud-frame-text: #c7d8ff;
+  --ui-hud-frame-hint-text: #9fb7eb;
+  --ui-hud-subtitle-bg: rgba(6, 12, 30, 0.86);
+  --ui-hud-subtitle-border: rgba(167, 195, 255, 0.28);
+  --ui-hud-subtitle-text: #e7f0ff;
 }
 
 * { box-sizing: border-box; }
@@ -63,18 +75,18 @@ html, body {
   width: min(440px, 100%);
   max-width: 440px;
   background: var(--panel);
-  border: 1px solid rgba(167, 195, 255, 0.22);
+  border: 1px solid var(--ui-hud-panel-border);
   border-radius: 10px;
   padding: 10px 12px;
 }
 
 .panel.right { justify-self: end; text-align: right; }
-.label { font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
-.bar { margin-top: 8px; height: 12px; border-radius: 999px; background: rgba(255,255,255,.12); overflow: hidden; }
+.label { font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--ui-hud-label-text); }
+.bar { margin-top: 8px; height: 12px; border-radius: 999px; background: var(--ui-hud-track-bg); overflow: hidden; }
 .fill { height: 100%; width: 100%; transition: width .1s linear; }
-.fill.p1 { background: linear-gradient(90deg, #2f8bff, var(--p1)); }
-.fill.p2 { background: linear-gradient(90deg, #ff4a9f, var(--p2)); }
-.meta { margin-top: 6px; color: #b4c9f3; font-size: 12px; }
+.fill.p1 { background: linear-gradient(90deg, var(--ui-hud-p1-fill-start), var(--p1)); }
+.fill.p2 { background: linear-gradient(90deg, var(--ui-hud-p2-fill-start), var(--p2)); }
+.meta { margin-top: 6px; color: var(--ui-hud-meta-text); font-size: 12px; }
 
 #status {
   align-self: center;
@@ -84,7 +96,7 @@ html, body {
   padding: 8px 14px;
   background: var(--panel);
   border-radius: 8px;
-  border: 1px solid rgba(167, 195, 255, 0.22);
+  border: 1px solid var(--ui-hud-status-border);
 }
 
 #controls {
@@ -94,10 +106,10 @@ html, body {
   gap: 4px;
   text-align: center;
   font-size: 12px;
-  color: #b4c9f3;
+  color: var(--ui-hud-meta-text);
   background: var(--panel);
   border-radius: 8px;
-  border: 1px solid rgba(167, 195, 255, 0.22);
+  border: 1px solid var(--ui-hud-status-border);
   padding: 10px 12px;
 }
 
@@ -107,9 +119,9 @@ html, body {
   align-self: center;
   text-align: center;
   font-size: 12px;
-  color: #b4c9f3;
+  color: var(--ui-hud-meta-text);
   background: var(--panel);
-  border: 1px solid rgba(167, 195, 255, 0.22);
+  border: 1px solid var(--ui-hud-status-border);
   border-radius: 999px;
   padding: 5px 10px;
   margin-top: 8px;
@@ -120,18 +132,18 @@ html, body {
   margin-top: 8px;
   max-width: min(440px, 100%);
   background: var(--panel);
-  border: 1px solid rgba(167, 195, 255, 0.22);
+  border: 1px solid var(--ui-hud-panel-border);
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 12px;
-  color: #c7d8ff;
+  color: var(--ui-hud-frame-text);
 }
 
 #frameData .title {
   font-size: 12px;
   letter-spacing: .08em;
   text-transform: uppercase;
-  color: #b4c9f3;
+  color: var(--ui-hud-meta-text);
   margin-bottom: 6px;
 }
 
@@ -140,7 +152,7 @@ html, body {
 }
 
 #frameData .row.hint {
-  color: #9fb7eb;
+  color: var(--ui-hud-frame-hint-text);
   margin-bottom: 2px;
 }
 
@@ -149,18 +161,18 @@ html, body {
   margin-top: 8px;
   max-width: min(520px, 100%);
   background: var(--panel);
-  border: 1px solid rgba(167, 195, 255, 0.22);
+  border: 1px solid var(--ui-hud-panel-border);
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 12px;
-  color: #c7d8ff;
+  color: var(--ui-hud-frame-text);
 }
 
 #rollbackDiagnostics .title {
   font-size: 12px;
   letter-spacing: .08em;
   text-transform: uppercase;
-  color: #b4c9f3;
+  color: var(--ui-hud-meta-text);
   margin-bottom: 6px;
 }
 
@@ -176,9 +188,9 @@ html, body {
   max-width: min(720px, calc(100vw - 32px));
   padding: 8px 12px;
   border-radius: 8px;
-  background: rgba(6, 12, 30, 0.86);
-  border: 1px solid rgba(167, 195, 255, 0.28);
-  color: #e7f0ff;
+  background: var(--ui-hud-subtitle-bg);
+  border: 1px solid var(--ui-hud-subtitle-border);
+  color: var(--ui-hud-subtitle-text);
   font-size: 13px;
   text-align: center;
   pointer-events: none;

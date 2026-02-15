@@ -12,12 +12,14 @@ Run from repo root:
 
 ```bash
 npm run theme:validate
+npm run theme:contrast-check
 ```
 
 Workspace direct:
 
 ```bash
 npm run theme:validate -w @gravity-well/game-web
+npm run theme:contrast-check -w @gravity-well/game-web
 ```
 
 ## Build and CI integration
@@ -33,6 +35,8 @@ npm run theme:validate -w @gravity-well/game-web
   - keyboard left/right
   - controller left/right
 - Theme selection persists in settings as `menuThemeId`.
+- Presets include `high_contrast_v1` for readability-sensitive sessions.
 
 ## Report output
 - `apps/game-web/build-artifacts/menu-theme-validation-report.json`
+- `apps/game-web/build-artifacts/menu-theme-contrast-report.json`

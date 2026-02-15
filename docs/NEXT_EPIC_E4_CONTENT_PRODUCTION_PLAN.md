@@ -28,6 +28,7 @@ Status: in progress (`E4.1`, `E4.2` complete; `E4.3` active)
 ## Next implementation target
 - Start `E4.3` (visual content and menu theming).
 - `S5.1` (menu theme registry + runtime application + persistence) is complete.
+- `S5.2` (HUD theme tokens + high-contrast preset + contrast checker) is complete.
 - Keep `E4.1` QA harness in CI while tuning content.
 - `S4.6` (balance profile registry + validation workflow) is complete.
 - `S4.7` (training telemetry capture and export) is complete.

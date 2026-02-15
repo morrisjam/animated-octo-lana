@@ -76,17 +76,20 @@ From repo root:
 
 ```bash
 npm run theme:validate
+npm run theme:contrast-check
 ```
 
 From this workspace:
 
 ```bash
 npm run theme:validate
+npm run theme:contrast-check
 ```
 
 Runtime:
 - Open `Settings` in the home flow.
 - Select `Menu Theme` and cycle options with mouse click, keyboard Left/Right, or controller Left/Right.
+- Includes accessibility preset: `high_contrast_v1`.
 
 ## Balance patch notes generator
 

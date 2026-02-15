@@ -24,6 +24,7 @@ npm run character:new -- --id striker --display-name "Striker"
 npm run character:qa
 npm run balance:validate
 npm run theme:validate
+npm run theme:contrast-check
 npm run balance:patch-notes
 npm run matchup:smoke
 ```

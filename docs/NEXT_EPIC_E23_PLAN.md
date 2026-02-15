@@ -40,4 +40,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S3.1` (service health and SLO baseline) is complete.
 - `S3.2` (backup and disaster recovery drills) is complete.
 - `S3.3` (safe deployment strategy) is complete.
-- Next start with `S3.6` (platform compliance gap audit) when Phase 3 console-readiness starts.
+- `S3.6` (platform compliance gap audit) is complete.
+- Next start with `S3.7` (console-safe persistence abstraction) as the first console-readiness implementation slice.

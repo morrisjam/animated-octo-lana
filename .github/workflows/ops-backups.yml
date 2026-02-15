@@ -18,7 +18,7 @@ jobs:
       - name: Install backup tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client redis-tools
+          sudo apt-get install -y redis-tools
 
       - name: Validate required secrets
         run: |
@@ -40,10 +40,16 @@ jobs:
           OUT_DIR="ops-backups/${TS}"
           mkdir -p "${OUT_DIR}"
 
-          PG_FILE="${OUT_DIR}/postgres-${TS}.dump"
+          PG_BASENAME="postgres-${TS}.dump"
+          PG_FILE="${OUT_DIR}/${PG_BASENAME}"
           REDIS_FILE="${OUT_DIR}/redis-${TS}.rdb"
 
-          pg_dump "${DATABASE_URL}" --format=custom --no-owner --no-privileges --compress=9 --file="${PG_FILE}"
+          docker run --rm \
+            -e DATABASE_URL \
+            -e BACKUP_FILE="${PG_BASENAME}" \
+            -v "${PWD}/${OUT_DIR}:/backup" \
+            postgres:17-alpine \
+            sh -lc 'pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --compress=9 --file="/backup/$BACKUP_FILE"'
           redis-cli -u "${REDIS_URL}" --rdb "${REDIS_FILE}"
 
           sha256sum "${PG_FILE}" "${REDIS_FILE}" > "${OUT_DIR}/checksums.sha256"

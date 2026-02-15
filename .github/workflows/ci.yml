@@ -20,6 +20,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Migration compatibility check
+        run: npm run api:migrations:compat
+
       - name: Unit tests
         run: npm run test
 

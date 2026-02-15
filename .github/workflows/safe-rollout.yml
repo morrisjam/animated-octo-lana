@@ -1,0 +1,93 @@
+name: Safe Rollout
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deployment target"
+        required: true
+        default: "canary"
+        type: choice
+        options:
+          - canary
+          - production
+
+jobs:
+  rollout:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_CANARY_DEPLOY_HOOK_URL: ${{ secrets.RENDER_CANARY_DEPLOY_HOOK_URL }}
+      RENDER_PRODUCTION_DEPLOY_HOOK_URL: ${{ secrets.RENDER_PRODUCTION_DEPLOY_HOOK_URL }}
+      RENDER_ROLLBACK_HOOK_URL: ${{ secrets.RENDER_ROLLBACK_HOOK_URL }}
+      API_CANARY_BASE_URL: ${{ secrets.API_CANARY_BASE_URL }}
+      API_PRODUCTION_BASE_URL: ${{ secrets.API_PRODUCTION_BASE_URL }}
+      API_SLO_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+      DEPLOY_MAX_CRITICAL_ALERTS: "0"
+      DEPLOY_MAX_WARNING_ALERTS: "1"
+      DEPLOY_HEALTHCHECK_WINDOW_HOURS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve target config
+        id: target
+        run: |
+          set -euo pipefail
+          TARGET="${{ github.event.inputs.target }}"
+          if [[ "${TARGET}" == "production" ]]; then
+            DEPLOY_HOOK="${RENDER_PRODUCTION_DEPLOY_HOOK_URL}"
+            API_BASE="${API_PRODUCTION_BASE_URL}"
+          else
+            DEPLOY_HOOK="${RENDER_CANARY_DEPLOY_HOOK_URL}"
+            API_BASE="${API_CANARY_BASE_URL}"
+          fi
+          if [[ -z "${DEPLOY_HOOK}" ]]; then
+            echo "Missing deploy hook secret for target ${TARGET}."
+            exit 1
+          fi
+          if [[ -z "${API_BASE}" ]]; then
+            echo "Missing API base URL secret for target ${TARGET}."
+            exit 1
+          fi
+          echo "deploy_hook=${DEPLOY_HOOK}" >> "${GITHUB_OUTPUT}"
+          echo "api_base=${API_BASE}" >> "${GITHUB_OUTPUT}"
+          echo "target=${TARGET}" >> "${GITHUB_OUTPUT}"
+
+      - name: Trigger deploy
+        run: |
+          curl --fail --silent --show-error -X POST "${{ steps.target.outputs.deploy_hook }}"
+
+      - name: Wait for deployment warmup
+        run: sleep 120
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run health gate
+        id: gate
+        continue-on-error: true
+        env:
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+        run: npm run api:deploy:health-gate
+
+      - name: Trigger rollback on failed gate
+        if: steps.gate.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          if [[ -z "${RENDER_ROLLBACK_HOOK_URL}" ]]; then
+            echo "Health gate failed and rollback hook is not configured."
+            exit 1
+          fi
+          curl --fail --silent --show-error -X POST "${RENDER_ROLLBACK_HOOK_URL}"
+
+      - name: Mark rollout failed when gate fails
+        if: steps.gate.outcome == 'failure'
+        run: |
+          echo "Health gate failed for target=${{ steps.target.outputs.target }}. Rollback triggered."
+          exit 1

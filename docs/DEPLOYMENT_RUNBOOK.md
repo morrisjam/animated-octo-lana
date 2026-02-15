@@ -85,12 +85,16 @@ Do not use quotes around values unless needed by provider UI.
 
 ## Deployment flow
 
-1. Push to `master`.
-2. Render auto-deploys API from the commit.
-3. Cloudflare Pages auto-builds/deploys web from the commit.
-4. Validate:
+1. Push release commit to `master`.
+2. Trigger safe rollout workflow:
+   - `.github/workflows/safe-rollout.yml` with target `canary`.
+3. If canary health gate passes, trigger workflow again with target `production`.
+4. Cloudflare Pages auto-builds/deploys web from the production commit.
+5. Validate:
    - `https://api.gravitywell.space/health` returns `{ "ok": true }`
    - `https://play.gravitywell.space` loads and can create profile/session.
+
+See `docs/SAFE_DEPLOYMENT_STRATEGY.md` for canary/rollback and migration compatibility policy.
 
 ## Quick troubleshooting
 

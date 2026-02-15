@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "migrate": "tsx scripts/migrate.ts",
+    "migrations:compat": "tsx scripts/checkMigrationCompatibility.ts",
     "season:reset": "tsx scripts/rankedSeasonReset.ts",
     "slo:report": "tsx scripts/sloWeeklyReport.ts",
+    "deploy:health-gate": "tsx scripts/deploymentHealthGate.ts",
     "test": "node --test --import tsx src/**/*.test.ts"
   },
   "dependencies": {

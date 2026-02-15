@@ -488,6 +488,8 @@ export class OnlineDevMenu {
   private navigationMode: 'sections' | 'controls' = 'sections';
   private rafId = 0;
   private pollIntervalId: number | null = null;
+  private lifecycleListenersAttached = false;
+  private lifecycleAutoDisconnectedSessionId: string | null = null;
   private pendingMatchmakingRequest = false;
   private pendingRoomRequest = false;
   private pendingReplayRequest = false;
@@ -573,6 +575,18 @@ export class OnlineDevMenu {
         this.focusFirstSectionControl();
       }
     }
+  };
+
+  private readonly visibilityChangeHandler = (): void => {
+    if (document.hidden) {
+      void this.handleLifecycleSuspend('visibility_hidden');
+      return;
+    }
+    void this.handleLifecycleResume('visibility_visible');
+  };
+
+  private readonly pageHideHandler = (): void => {
+    void this.handleLifecycleSuspend('pagehide');
   };
 
   public constructor(private readonly options: OnlineDevMenuOptions) {
@@ -1366,6 +1380,7 @@ export class OnlineDevMenu {
   }
 
   public show(sectionId?: OnlineDevSectionId): void {
+    this.attachLifecycleListeners();
     this.root.hidden = false;
     this.prevPadStateByIndex.clear();
     this.populateReplayPlayerDefault();
@@ -1389,6 +1404,8 @@ export class OnlineDevMenu {
     this.prevPadStateByIndex.clear();
     this.navigationMode = 'sections';
     this.stopPolling();
+    this.detachLifecycleListeners();
+    this.lifecycleAutoDisconnectedSessionId = null;
     this.emitDiagnosticsUpdate();
   }
 
@@ -1397,8 +1414,27 @@ export class OnlineDevMenu {
       window.cancelAnimationFrame(this.rafId);
     }
     this.stopPolling();
+    this.detachLifecycleListeners();
     window.removeEventListener('keydown', this.keydownHandler);
     this.root.remove();
+  }
+
+  private attachLifecycleListeners(): void {
+    if (this.lifecycleListenersAttached) {
+      return;
+    }
+    window.addEventListener('visibilitychange', this.visibilityChangeHandler);
+    window.addEventListener('pagehide', this.pageHideHandler);
+    this.lifecycleListenersAttached = true;
+  }
+
+  private detachLifecycleListeners(): void {
+    if (!this.lifecycleListenersAttached) {
+      return;
+    }
+    window.removeEventListener('visibilitychange', this.visibilityChangeHandler);
+    window.removeEventListener('pagehide', this.pageHideHandler);
+    this.lifecycleListenersAttached = false;
   }
 
   private createOutputPanel(title: string): { root: HTMLDivElement; output: HTMLPreElement } {
@@ -2100,6 +2136,16 @@ export class OnlineDevMenu {
     return value.length > 0 ? value : null;
   }
 
+  private static createReconnectAttemptId(): string {
+    const runtimeCrypto = globalThis.crypto as { randomUUID?: () => string } | undefined;
+    if (runtimeCrypto && typeof runtimeCrypto.randomUUID === 'function') {
+      return `resume-${runtimeCrypto.randomUUID()}`;
+    }
+    const timestamp = Date.now().toString(36);
+    const random = Math.floor(Math.random() * 0xFFFFFF).toString(36);
+    return `resume-${timestamp}-${random}`;
+  }
+
   private parseReplayDateInput(rawValue: string, fieldName: 'from' | 'to'): string | null {
     const value = rawValue.trim();
     if (!value) {
@@ -2580,9 +2626,72 @@ export class OnlineDevMenu {
     this.setStatus(`Polled ticket ${ticket.ticketId}: ${ticket.status}`);
     if (ticket.status === 'closed') {
       this.stopPolling();
+      this.lifecycleAutoDisconnectedSessionId = null;
     } else {
       this.ensurePolling();
     }
+  }
+
+  private async handleLifecycleSuspend(source: 'visibility_hidden' | 'pagehide'): Promise<void> {
+    await this.runMatchmakingAction(async () => {
+      if (this.root.hidden) {
+        return;
+      }
+      const accountId = this.options.getAccountId();
+      const sessionId = this.session?.sessionId ?? this.ticket?.matchStart?.sessionId ?? null;
+      if (!accountId || !sessionId) {
+        return;
+      }
+      if (this.lifecycleAutoDisconnectedSessionId === sessionId) {
+        return;
+      }
+      await this.requestJson<MatchSessionView>(
+        'POST',
+        '/matchmaking/sessions/disconnect',
+        accountId,
+        { sessionId },
+      );
+      this.lifecycleAutoDisconnectedSessionId = sessionId;
+      this.setStatus(`Lifecycle: marked session disconnected (${source}).`);
+      await this.pollQueueAndSessionInternal();
+    });
+  }
+
+  private async handleLifecycleResume(source: 'visibility_visible'): Promise<void> {
+    await this.runMatchmakingAction(async () => {
+      if (this.root.hidden) {
+        return;
+      }
+      const accountId = this.options.getAccountId();
+      const sessionId = this.session?.sessionId ?? this.ticket?.matchStart?.sessionId ?? null;
+      if (!accountId || !sessionId) {
+        this.lifecycleAutoDisconnectedSessionId = null;
+        return;
+      }
+      if (this.lifecycleAutoDisconnectedSessionId !== sessionId) {
+        return;
+      }
+      const sessionToken = this.ticket?.matchStart?.sessionToken ?? null;
+      if (!sessionToken) {
+        this.lifecycleAutoDisconnectedSessionId = null;
+        this.setStatus('Lifecycle: reconnect skipped because session token is unavailable.');
+        return;
+      }
+      const reconnectAttemptId = OnlineDevMenu.createReconnectAttemptId();
+      this.session = await this.requestJson<MatchSessionView>(
+        'POST',
+        '/matchmaking/sessions/reconnect',
+        accountId,
+        {
+          sessionId,
+          sessionToken,
+          reconnectAttemptId,
+        },
+      );
+      this.lifecycleAutoDisconnectedSessionId = null;
+      this.setStatus(`Lifecycle: reconnect requested (${source}).`);
+      await this.pollQueueAndSessionInternal();
+    });
   }
 
   private resolveRoomCode(): string | null {

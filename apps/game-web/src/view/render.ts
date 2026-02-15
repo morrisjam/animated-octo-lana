@@ -7,6 +7,13 @@ import {
   disposeCharacterVisualNode,
   updateCharacterVisualHandle,
 } from './characterVisual';
+import { extractCombatVfxEvents } from './vfx/events';
+import {
+  clearCombatVfxRuntime,
+  disposeCombatVfxRuntime,
+  emitCombatVfxEvents,
+  updateCombatVfxRuntime,
+} from './vfx/runtime';
 
 const LIVE_PROJECTILE_IDS = new Set<number>();
 
@@ -262,6 +269,15 @@ function resolveCameraTrackedPosition(previous: THREE.Vector2, actualX: number, 
 }
 
 export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): void {
+  if (context.lastRenderSnapshot && snapshot.gameTime < context.lastRenderSnapshot.gameTime) {
+    clearCombatVfxRuntime(context.combatVfxRuntime);
+    context.lastRenderSnapshot = null;
+  }
+  const combatEvents = extractCombatVfxEvents(context.lastRenderSnapshot, snapshot);
+  emitCombatVfxEvents(context.combatVfxRuntime, combatEvents, snapshot.gameTime);
+  updateCombatVfxRuntime(context.combatVfxRuntime, snapshot.gameTime);
+  context.lastRenderSnapshot = snapshot;
+
   context.gravityWell.rotation.y = snapshot.gameTime * 0.8;
   context.ring.rotation.z = snapshot.gameTime * 0.65;
 
@@ -274,6 +290,9 @@ export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): vo
 }
 
 export function cleanupRender(context: SceneContext): void {
+  disposeCombatVfxRuntime(context.combatVfxRuntime);
+  context.lastRenderSnapshot = null;
+
   const playerIds: PlayerId[] = ['P1', 'P2'];
   for (const playerId of playerIds) {
     const visual = context.playerVisuals[playerId];

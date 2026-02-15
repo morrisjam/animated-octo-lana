@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import type { PlayersById } from '../sim/types';
+import type { PlayersById, RenderSnapshot } from '../sim/types';
 import { ARENA_RADIUS } from '../sim/constants';
 import { DEFAULT_CHARACTER_LOADOUT } from '../sim/characters';
 import { createCharacterVisualHandle, type CharacterVisualHandle } from './characterVisual';
+import { createCombatVfxRuntime, type CombatVfxRuntime } from './vfx/runtime';
 
 const MAX_RENDER_PIXEL_RATIO = 1.25;
 
@@ -28,6 +29,8 @@ export interface SceneContext {
   playerMeshes: PlayersById<THREE.Object3D>;
   playerIndicators: PlayersById<PlayerIndicatorMeshes>;
   projectileMeshes: Map<number, THREE.Mesh>;
+  combatVfxRuntime: CombatVfxRuntime;
+  lastRenderSnapshot: RenderSnapshot | null;
 }
 
 function getClampedPixelRatio(): number {
@@ -153,6 +156,7 @@ export function createScene(canvas: HTMLCanvasElement): SceneContext {
   addStars(scene);
   const { playerVisuals, playerMeshes } = createPlayerVisuals(scene);
   const playerIndicators = createPlayerIndicators(scene);
+  const combatVfxRuntime = createCombatVfxRuntime(scene);
 
   return {
     renderer,
@@ -171,6 +175,8 @@ export function createScene(canvas: HTMLCanvasElement): SceneContext {
     playerMeshes,
     playerIndicators,
     projectileMeshes: new Map<number, THREE.Mesh>(),
+    combatVfxRuntime,
+    lastRenderSnapshot: null,
   };
 }
 

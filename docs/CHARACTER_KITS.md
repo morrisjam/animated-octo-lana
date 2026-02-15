@@ -49,6 +49,7 @@ Each `CharacterDefinition` now includes:
 - HUD training frame panel reads launch/dunk/parry/break/special frame data per selected character and supports keyboard/controller toggle in training mode.
 - Renderer reads visual presentation profile through adapter interface so 3D, sprite, and hybrid fighters can coexist.
 - Renderer reads special projectile `visualId` from snapshot so projectile art can differ by character.
+- Renderer binds combat events (`boost`, `launch`, `parry`, `projectile`, `dunk`) to data-driven VFX presets (`src/view/vfx`), with per-profile overrides.
 
 ## Extension points
 1. Model and animation loading:
@@ -60,3 +61,6 @@ Each `CharacterDefinition` now includes:
 4. Balance updates:
    - tune startup/active/recovery frame data in one shared registry (`moveData.ts`).
    - tune per-character size and type-specific special values in `characters.ts`.
+5. VFX tuning:
+   - tune event bindings and preset values in `src/view/vfx/presets.ts`.
+   - adjust particles, trails, flashes, and sound cues without changing sim combat logic.

@@ -126,6 +126,14 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Adapter interface and implementations live in `src/view/characterVisual.ts`.
 - Scene/render pipeline (`src/view/scene.ts`, `src/view/render.ts`) uses adapter handles so character visuals can swap without simulation code changes.
 
+## Combat VFX event binding and presets
+
+- Event extraction from render snapshot deltas lives in `src/view/vfx/events.ts`.
+- Preset bindings and values live in `src/view/vfx/presets.ts`.
+- Runtime playback for particles, trails, flashes, and sound cues lives in `src/view/vfx/runtime.ts`.
+- Supported bound events are `boost`, `launch`, `parry`, `projectile`, and `dunk`.
+- Tuning preset values in `presets.ts` does not require simulation gameplay code edits.
+
 ## Replay scripts
 
 From repo root:

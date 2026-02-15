@@ -67,6 +67,7 @@ npm run migrate -w @gravity-well/api
 - Training frame-data overlay: `docs/FRAME_DATA_VISUALIZER_OVERLAY.md`
 - Asset manifest loader: `docs/ASSET_MANIFEST_LOADER.md`
 - Character visual profile abstraction: `docs/CHARACTER_VISUAL_PROFILE_ABSTRACTION.md`
+- VFX event binding and presets: `docs/VFX_EVENT_BINDING_PRESETS.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

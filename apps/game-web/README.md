@@ -101,6 +101,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - `src/sim`: deterministic simulation and rules.
   - combat timing registry: `src/sim/moveData.ts` (`COMBAT_MOVE_FRAME_REGISTRY`, 60Hz units)
   - deterministic AI behaviour policy: `src/sim/ai.ts`
+  - data-driven AI difficulty profiles (`rookie`, `cadet`, `veteran`, `ace`) with reaction delay, action weights, risk, and error tuning
 - `src/view`: Three.js rendering and HUD.
 - `src/input`: keyboard/gamepad input mapping.
 - `src/platform`: platform adapters.
@@ -152,6 +153,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Adaptive music state controller (`src/view/audio/musicState.ts`) switches `menu`, `neutral`, `launch`, and `end` states with configurable fades.
 - Voice callout system (`src/view/audio/voiceLines.ts`) provides locale fallback, priority, cooldown, and anti-spam line selection per character voice profile.
 - Pause menu audio tab exposes persistent master/music/SFX/voice sliders, voice ducking toggle, dynamic range mode, and subtitle toggle.
+- Local menu includes persistent `AI Difficulty` selection, saved in local settings and profile settings payload.
 
 ## Replay scripts
 

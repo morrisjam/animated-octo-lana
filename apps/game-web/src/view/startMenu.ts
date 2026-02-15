@@ -5,6 +5,12 @@ import {
   DEFAULT_CHARACTER_LOADOUT,
   type CharacterId,
 } from '../sim/characters';
+import {
+  AI_DIFFICULTY_ORDER,
+  AI_DIFFICULTY_PROFILES,
+  DEFAULT_AI_DIFFICULTY,
+  type AiDifficultyId,
+} from '../sim/ai';
 import type { PlayerId, PlayersById } from '../sim/types';
 
 export type GameMode = 'endless' | 'best_of_3' | 'training';
@@ -50,9 +56,10 @@ type StartScreen =
 interface StartMenuOptions {
   initialMode?: GameMode;
   initialLoadout?: PlayersById<CharacterId>;
+  initialAiDifficulty?: AiDifficultyId;
   enabledModes?: GameMode[];
   initialAccountSummary?: string;
-  onStartMode(mode: GameMode, loadout: PlayersById<CharacterId>): void;
+  onStartMode(mode: GameMode, loadout: PlayersById<CharacterId>, aiDifficulty: AiDifficultyId): void;
   onOpenWebAuth?(action: WebAuthMenuAction, request?: WebAuthMenuRequest): Promise<void> | void;
   onJoinRankedQueue?(): Promise<OnlineRankedViewState> | OnlineRankedViewState;
   onRefreshRankedQueue?(): Promise<OnlineRankedViewState> | OnlineRankedViewState;
@@ -86,6 +93,10 @@ const MODE_LABELS: Record<GameMode, string> = {
   training: 'Training',
 };
 const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'training'];
+
+function getAiDifficultyLabel(difficulty: AiDifficultyId): string {
+  return AI_DIFFICULTY_PROFILES[difficulty]?.label ?? AI_DIFFICULTY_PROFILES[DEFAULT_AI_DIFFICULTY].label;
+}
 
 function readButton(gamepad: Gamepad, index: number, threshold = 0.35): boolean {
   const button = gamepad.buttons[index];
@@ -147,6 +158,20 @@ function getNextMode(current: GameMode, enabledModes: GameMode[], direction: 1 |
   const safeIndex = currentIndex >= 0 ? currentIndex : 0;
   const nextIndex = (safeIndex + direction + enabledModes.length) % enabledModes.length;
   return enabledModes[nextIndex];
+}
+
+function sanitiseAiDifficulty(raw: AiDifficultyId | undefined): AiDifficultyId {
+  if (raw && AI_DIFFICULTY_ORDER.includes(raw)) {
+    return raw;
+  }
+  return DEFAULT_AI_DIFFICULTY;
+}
+
+function getNextAiDifficulty(current: AiDifficultyId, direction: 1 | -1): AiDifficultyId {
+  const currentIndex = AI_DIFFICULTY_ORDER.indexOf(current);
+  const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = (safeIndex + direction + AI_DIFFICULTY_ORDER.length) % AI_DIFFICULTY_ORDER.length;
+  return AI_DIFFICULTY_ORDER[nextIndex];
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -227,6 +252,8 @@ export class StartMenu {
   private readonly rankingsRefreshButton: HTMLButtonElement;
   private readonly localModeOptionsLabel: HTMLDivElement;
   private readonly localModeButton: HTMLButtonElement;
+  private readonly localDifficultyOptionsLabel: HTMLDivElement;
+  private readonly localDifficultyButton: HTMLButtonElement;
   private readonly p1CharacterButton: HTMLButtonElement;
   private readonly p2CharacterButton: HTMLButtonElement;
   private readonly localCharacterList: HTMLDivElement;
@@ -241,6 +268,7 @@ export class StartMenu {
 
   private readonly enabledModes: GameMode[];
   private currentMode: GameMode;
+  private currentAiDifficulty: AiDifficultyId;
   private currentLoadout: PlayersById<CharacterId>;
   private accountSummary: string;
   private isAuthenticated = false;
@@ -302,6 +330,7 @@ export class StartMenu {
     this.currentMode = options.initialMode && this.enabledModes.includes(options.initialMode)
       ? options.initialMode
       : this.enabledModes[0];
+    this.currentAiDifficulty = sanitiseAiDifficulty(options.initialAiDifficulty);
     this.currentLoadout = cloneLoadout(options.initialLoadout ?? DEFAULT_CHARACTER_LOADOUT);
     this.accountSummary = options.initialAccountSummary ?? 'Guest Account';
 
@@ -556,6 +585,14 @@ export class StartMenu {
     this.localModeOptionsLabel = document.createElement('div');
     this.localModeOptionsLabel.className = 'start-mode-options';
 
+    const localDifficultyRow = this.createActionRow('', () => {
+      this.currentAiDifficulty = getNextAiDifficulty(this.currentAiDifficulty, 1);
+      this.refreshLocalRows();
+    });
+    this.localDifficultyButton = localDifficultyRow.button;
+    this.localDifficultyOptionsLabel = document.createElement('div');
+    this.localDifficultyOptionsLabel.className = 'start-mode-options';
+
     const localP1Row = this.createActionRow('', () => {
       this.shiftCharacter('P1', 1);
     });
@@ -579,13 +616,18 @@ export class StartMenu {
     this.localPanel.append(
       localModeRow.row,
       this.localModeOptionsLabel,
+      localDifficultyRow.row,
+      this.localDifficultyOptionsLabel,
       localP1Row.row,
       localP2Row.row,
       this.localCharacterList,
       localStartRow.row,
       localBackRow.row,
     );
-    this.registerRows('local', [localModeRow.row, localP1Row.row, localP2Row.row, localStartRow.row, localBackRow.row]);
+    this.registerRows(
+      'local',
+      [localModeRow.row, localDifficultyRow.row, localP1Row.row, localP2Row.row, localStartRow.row, localBackRow.row],
+    );
 
     const replayStatusPanel = this.createStatusPanel('Replay Archive');
     this.replayStatusHeadline = replayStatusPanel.headline;
@@ -804,6 +846,13 @@ export class StartMenu {
     }
   }
 
+  public setLocalSetup(mode: GameMode, loadout: PlayersById<CharacterId>, aiDifficulty: AiDifficultyId): void {
+    this.currentMode = this.enabledModes.includes(mode) ? mode : (this.enabledModes[0] ?? 'endless');
+    this.currentLoadout = cloneLoadout(loadout);
+    this.currentAiDifficulty = sanitiseAiDifficulty(aiDifficulty);
+    this.refreshLocalRows();
+  }
+
   public setEntitlementGate(canAccessGameplay: boolean, message: string | null): void {
     this.mainOnlineButton.disabled = !canAccessGameplay;
     this.mainLocalButton.disabled = !canAccessGameplay;
@@ -998,6 +1047,14 @@ export class StartMenu {
     this.localModeOptionsLabel.textContent = this.enabledModes
       .map((mode) => mode === this.currentMode ? `[${MODE_LABELS[mode]}]` : MODE_LABELS[mode])
       .join('  |  ');
+    this.localDifficultyButton.textContent = `AI Difficulty: ${getAiDifficultyLabel(this.currentAiDifficulty)}`;
+    this.localDifficultyOptionsLabel.textContent = AI_DIFFICULTY_ORDER
+      .map((difficulty) => (
+        difficulty === this.currentAiDifficulty
+          ? `[${getAiDifficultyLabel(difficulty)}]`
+          : getAiDifficultyLabel(difficulty)
+      ))
+      .join('  |  ');
 
     const p1 = CHARACTER_BY_ID[this.currentLoadout.P1];
     const p2 = CHARACTER_BY_ID[this.currentLoadout.P2];
@@ -1037,7 +1094,7 @@ export class StartMenu {
   }
 
   private startLocalMatch(): void {
-    this.options.onStartMode(this.currentMode, cloneLoadout(this.currentLoadout));
+    this.options.onStartMode(this.currentMode, cloneLoadout(this.currentLoadout), this.currentAiDifficulty);
   }
 
   private getErrorMessage(error: unknown): string {
@@ -1273,10 +1330,15 @@ export class StartMenu {
       return;
     }
     if (rowIndex === 1) {
-      this.shiftCharacter('P1', direction);
+      this.currentAiDifficulty = getNextAiDifficulty(this.currentAiDifficulty, direction);
+      this.refreshLocalRows();
       return;
     }
     if (rowIndex === 2) {
+      this.shiftCharacter('P1', direction);
+      return;
+    }
+    if (rowIndex === 3) {
       this.shiftCharacter('P2', direction);
     }
   }

@@ -15,6 +15,14 @@ import { createInitialState, getRenderSnapshot, step } from './sim/sim';
 import { sanitiseTuning } from './sim/tuning';
 import type { PlayerId, PlayersById, RenderSnapshot } from './sim/types';
 import {
+  buildFrameInputWithAi,
+  createAiController,
+  tickAiController,
+  type AiControllerState,
+  type AiDifficultyId,
+  DEFAULT_AI_DIFFICULTY,
+} from './sim/ai';
+import {
   createHud,
   type RollbackDiagnosticsView,
   type RuntimeMemoryDiagnosticsView,
@@ -56,11 +64,13 @@ interface StoredSettings {
     P1?: string;
     P2?: string;
   };
+  aiDifficulty?: string;
   audio?: unknown;
 }
 interface LoadedSettings {
   mode: GameMode;
   loadout: PlayersById<CharacterId>;
+  aiDifficulty: AiDifficultyId;
   audio: AudioSettings;
 }
 
@@ -170,6 +180,7 @@ audioSystem.setBusVolume('music', audioSettings.musicVolume);
 audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
 audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
 let selectedLoadout: PlayersById<CharacterId> = loadedSettings.loadout;
+let selectedAiDifficulty: AiDifficultyId = loadedSettings.aiDifficulty;
 const seedParam = new URLSearchParams(window.location.search).get('seed');
 const forcedSeed = seedParam !== null ? Number(seedParam) : undefined;
 let selectedMatchSeed = Number.isFinite(forcedSeed) ? (forcedSeed as number) : 1;
@@ -186,6 +197,7 @@ let p1RoundWins = 0;
 let p2RoundWins = 0;
 let roundTransitionRemaining = 0;
 let simulationFrame = 0;
+let aiController: AiControllerState | null = null;
 const inputTimeline = createInputTimelineBuffer({ maxFrames: 60 * 20 });
 const enableRollbackScaffold = (import.meta.env.VITE_FEATURE_ROLLBACK_SCAFFOLD ?? 'false').toLowerCase() === 'true';
 let rollbackSession: RollbackSession | null = null;
@@ -886,10 +898,11 @@ async function refreshRankedSnapshot(): Promise<RankedSnapshotViewState> {
 const startMenu = createStartMenu({
   initialMode: selectedMode,
   initialLoadout: selectedLoadout,
+  initialAiDifficulty: selectedAiDifficulty,
   enabledModes,
   initialAccountSummary: 'Guest Account',
-  onStartMode: (mode, loadout) => {
-    beginMode(mode, loadout);
+  onStartMode: (mode, loadout, aiDifficulty) => {
+    beginMode(mode, loadout, aiDifficulty);
   },
   onOpenWebAuth: platform.kind === 'web'
     ? async (action: WebAuthMenuAction, request?: WebAuthMenuRequest) => {
@@ -900,7 +913,7 @@ const startMenu = createStartMenu({
     returnToHome();
   },
   onPlayAgain: () => {
-    beginMode(selectedMode, selectedLoadout);
+    beginMode(selectedMode, selectedLoadout, selectedAiDifficulty);
   },
   onJoinRankedQueue: async () => {
     return await joinRankedQueue();
@@ -1025,11 +1038,46 @@ function resolveStoredMode(mode: string | undefined): GameMode {
   return enabledModes[0] ?? 'endless';
 }
 
+function resolveStoredAiDifficulty(value: string | undefined): AiDifficultyId {
+  if (value === 'rookie' || value === 'cadet' || value === 'veteran' || value === 'ace') {
+    return value;
+  }
+  return DEFAULT_AI_DIFFICULTY;
+}
+
 function isCharacterId(value: string | undefined): value is CharacterId {
   if (!value) {
     return false;
   }
   return value in CHARACTER_BY_ID;
+}
+
+function coerceStoredSettings(raw: unknown): LoadedSettings | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const parsed = raw as StoredSettings;
+  const hasKnownKeys = 'mode' in parsed || 'loadout' in parsed || 'audio' in parsed || 'aiDifficulty' in parsed;
+  if (!hasKnownKeys) {
+    return null;
+  }
+  const mode = resolveStoredMode(parsed.mode);
+  const parsedP1 = parsed.loadout?.P1;
+  const parsedP2 = parsed.loadout?.P2;
+  const p1 = isCharacterId(parsedP1) ? parsedP1 : DEFAULT_CHARACTER_LOADOUT.P1;
+  const p2 = isCharacterId(parsedP2) ? parsedP2 : DEFAULT_CHARACTER_LOADOUT.P2;
+  const audio = sanitiseAudioSettings(parsed.audio);
+  const aiDifficulty = resolveStoredAiDifficulty(parsed.aiDifficulty);
+
+  return {
+    mode,
+    loadout: {
+      P1: p1,
+      P2: p2,
+    },
+    aiDifficulty,
+    audio,
+  };
 }
 
 function loadSettings(): LoadedSettings {
@@ -1040,6 +1088,7 @@ function loadSettings(): LoadedSettings {
       P1: DEFAULT_CHARACTER_LOADOUT.P1,
       P2: DEFAULT_CHARACTER_LOADOUT.P2,
     },
+    aiDifficulty: DEFAULT_AI_DIFFICULTY,
     audio: DEFAULT_AUDIO_SETTINGS,
   };
 
@@ -1047,24 +1096,7 @@ function loadSettings(): LoadedSettings {
   if (!persisted.ok) {
     return fallback;
   }
-
-  const parsed = persisted.value;
-
-  const mode = resolveStoredMode(parsed.mode);
-  const parsedP1 = parsed.loadout?.P1;
-  const parsedP2 = parsed.loadout?.P2;
-  const p1 = isCharacterId(parsedP1) ? parsedP1 : DEFAULT_CHARACTER_LOADOUT.P1;
-  const p2 = isCharacterId(parsedP2) ? parsedP2 : DEFAULT_CHARACTER_LOADOUT.P2;
-  const audio = sanitiseAudioSettings(parsed.audio);
-
-  return {
-    mode,
-    loadout: {
-      P1: p1,
-      P2: p2,
-    },
-    audio,
-  };
+  return coerceStoredSettings(persisted.value) ?? fallback;
 }
 
 function persistSettings(): void {
@@ -1074,6 +1106,7 @@ function persistSettings(): void {
       P1: selectedLoadout.P1,
       P2: selectedLoadout.P2,
     },
+    aiDifficulty: selectedAiDifficulty,
     audio: audioSettings,
   };
   const result = platform.persistence.writeJson(SETTINGS_STORAGE_KEY, payload);
@@ -1102,6 +1135,19 @@ async function bootstrapPlatformProfile(): Promise<void> {
     const profile = await platform.profile.getProfile(session.accountId);
     if (session.isAuthenticated && profile.displayName) {
       startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
+    }
+    const profileSettings = coerceStoredSettings(profile.settings);
+    if (profileSettings) {
+      selectedMode = profileSettings.mode;
+      selectedLoadout = profileSettings.loadout;
+      selectedAiDifficulty = profileSettings.aiDifficulty;
+      audioSettings = profileSettings.audio;
+      startMenu.setLocalSetup(selectedMode, selectedLoadout, selectedAiDifficulty);
+      audioSystem.setBusVolume('master', audioSettings.masterVolume);
+      audioSystem.setBusVolume('music', audioSettings.musicVolume);
+      audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
+      audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
+      persistSettings();
     }
   } catch {
     // Profile bootstrap fallback is intentionally silent for prototype flow.
@@ -1215,6 +1261,12 @@ function resetRoundState(): void {
       maxHistoryFrames: 60 * 20,
     })
     : null;
+  aiController = selectedMode === 'training'
+    ? null
+    : createAiController({
+      seed: selectedMatchSeed ^ 0x9e3779b9,
+      profileId: selectedAiDifficulty,
+    });
   const showDebugDiagnostics = runtimeConfig.features.debugToolsEnabled;
   hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
   hud.updateRollbackDiagnostics(showDebugDiagnostics && rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null);
@@ -1229,13 +1281,16 @@ function resetRoundState(): void {
   }
 }
 
-function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
+function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>, aiDifficulty?: AiDifficultyId): void {
   const resolvedMode = resolveStoredMode(mode);
   if (loadout) {
     selectedLoadout = {
       P1: loadout.P1,
       P2: loadout.P2,
     };
+  }
+  if (aiDifficulty) {
+    selectedAiDifficulty = resolveStoredAiDifficulty(aiDifficulty);
   }
   selectedMode = resolvedMode;
   if (!Number.isFinite(forcedSeed)) {
@@ -1253,6 +1308,7 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
       settings: {
         mode: selectedMode,
         loadout: selectedLoadout,
+        aiDifficulty: selectedAiDifficulty,
         audio: audioSettings,
       },
     });
@@ -1746,7 +1802,13 @@ function tick(nowMs: number): void {
 
   if (!pauseMenu.isPaused() && appPhase === 'playing') {
     while (accumulator >= fixedDt) {
-      const frameInput = input.getFrameInput();
+      const frameInputRaw = input.getFrameInput();
+      let frameInput = frameInputRaw;
+      if (aiController) {
+        const aiTick = tickAiController(state, 'P2', aiController);
+        aiController = aiTick.next;
+        frameInput = buildFrameInputWithAi(frameInputRaw.p1, aiTick.input, 'P2');
+      }
       inputTimeline.setLocalInput(simulationFrame, 'P1', frameInput.p1);
       inputTimeline.setLocalInput(simulationFrame, 'P2', frameInput.p2);
       if (rollbackSession) {

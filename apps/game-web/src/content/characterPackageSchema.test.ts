@@ -74,6 +74,7 @@ function makeValidPackage(): Record<string, unknown> {
       special: {
         id: 'basic_projectile',
         label: 'Basic Projectile',
+        behaviorId: 'special.projectile.v1',
         kind: 'projectile',
         fuelCost: 5,
         timing: {
@@ -122,7 +123,7 @@ describe('character package schema', () => {
   test('parses valid character package payload', () => {
     const parsed = parseCharacterPackage(makeValidPackage());
     expect(parsed.id).toBe('vanguard_pkg');
-    expect(parsed.moves.special.kind).toBe('projectile');
+    expect(parsed.moves.special.behaviorId).toBe('special.projectile.v1');
   });
 
   test('rejects payload with invalid schema version', () => {
@@ -137,6 +138,14 @@ describe('character package schema', () => {
     const special = moves.special as Record<string, unknown>;
     special.kind = 'command_grab';
     delete special.commandGrab;
+    expect(() => parseCharacterPackage(invalid)).toThrowError(CharacterPackageValidationError);
+  });
+
+  test('rejects payload when special behavior id is not allow-listed', () => {
+    const invalid = makeValidPackage();
+    const moves = invalid.moves as Record<string, unknown>;
+    const special = moves.special as Record<string, unknown>;
+    special.behaviorId = 'special.anything.custom';
     expect(() => parseCharacterPackage(invalid)).toThrowError(CharacterPackageValidationError);
   });
 });

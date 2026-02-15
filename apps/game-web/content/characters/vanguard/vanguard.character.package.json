@@ -66,6 +66,7 @@
     "special": {
       "id": "basic_projectile",
       "label": "Basic Projectile",
+      "behaviorId": "special.projectile.v1",
       "kind": "projectile",
       "fuelCost": 5,
       "timing": {

@@ -4,7 +4,11 @@ import type {
   CharacterStats,
   CharacterVisualProfile,
 } from '../sim/characters';
-import type { MoveFrameData } from '../sim/moveData';
+import {
+  SPECIAL_MOVE_BEHAVIOR_IDS,
+  type MoveFrameData,
+  type SpecialMoveBehaviorId,
+} from '../sim/moveData';
 
 export const CHARACTER_PACKAGE_SCHEMA_VERSION = 'gw.character-package.v1';
 const CHARACTER_ID_REGEX = /^[a-z0-9_]{2,32}$/;
@@ -348,6 +352,7 @@ function validateMoves(
   };
 
   const specialKind = readString(special, 'kind', 'moves.special.kind', issues, { minLength: 2, maxLength: 40 });
+  const specialBehaviorId = readString(special, 'behaviorId', 'moves.special.behaviorId', issues, { minLength: 2, maxLength: 64 });
   const specialId = readString(special, 'id', 'moves.special.id', issues, { minLength: 2, maxLength: 64 });
   const specialLabel = readString(special, 'label', 'moves.special.label', issues, { minLength: 2, maxLength: 64 });
   const specialTiming = readObject(special, 'timing', 'moves.special.timing', issues);
@@ -360,6 +365,30 @@ function validateMoves(
   const allowedKinds = new Set(['projectile', 'command_grab', 'movement', 'block']);
   if (specialKind && !allowedKinds.has(specialKind)) {
     pushIssue(issues, 'moves.special.kind', 'must be one of: projectile, command_grab, movement, block.');
+  }
+  const allowedBehaviorIds = new Set<string>(SPECIAL_MOVE_BEHAVIOR_IDS);
+  if (specialBehaviorId && !allowedBehaviorIds.has(specialBehaviorId)) {
+    pushIssue(
+      issues,
+      'moves.special.behaviorId',
+      `must be one of: ${SPECIAL_MOVE_BEHAVIOR_IDS.join(', ')}.`,
+    );
+  }
+  const expectedKindByBehaviorId: Record<SpecialMoveBehaviorId, string> = {
+    'special.projectile.v1': 'projectile',
+    'special.command_grab.v1': 'command_grab',
+    'special.movement_dash.v1': 'movement',
+    'special.block_guard.v1': 'block',
+  };
+  if (specialBehaviorId && specialKind && specialBehaviorId in expectedKindByBehaviorId) {
+    const expectedKind = expectedKindByBehaviorId[specialBehaviorId as SpecialMoveBehaviorId];
+    if (specialKind !== expectedKind) {
+      pushIssue(
+        issues,
+        'moves.special.kind',
+        `must be "${expectedKind}" for behaviorId "${specialBehaviorId}".`,
+      );
+    }
   }
 
   const boostData = {
@@ -380,6 +409,7 @@ function validateMoves(
   const specialData = {
     id: specialId,
     label: specialLabel,
+    behaviorId: specialBehaviorId,
     kind: specialKind,
     fuelCost: readNumber(special, 'fuelCost', 'moves.special.fuelCost', issues, { min: 0, max: 1000 }),
     timing: specialTiming
@@ -435,6 +465,7 @@ function validateMoves(
     || Object.values(superBoostData).some((value) => value === null)
     || !specialData.id
     || !specialData.label
+    || !specialData.behaviorId
     || !specialData.kind
     || specialData.fuelCost === null
     || !specialData.timing
@@ -446,20 +477,20 @@ function validateMoves(
     return null;
   }
 
-  if (specialData.kind === 'projectile' && !specialData.projectile) {
-    pushIssue(issues, 'moves.special.projectile', 'is required when moves.special.kind is projectile.');
+  if (specialData.behaviorId === 'special.projectile.v1' && !specialData.projectile) {
+    pushIssue(issues, 'moves.special.projectile', 'is required when behaviorId is special.projectile.v1.');
     return null;
   }
-  if (specialData.kind === 'command_grab' && !specialData.commandGrab) {
-    pushIssue(issues, 'moves.special.commandGrab', 'is required when moves.special.kind is command_grab.');
+  if (specialData.behaviorId === 'special.command_grab.v1' && !specialData.commandGrab) {
+    pushIssue(issues, 'moves.special.commandGrab', 'is required when behaviorId is special.command_grab.v1.');
     return null;
   }
-  if (specialData.kind === 'movement' && !specialData.movement) {
-    pushIssue(issues, 'moves.special.movement', 'is required when moves.special.kind is movement.');
+  if (specialData.behaviorId === 'special.movement_dash.v1' && !specialData.movement) {
+    pushIssue(issues, 'moves.special.movement', 'is required when behaviorId is special.movement_dash.v1.');
     return null;
   }
-  if (specialData.kind === 'block' && !specialData.block) {
-    pushIssue(issues, 'moves.special.block', 'is required when moves.special.kind is block.');
+  if (specialData.behaviorId === 'special.block_guard.v1' && !specialData.block) {
+    pushIssue(issues, 'moves.special.block', 'is required when behaviorId is special.block_guard.v1.');
     return null;
   }
 

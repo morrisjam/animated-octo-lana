@@ -660,10 +660,10 @@ function executeSpecial(
   target: PlayerState,
 ): boolean {
   const specialMove = getCharacterMoves(attacker).special;
-  switch (specialMove.kind) {
-    case 'projectile':
+  switch (specialMove.behaviorId) {
+    case 'special.projectile.v1':
       return spawnSpecialProjectile(state, attacker, target);
-    case 'command_grab': {
+    case 'special.command_grab.v1': {
       const inRange = distanceVec2(attacker.pos, target.pos) <= specialMove.size.range;
       if (!inRange || !specialMove.commandGrab) {
         return false;
@@ -671,7 +671,7 @@ function executeSpecial(
       setStunned(target, framesToSeconds(specialMove.commandGrab.stunFrames));
       return true;
     }
-    case 'movement': {
+    case 'special.movement_dash.v1': {
       const moveData = specialMove.movement;
       if (!moveData) {
         return false;
@@ -681,7 +681,7 @@ function executeSpecial(
       attacker.vel.y = dir.y * moveData.dashSpeed;
       return true;
     }
-    case 'block': {
+    case 'special.block_guard.v1': {
       if (!specialMove.block) {
         return false;
       }

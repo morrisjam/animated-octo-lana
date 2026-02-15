@@ -24,6 +24,7 @@ Example:
 - Keep:
   - `schemaVersion` = `gw.character-package.v1`
   - `id` lowercase with letters, numbers, underscore
+- In `moves.special`, set allow-listed `behaviorId` and matching `kind`.
 
 ## 3. Validate package data
 From repo root:
@@ -52,11 +53,12 @@ What you get:
 - Error: missing required field
   - Check report path + JSON path in error output.
 - Error: invalid special move payload
-  - Ensure `moves.special.kind` matches its required block:
-    - `projectile` -> `moves.special.projectile`
-    - `command_grab` -> `moves.special.commandGrab`
-    - `movement` -> `moves.special.movement`
-    - `block` -> `moves.special.block`
+  - Ensure `moves.special.behaviorId` is one of:
+    - `special.projectile.v1`
+    - `special.command_grab.v1`
+    - `special.movement_dash.v1`
+    - `special.block_guard.v1`
+  - Ensure `moves.special.kind` matches `behaviorId` and the required payload block exists.
 - Character does not appear
   - Ensure file name ends with `.character.package.json`.
   - Re-run validator and fix any invalid package warnings.

@@ -56,6 +56,18 @@ export interface ProjectileMoveData {
 }
 
 export type SpecialMoveKind = 'projectile' | 'command_grab' | 'movement' | 'block';
+export type SpecialMoveBehaviorId =
+  | 'special.projectile.v1'
+  | 'special.command_grab.v1'
+  | 'special.movement_dash.v1'
+  | 'special.block_guard.v1';
+
+export const SPECIAL_MOVE_BEHAVIOR_IDS: SpecialMoveBehaviorId[] = [
+  'special.projectile.v1',
+  'special.command_grab.v1',
+  'special.movement_dash.v1',
+  'special.block_guard.v1',
+];
 
 export interface SpecialTimingData {
   startupFrames: number;
@@ -86,6 +98,7 @@ export interface SpecialBlockData {
 export interface SpecialMoveData {
   id: string;
   label: string;
+  behaviorId: SpecialMoveBehaviorId;
   kind: SpecialMoveKind;
   fuelCost: number;
   timing: SpecialTimingData;
@@ -184,6 +197,7 @@ export function createMoveFrameData(projectileVisualId = DEFAULT_PROJECTILE_VISU
     special: {
       id: 'basic_projectile',
       label: 'Basic Projectile',
+      behaviorId: 'special.projectile.v1',
       kind: 'projectile',
       fuelCost: 5,
       timing: {

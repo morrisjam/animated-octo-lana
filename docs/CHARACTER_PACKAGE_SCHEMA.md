@@ -35,6 +35,34 @@ npm run character:validate -w @gravity-well/game-web -- --dir content/characters
 - `moves`
 - `specials`
 
+## Special move behavior contract (S4.3)
+`moves.special` must include:
+- `id`
+- `label`
+- `behaviorId`
+- `kind`
+- `fuelCost`
+- `timing`
+- `size`
+
+Allow-listed `moves.special.behaviorId` values:
+- `special.projectile.v1`
+- `special.command_grab.v1`
+- `special.movement_dash.v1`
+- `special.block_guard.v1`
+
+`kind` must match `behaviorId`:
+- `special.projectile.v1` -> `projectile`
+- `special.command_grab.v1` -> `command_grab`
+- `special.movement_dash.v1` -> `movement`
+- `special.block_guard.v1` -> `block`
+
+Required payload block per `behaviorId`:
+- `special.projectile.v1` -> `moves.special.projectile`
+- `special.command_grab.v1` -> `moves.special.commandGrab`
+- `special.movement_dash.v1` -> `moves.special.movement`
+- `special.block_guard.v1` -> `moves.special.block`
+
 ## Report output
 - Validation report path: `apps/game-web/build-artifacts/character-package-validation-report.json`
 - Report includes:

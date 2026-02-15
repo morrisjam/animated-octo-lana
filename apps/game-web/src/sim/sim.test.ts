@@ -201,6 +201,31 @@ describe('special move rules', () => {
 
     expect(state.projectiles.length).toBe(1);
   });
+
+  test('special behavior dispatch is keyed by behaviorId, not kind', () => {
+    const originalSpecial = CHARACTER_BY_ID.vanguard.moves.special;
+    CHARACTER_BY_ID.vanguard.moves.special = {
+      ...originalSpecial,
+      behaviorId: 'special.projectile.v1',
+      kind: 'block',
+      block: { guardFrames: 30 },
+    };
+
+    try {
+      const state = createInitialState();
+      state.players.P1.pos = { x: 0, y: 0 };
+      state.players.P2.pos = { x: 30, y: 0 };
+
+      const input = neutralInput();
+      input.p1.special = true;
+      step(state, input, FIXED_DT);
+
+      expect(state.projectiles.length).toBe(1);
+      expect(state.players.P1.parry).toBe(0);
+    } finally {
+      CHARACTER_BY_ID.vanguard.moves.special = originalSpecial;
+    }
+  });
 });
 
 describe('super boost commit tracking', () => {

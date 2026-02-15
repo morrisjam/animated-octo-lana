@@ -39,7 +39,7 @@ jobs:
       RTO_TARGET_SECONDS: '3600'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install restore tooling
         run: |

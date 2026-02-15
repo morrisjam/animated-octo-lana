@@ -28,3 +28,5 @@ Status: in progress (`E4.1` complete; next `E4.2`)
 ## Next implementation target
 - Start `E4.2` (balance and mechanics operations).
 - Keep `E4.1` QA harness in CI while tuning content.
+- `S4.6` (balance profile registry + validation workflow) is complete.
+- Detailed `E4.2` breakdown: `docs/NEXT_EPIC_E42_BALANCE_MECHANICS_PLAN.md`.

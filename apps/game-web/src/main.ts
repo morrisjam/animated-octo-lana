@@ -12,6 +12,10 @@ import { createPlatformServices, type PlatformAuthSession } from './platform';
 import { validateReplayPayload } from './sim/replay';
 import { buildReplayReviewData, type ReplayReviewData } from './sim/replayReview';
 import { createInitialState, getRenderSnapshot, step } from './sim/sim';
+import {
+  DEFAULT_BALANCE_PROFILE_ID,
+  resolveBalanceProfile,
+} from './sim/balanceProfiles';
 import { sanitiseTuning } from './sim/tuning';
 import type { PlayerId, PlayersById, RenderSnapshot } from './sim/types';
 import {
@@ -224,11 +228,25 @@ const seedParam = new URLSearchParams(window.location.search).get('seed');
 const forcedSeed = seedParam !== null ? Number(seedParam) : undefined;
 let selectedMatchSeed = Number.isFinite(forcedSeed) ? (forcedSeed as number) : 1;
 let selectedMode: GameMode = loadedSettings.mode;
+const configuredBalanceProfileId = (import.meta.env.VITE_BALANCE_PROFILE_ID as string | undefined)?.trim();
+const activeBalanceProfile = resolveBalanceProfile(configuredBalanceProfileId);
+if (
+  configuredBalanceProfileId
+  && configuredBalanceProfileId.length > 0
+  && activeBalanceProfile.id !== configuredBalanceProfileId
+  && runtimeConfig.features.debugToolsEnabled
+) {
+  console.warn('[balance-profile] unknown profile id; using default profile', {
+    requested: configuredBalanceProfileId,
+    applied: activeBalanceProfile.id,
+  });
+}
 let state = createInitialState({
   loadout: selectedLoadout,
   seed: selectedMatchSeed,
   rules: getRulesForMode(selectedMode),
 });
+state.tuning = { ...activeBalanceProfile.tuning };
 const assetBudgetReport = buildAssetBudgetReport(DEFAULT_ASSET_MANIFEST, DEFAULT_ASSET_BUDGET_LIMITS);
 let assetPreloadBytesLoaded = 0;
 let appPhase: AppPhase = 'home';
@@ -427,7 +445,7 @@ const diagnosticsBuildId = (
 const diagnosticsRulesetVersion = (
   (import.meta.env.VITE_RULESET_VERSION as string | undefined)?.trim()
   || 'prototype-2026.02'
-);
+) + (activeBalanceProfile.id === DEFAULT_BALANCE_PROFILE_ID ? '' : `+${activeBalanceProfile.id}`);
 const diagnosticsEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDiagnosticsEnabled;
 let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   ticketId: null,

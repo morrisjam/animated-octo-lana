@@ -50,6 +50,26 @@ Notes:
 npm run verify
 ```
 
+## Balance profile validation
+
+From repo root:
+
+```bash
+npm run balance:validate
+```
+
+From this workspace:
+
+```bash
+npm run balance:validate
+```
+
+Runtime profile override:
+
+```bash
+VITE_BALANCE_PROFILE_ID=mobility_focus_v1
+```
+
 ## Character package scaffolding
 
 From repo root:

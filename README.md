@@ -22,6 +22,7 @@ npm run test
 npm run verify
 npm run character:new -- --id striker --display-name "Striker"
 npm run character:qa
+npm run balance:validate
 ```
 
 Steam packaging flow:
@@ -67,6 +68,7 @@ npm run migrate -w @gravity-well/api
 - Game architecture and kits: `docs/CHARACTER_KITS.md`
 - Character package schema and validation flow: `docs/CHARACTER_PACKAGE_SCHEMA.md`
 - Character package user guide: `docs/CHARACTER_PACKAGE_USER_GUIDE.md`
+- Balance profile workflow: `docs/BALANCE_PROFILE_WORKFLOW.md`
 - Move frame-data registry: `docs/MOVE_FRAME_DATA_REGISTRY.md`
 - Training frame-data overlay: `docs/FRAME_DATA_VISUALIZER_OVERLAY.md`
 - Asset manifest loader: `docs/ASSET_MANIFEST_LOADER.md`
@@ -83,6 +85,7 @@ npm run migrate -w @gravity-well/api
 - Arcade run history and best records: `docs/ARCADE_RUN_HISTORY.md`
 - E4 content production epic map: `docs/NEXT_EPIC_E4_CONTENT_PRODUCTION_PLAN.md`
 - E4.1 character package first-priority plan: `docs/NEXT_EPIC_E41_CHARACTER_PACKAGE_PLAN.md`
+- E4.2 balance and mechanics operations plan: `docs/NEXT_EPIC_E42_BALANCE_MECHANICS_PLAN.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

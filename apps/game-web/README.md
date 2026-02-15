@@ -70,6 +70,24 @@ Runtime profile override:
 VITE_BALANCE_PROFILE_ID=mobility_focus_v1
 ```
 
+## Menu theme validation
+
+From repo root:
+
+```bash
+npm run theme:validate
+```
+
+From this workspace:
+
+```bash
+npm run theme:validate
+```
+
+Runtime:
+- Open `Settings` in the home flow.
+- Select `Menu Theme` and cycle options with mouse click, keyboard Left/Right, or controller Left/Right.
+
 ## Balance patch notes generator
 
 From repo root:

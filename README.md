@@ -23,6 +23,7 @@ npm run verify
 npm run character:new -- --id striker --display-name "Striker"
 npm run character:qa
 npm run balance:validate
+npm run theme:validate
 npm run balance:patch-notes
 npm run matchup:smoke
 ```
@@ -71,6 +72,7 @@ npm run migrate -w @gravity-well/api
 - Character package schema and validation flow: `docs/CHARACTER_PACKAGE_SCHEMA.md`
 - Character package user guide: `docs/CHARACTER_PACKAGE_USER_GUIDE.md`
 - Balance profile workflow: `docs/BALANCE_PROFILE_WORKFLOW.md`
+- Menu theme workflow: `docs/MENU_THEME_WORKFLOW.md`
 - Balance patch notes workflow: `docs/BALANCE_PATCH_NOTES_WORKFLOW.md`
 - Training telemetry workflow: `docs/TRAINING_TELEMETRY_WORKFLOW.md`
 - Matchup regression smoke workflow: `docs/MATCHUP_REGRESSION_SMOKE_WORKFLOW.md`
@@ -91,6 +93,7 @@ npm run migrate -w @gravity-well/api
 - E4 content production epic map: `docs/NEXT_EPIC_E4_CONTENT_PRODUCTION_PLAN.md`
 - E4.1 character package first-priority plan: `docs/NEXT_EPIC_E41_CHARACTER_PACKAGE_PLAN.md`
 - E4.2 balance and mechanics operations plan: `docs/NEXT_EPIC_E42_BALANCE_MECHANICS_PLAN.md`
+- E4.3 visual content and menu theming plan: `docs/NEXT_EPIC_E43_VISUAL_MENU_THEMING_PLAN.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

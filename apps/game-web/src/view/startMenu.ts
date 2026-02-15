@@ -20,6 +20,11 @@ export interface ArcadeMenuSettings {
   continues: number;
   retryEnabled: boolean;
 }
+export interface StartMenuThemeOption {
+  id: string;
+  label: string;
+  description: string;
+}
 export interface WebAuthMenuRequest {
   email?: string;
   password?: string;
@@ -70,6 +75,8 @@ interface StartMenuOptions {
   initialLoadout?: PlayersById<CharacterId>;
   initialAiDifficulty?: AiDifficultyId;
   initialArcadeSettings?: ArcadeMenuSettings;
+  initialMenuThemeId?: string;
+  availableMenuThemes?: StartMenuThemeOption[];
   enabledModes?: GameMode[];
   initialAccountSummary?: string;
   onStartMode(
@@ -91,6 +98,7 @@ interface StartMenuOptions {
   onRefreshRankedSnapshot?(): Promise<RankedSnapshotViewState> | RankedSnapshotViewState;
   onOpenOnlineDevMenu?(target?: OnlineDevMenuTarget): void;
   onOpenReplayReview?(): void;
+  onMenuThemeChange?(themeId: string): void;
   onReturnHome(): void;
   onPlayAgain(): void;
 }
@@ -113,6 +121,7 @@ const MODE_LABELS: Record<GameMode, string> = {
 };
 const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'arcade', 'training'];
 const ARCADE_CONTINUE_OPTIONS = [0, 1, 2, 3];
+const SETTINGS_THEME_ROW_INDEX = 3;
 
 function getAiDifficultyLabel(difficulty: AiDifficultyId): string {
   return AI_DIFFICULTY_PROFILES[difficulty]?.label ?? AI_DIFFICULTY_PROFILES[DEFAULT_AI_DIFFICULTY].label;
@@ -212,6 +221,60 @@ function getNextArcadeContinues(current: number, direction: 1 | -1): number {
   return ARCADE_CONTINUE_OPTIONS[nextIndex];
 }
 
+function sanitiseMenuThemeOptions(raw: StartMenuThemeOption[] | undefined): StartMenuThemeOption[] {
+  if (!raw || raw.length === 0) {
+    return [{
+      id: 'default',
+      label: 'Default',
+      description: 'Baseline Gravity Well visual skin.',
+    }];
+  }
+  const deduped: StartMenuThemeOption[] = [];
+  const seen = new Set<string>();
+  for (const option of raw) {
+    const id = option.id.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    deduped.push({
+      id,
+      label: option.label.trim() || id,
+      description: option.description.trim() || 'No description.',
+    });
+  }
+  if (deduped.length === 0) {
+    return [{
+      id: 'default',
+      label: 'Default',
+      description: 'Baseline Gravity Well visual skin.',
+    }];
+  }
+  return deduped;
+}
+
+function resolveInitialMenuThemeId(raw: string | undefined, options: StartMenuThemeOption[]): string {
+  if (!raw) {
+    return options[0].id;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return options[0].id;
+  }
+  const match = options.find((option) => option.id === trimmed);
+  return match?.id ?? options[0].id;
+}
+
+function getNextMenuThemeId(current: string, options: StartMenuThemeOption[], direction: 1 | -1): string {
+  if (options.length === 0) {
+    return current;
+  }
+  const currentIndex = options.findIndex((option) => option.id === current);
+  const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = (safeIndex + direction + options.length) % options.length;
+  return options[nextIndex].id;
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -269,6 +332,9 @@ export class StartMenu {
   private readonly mainLocalButton: HTMLButtonElement;
   private readonly entitlementStatusLabel: HTMLDivElement;
   private readonly settingsSignOutButton: HTMLButtonElement;
+  private readonly settingsThemeOptionsLabel: HTMLDivElement;
+  private readonly settingsThemeDescriptionLabel: HTMLDivElement;
+  private readonly settingsThemeButton: HTMLButtonElement;
   private readonly rankedStatusHeadline: HTMLDivElement;
   private readonly rankedStatusDetail: HTMLPreElement;
   private readonly roomStatusHeadline: HTMLDivElement;
@@ -312,7 +378,9 @@ export class StartMenu {
   private rafId = 0;
 
   private readonly enabledModes: GameMode[];
+  private readonly menuThemeOptions: StartMenuThemeOption[];
   private currentMode: GameMode;
+  private currentMenuThemeId: string;
   private currentAiDifficulty: AiDifficultyId;
   private currentArcadeSettings: ArcadeMenuSettings;
   private currentLoadout: PlayersById<CharacterId>;
@@ -349,16 +417,16 @@ export class StartMenu {
       return;
     }
     if (event.key === 'ArrowLeft') {
-      if (this.currentScreen === 'local') {
+      if (this.currentScreen === 'local' || this.currentScreen === 'settings') {
         event.preventDefault();
-        this.applyLocalHorizontal(-1);
+        this.applyHorizontalNavigation(-1);
       }
       return;
     }
     if (event.key === 'ArrowRight') {
-      if (this.currentScreen === 'local') {
+      if (this.currentScreen === 'local' || this.currentScreen === 'settings') {
         event.preventDefault();
-        this.applyLocalHorizontal(1);
+        this.applyHorizontalNavigation(1);
       }
       return;
     }
@@ -375,6 +443,8 @@ export class StartMenu {
 
   public constructor(private readonly options: StartMenuOptions) {
     this.enabledModes = sanitiseEnabledModes(options.enabledModes);
+    this.menuThemeOptions = sanitiseMenuThemeOptions(options.availableMenuThemes);
+    this.currentMenuThemeId = resolveInitialMenuThemeId(options.initialMenuThemeId, this.menuThemeOptions);
     this.currentMode = options.initialMode && this.enabledModes.includes(options.initialMode)
       ? options.initialMode
       : this.enabledModes[0];
@@ -766,11 +836,29 @@ export class StartMenu {
     const settingsSocialRow = this.createActionRow('Social', () => {
       this.options.onOpenOnlineDevMenu?.('social');
     });
+    const settingsThemeInfoRow = document.createElement('div');
+    settingsThemeInfoRow.className = 'start-menu-row';
+    this.settingsThemeOptionsLabel = document.createElement('div');
+    this.settingsThemeOptionsLabel.className = 'start-mode-options';
+    this.settingsThemeDescriptionLabel = document.createElement('div');
+    this.settingsThemeDescriptionLabel.className = 'start-mode-options';
+    settingsThemeInfoRow.append(this.settingsThemeOptionsLabel, this.settingsThemeDescriptionLabel);
+    const settingsThemeRow = this.createActionRow('Menu Theme', () => {
+      this.cycleMenuTheme(1);
+    });
+    this.settingsThemeButton = settingsThemeRow.button;
     const settingsBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
-    this.settingsPanel.append(settingsAccountRow.row, settingsSignOutRow.row, settingsSocialRow.row, settingsBackRow.row);
-    this.registerRows('settings', [settingsAccountRow.row, settingsSignOutRow.row, settingsSocialRow.row, settingsBackRow.row]);
+    this.settingsPanel.append(
+      settingsAccountRow.row,
+      settingsSignOutRow.row,
+      settingsSocialRow.row,
+      settingsThemeInfoRow,
+      settingsThemeRow.row,
+      settingsBackRow.row,
+    );
+    this.registerRows('settings', [settingsAccountRow.row, settingsSignOutRow.row, settingsSocialRow.row, settingsThemeRow.row, settingsBackRow.row]);
 
     const padHint = document.createElement('p');
     padHint.className = 'start-pad-hint';
@@ -860,6 +948,7 @@ export class StartMenu {
       'No arcade runs',
       'Complete an arcade ladder run to populate recent runs and best completion records.',
     );
+    this.refreshSettingsThemeRows();
     this.setMatchSelection(0);
     this.pollGamepads();
   }
@@ -977,6 +1066,12 @@ export class StartMenu {
     this.currentAiDifficulty = sanitiseAiDifficulty(aiDifficulty);
     this.currentArcadeSettings = sanitiseArcadeSettings(arcadeSettings);
     this.refreshLocalRows();
+  }
+
+  public setMenuTheme(themeId: string): void {
+    const resolved = resolveInitialMenuThemeId(themeId, this.menuThemeOptions);
+    this.currentMenuThemeId = resolved;
+    this.refreshSettingsThemeRows();
   }
 
   public setArcadeHistoryView(headline: string, detail: string): void {
@@ -1510,6 +1605,45 @@ export class StartMenu {
     }
   }
 
+  private applySettingsHorizontal(direction: 1 | -1): void {
+    if (this.currentScreen !== 'settings') {
+      return;
+    }
+    if (this.getCurrentRowIndex() !== SETTINGS_THEME_ROW_INDEX) {
+      return;
+    }
+    this.cycleMenuTheme(direction);
+  }
+
+  private applyHorizontalNavigation(direction: 1 | -1): void {
+    if (this.currentScreen === 'local') {
+      this.applyLocalHorizontal(direction);
+      return;
+    }
+    if (this.currentScreen === 'settings') {
+      this.applySettingsHorizontal(direction);
+    }
+  }
+
+  private cycleMenuTheme(direction: 1 | -1): void {
+    const nextThemeId = getNextMenuThemeId(this.currentMenuThemeId, this.menuThemeOptions, direction);
+    if (nextThemeId === this.currentMenuThemeId) {
+      return;
+    }
+    this.currentMenuThemeId = nextThemeId;
+    this.refreshSettingsThemeRows();
+    this.options.onMenuThemeChange?.(nextThemeId);
+  }
+
+  private refreshSettingsThemeRows(): void {
+    const activeTheme = this.menuThemeOptions.find((theme) => theme.id === this.currentMenuThemeId) ?? this.menuThemeOptions[0];
+    this.settingsThemeButton.textContent = `Menu Theme: ${activeTheme.label}`;
+    this.settingsThemeOptionsLabel.textContent = this.menuThemeOptions
+      .map((theme) => theme.id === activeTheme.id ? `[${theme.label}]` : theme.label)
+      .join('  |  ');
+    this.settingsThemeDescriptionLabel.textContent = activeTheme.description;
+  }
+
   private handleBackAction(): void {
     switch (this.currentScreen) {
       case 'title':
@@ -1562,10 +1696,10 @@ export class StartMenu {
           this.moveSelection(1);
         }
         if (this.wasPressed(primaryPad.index, state, 'left')) {
-          this.applyLocalHorizontal(-1);
+          this.applyHorizontalNavigation(-1);
         }
         if (this.wasPressed(primaryPad.index, state, 'right')) {
-          this.applyLocalHorizontal(1);
+          this.applyHorizontalNavigation(1);
         }
         if (this.wasPressed(primaryPad.index, state, 'confirm')) {
           this.activateSelection();

@@ -1,7 +1,7 @@
 # Next Epic Plan: E4 Content Production (No Engine Workflow)
 
 Date: 2026-02-15  
-Status: in progress (`E4.1`, `E4.2` complete; next `E4.3`)
+Status: in progress (`E4.1`, `E4.2` complete; `E4.3` active)
 
 ## Epics
 1. `E4.1` Character package system (first priority).
@@ -27,9 +27,11 @@ Status: in progress (`E4.1`, `E4.2` complete; next `E4.3`)
 
 ## Next implementation target
 - Start `E4.3` (visual content and menu theming).
+- `S5.1` (menu theme registry + runtime application + persistence) is complete.
 - Keep `E4.1` QA harness in CI while tuning content.
 - `S4.6` (balance profile registry + validation workflow) is complete.
 - `S4.7` (training telemetry capture and export) is complete.
 - `S4.8` (patch-note generator from profile diffs) is complete.
 - `S4.9` (matchup regression smoke suite) is complete.
 - Detailed `E4.2` breakdown: `docs/NEXT_EPIC_E42_BALANCE_MECHANICS_PLAN.md`.
+- Detailed `E4.3` breakdown: `docs/NEXT_EPIC_E43_VISUAL_MENU_THEMING_PLAN.md`.

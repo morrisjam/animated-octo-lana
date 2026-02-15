@@ -86,10 +86,17 @@ import {
   type WebAuthMenuAction,
   type WebAuthMenuRequest,
 } from './view/startMenu';
+import {
+  applyMenuTheme,
+  DEFAULT_MENU_THEME_ID,
+  MENU_THEME_OPTIONS,
+  resolveMenuTheme,
+} from './view/menuThemes';
 
 type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev';
 interface StoredSettings {
   mode?: string;
+  menuThemeId?: string;
   loadout?: {
     P1?: string;
     P2?: string;
@@ -103,6 +110,7 @@ interface StoredSettings {
 }
 interface LoadedSettings {
   mode: GameMode;
+  menuThemeId: string;
   loadout: PlayersById<CharacterId>;
   aiDifficulty: AiDifficultyId;
   arcade: ArcadeMenuSettings;
@@ -226,6 +234,8 @@ audioSystem.setBusVolume('master', audioSettings.masterVolume);
 audioSystem.setBusVolume('music', audioSettings.musicVolume);
 audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
 audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
+let selectedMenuThemeId = loadedSettings.menuThemeId;
+applyMenuTheme(resolveMenuTheme(selectedMenuThemeId), document.documentElement.style);
 let selectedLoadout: PlayersById<CharacterId> = loadedSettings.loadout;
 let selectedAiDifficulty: AiDifficultyId = loadedSettings.aiDifficulty;
 let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
@@ -985,6 +995,8 @@ async function refreshRankedSnapshot(): Promise<RankedSnapshotViewState> {
 
 const startMenu = createStartMenu({
   initialMode: selectedMode,
+  initialMenuThemeId: selectedMenuThemeId,
+  availableMenuThemes: MENU_THEME_OPTIONS,
   initialLoadout: selectedLoadout,
   initialAiDifficulty: selectedAiDifficulty,
   initialArcadeSettings: selectedArcadeSettings,
@@ -1041,6 +1053,11 @@ const startMenu = createStartMenu({
     : undefined,
   onOpenReplayReview: () => {
     void beginReplayReviewFromFixture('smoke.replay.json');
+  },
+  onMenuThemeChange: (themeId: string) => {
+    selectedMenuThemeId = resolveMenuTheme(themeId).id;
+    applyMenuTheme(resolveMenuTheme(selectedMenuThemeId), document.documentElement.style);
+    persistSettings();
   },
 });
 startMenu.setEntitlementGate(true, null);
@@ -1135,6 +1152,10 @@ function resolveStoredAiDifficulty(value: string | undefined): AiDifficultyId {
   return DEFAULT_AI_DIFFICULTY;
 }
 
+function resolveStoredMenuThemeId(value: string | undefined): string {
+  return resolveMenuTheme(value).id;
+}
+
 function sanitiseArcadeMenuSettings(raw: unknown): ArcadeMenuSettings {
   const value = raw && typeof raw === 'object' ? raw as { continues?: unknown; retryEnabled?: unknown } : {};
   const requestedContinues = Number(value.continues);
@@ -1155,6 +1176,7 @@ function coerceStoredSettings(raw: unknown): LoadedSettings | null {
   }
   const parsed = raw as StoredSettings;
   const hasKnownKeys = 'mode' in parsed
+    || 'menuThemeId' in parsed
     || 'loadout' in parsed
     || 'audio' in parsed
     || 'aiDifficulty' in parsed
@@ -1169,10 +1191,12 @@ function coerceStoredSettings(raw: unknown): LoadedSettings | null {
   const p2 = isCharacterId(parsedP2) ? parsedP2 : DEFAULT_CHARACTER_LOADOUT.P2;
   const audio = sanitiseAudioSettings(parsed.audio);
   const aiDifficulty = resolveStoredAiDifficulty(parsed.aiDifficulty);
+  const menuThemeId = resolveStoredMenuThemeId(parsed.menuThemeId);
   const arcade = sanitiseArcadeMenuSettings(parsed.arcade);
 
   return {
     mode,
+    menuThemeId,
     loadout: {
       P1: p1,
       P2: p2,
@@ -1187,6 +1211,7 @@ function loadSettings(): LoadedSettings {
   const fallbackMode = resolveStoredMode('endless');
   const fallback: LoadedSettings = {
     mode: fallbackMode,
+    menuThemeId: DEFAULT_MENU_THEME_ID,
     loadout: {
       P1: DEFAULT_CHARACTER_LOADOUT.P1,
       P2: DEFAULT_CHARACTER_LOADOUT.P2,
@@ -1265,6 +1290,7 @@ function buildFullProfileSettingsPayload(
   return {
     ...(baseSettings ?? {}),
     mode: selectedMode,
+    menuThemeId: selectedMenuThemeId,
     loadout: selectedLoadout,
     aiDifficulty: selectedAiDifficulty,
     arcade: selectedArcadeSettings,
@@ -1285,10 +1311,13 @@ function buildHistorySyncProfileSettingsPayload(
 
 function applyLoadedProfileSettings(profileSettings: LoadedSettings): void {
   selectedMode = profileSettings.mode;
+  selectedMenuThemeId = profileSettings.menuThemeId;
   selectedLoadout = profileSettings.loadout;
   selectedAiDifficulty = profileSettings.aiDifficulty;
   selectedArcadeSettings = profileSettings.arcade;
   audioSettings = profileSettings.audio;
+  applyMenuTheme(resolveMenuTheme(selectedMenuThemeId), document.documentElement.style);
+  startMenu.setMenuTheme(selectedMenuThemeId);
   startMenu.setLocalSetup(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
   audioSystem.setBusVolume('master', audioSettings.masterVolume);
   audioSystem.setBusVolume('music', audioSettings.musicVolume);
@@ -1300,6 +1329,7 @@ function applyLoadedProfileSettings(profileSettings: LoadedSettings): void {
 function persistSettings(): void {
   const payload: StoredSettings = {
     mode: selectedMode,
+    menuThemeId: selectedMenuThemeId,
     loadout: {
       P1: selectedLoadout.P1,
       P2: selectedLoadout.P2,

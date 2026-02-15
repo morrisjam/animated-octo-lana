@@ -33,6 +33,12 @@
   - run duration
 - `Arcade Run Ended` summary is shown when no continue/retry action remains.
 
+## Run history integration
+
+- Arcade completion or failure summaries append a run record to local run history storage.
+- Local menu shows recent runs and best completion times by character and difficulty.
+- Profile sync merges local and remote history when account services are available.
+
 ## Persistence
 
 - Arcade menu settings are persisted in:

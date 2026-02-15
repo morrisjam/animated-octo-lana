@@ -62,4 +62,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S1.21` (Enemy AI behaviour framework) is complete.
 - `S1.22` (AI difficulty profiles) is complete.
 - `S1.23` (single-player arcade mode flow) is complete.
-- Next recommended slice: `S1.24` arcade rewards and run history.
+- `S1.24` (arcade rewards and run history) is complete.
+- Next recommended slice: all currently listed backlog stories are complete.

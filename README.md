@@ -76,6 +76,7 @@ npm run migrate -w @gravity-well/api
 - AI behaviour framework: `docs/AI_BEHAVIOUR_FRAMEWORK.md`
 - AI difficulty profiles: `docs/AI_DIFFICULTY_PROFILES.md`
 - Arcade mode flow: `docs/ARCADE_MODE_FLOW.md`
+- Arcade run history and best records: `docs/ARCADE_RUN_HISTORY.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

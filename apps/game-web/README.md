@@ -156,6 +156,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Pause menu audio tab exposes persistent master/music/SFX/voice sliders, voice ducking toggle, dynamic range mode, and subtitle toggle.
 - Local menu includes persistent `AI Difficulty` selection, saved in local settings and profile settings payload.
 - Local menu includes `Arcade Continues` and `Arcade Retry` options used by arcade loss-flow prompts and run summaries.
+- Arcade run history and best completion records are shown in Local menu and persisted offline, then synced to profile settings when account services are available.
 
 ## Replay scripts
 

@@ -32,6 +32,16 @@ import {
   type ArcadeRunState,
 } from './sim/arcade';
 import {
+  appendArcadeRunHistoryEntry,
+  areArcadeRunHistoriesEqual,
+  computeArcadeBestRecords,
+  createEmptyArcadeRunHistory,
+  mergeArcadeRunHistories,
+  sanitiseArcadeRunHistory,
+  type ArcadeRunHistory,
+  type ArcadeRunHistoryEntry,
+} from './sim/arcadeHistory';
+import {
   createHud,
   type RollbackDiagnosticsView,
   type RuntimeMemoryDiagnosticsView,
@@ -90,6 +100,7 @@ interface LoadedSettings {
 }
 
 const SETTINGS_STORAGE_KEY = 'gravity_well.settings.v1';
+const ARCADE_HISTORY_STORAGE_KEY = 'gravity_well.arcade_history.v1';
 const ROLLBACK_DIAGNOSTICS_STORAGE_KEY = 'gravity_well.rollback_diagnostics.v1';
 const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
@@ -97,6 +108,7 @@ const DEFAULT_ARCADE_MENU_SETTINGS: ArcadeMenuSettings = {
   continues: 2,
   retryEnabled: true,
 };
+const MAX_ARCADE_HISTORY_ENTRIES = 60;
 
 interface ArcadePendingLossState {
   stageLabel: string;
@@ -206,6 +218,8 @@ audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
 let selectedLoadout: PlayersById<CharacterId> = loadedSettings.loadout;
 let selectedAiDifficulty: AiDifficultyId = loadedSettings.aiDifficulty;
 let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
+let arcadeHistory: ArcadeRunHistory = loadArcadeHistory();
+let profileSettingsCache: Record<string, unknown> = {};
 const seedParam = new URLSearchParams(window.location.search).get('seed');
 const forcedSeed = seedParam !== null ? Number(seedParam) : undefined;
 let selectedMatchSeed = Number.isFinite(forcedSeed) ? (forcedSeed as number) : 1;
@@ -983,6 +997,7 @@ const startMenu = createStartMenu({
   },
 });
 startMenu.setEntitlementGate(true, null);
+applyArcadeHistoryView();
 void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
   onProgress: (progress) => {
     if (runtimeConfig.features.debugToolsEnabled && progress.loaded === progress.total) {
@@ -1148,6 +1163,90 @@ function loadSettings(): LoadedSettings {
   return coerceStoredSettings(persisted.value) ?? fallback;
 }
 
+function loadArcadeHistory(): ArcadeRunHistory {
+  const persisted = platform.persistence.readJson<unknown>(ARCADE_HISTORY_STORAGE_KEY);
+  if (!persisted.ok) {
+    return createEmptyArcadeRunHistory();
+  }
+  return sanitiseArcadeRunHistory(persisted.value);
+}
+
+function persistArcadeHistory(): void {
+  const writeResult = platform.persistence.writeJson(ARCADE_HISTORY_STORAGE_KEY, arcadeHistory);
+  if (!writeResult.ok && runtimeConfig.features.debugToolsEnabled) {
+    console.warn('[persistence] arcade history write skipped', writeResult);
+  }
+}
+
+function formatArcadeDuration(seconds: number): string {
+  const wholeSeconds = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(wholeSeconds / 60);
+  const secs = wholeSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function buildArcadeHistoryView(history: ArcadeRunHistory): { headline: string; detail: string } {
+  if (history.entries.length === 0) {
+    return {
+      headline: 'No arcade runs',
+      detail: 'Complete an arcade ladder run to populate recent runs and best completion records.',
+    };
+  }
+
+  const recentLines = history.entries.slice(0, 5).map((entry) => {
+    const character = CHARACTER_BY_ID[entry.playerCharacterId]?.displayName ?? entry.playerCharacterId;
+    const date = new Date(entry.completedAt).toISOString().slice(0, 10);
+    const resultLabel = entry.outcome === 'completed' ? 'Clear' : 'Failed';
+    return `${date} | ${character} | ${entry.aiDifficulty} | ${resultLabel} | ${formatArcadeDuration(entry.completionSeconds)}`;
+  });
+  const bestRecords = computeArcadeBestRecords(history).slice(0, 6);
+  const bestLines = bestRecords.length > 0
+    ? bestRecords.map((record) => {
+      const character = CHARACTER_BY_ID[record.playerCharacterId]?.displayName ?? record.playerCharacterId;
+      return `${character} | ${record.aiDifficulty} | ${formatArcadeDuration(record.completionSeconds)}`;
+    })
+    : ['No completed clears yet.'];
+
+  return {
+    headline: `${history.entries.length} run(s) recorded`,
+    detail: `Recent Runs:\n${recentLines.join('\n')}\n\nBest Clears:\n${bestLines.join('\n')}`,
+  };
+}
+
+function applyArcadeHistoryView(): void {
+  const view = buildArcadeHistoryView(arcadeHistory);
+  startMenu.setArcadeHistoryView(view.headline, view.detail);
+}
+
+function buildProfileSettingsPayload(
+  baseSettings: Record<string, unknown> | null | undefined,
+  history: ArcadeRunHistory = arcadeHistory,
+): Record<string, unknown> {
+  return {
+    ...(baseSettings ?? {}),
+    mode: selectedMode,
+    loadout: selectedLoadout,
+    aiDifficulty: selectedAiDifficulty,
+    arcade: selectedArcadeSettings,
+    audio: audioSettings,
+    arcadeHistory: history,
+  };
+}
+
+function applyLoadedProfileSettings(profileSettings: LoadedSettings): void {
+  selectedMode = profileSettings.mode;
+  selectedLoadout = profileSettings.loadout;
+  selectedAiDifficulty = profileSettings.aiDifficulty;
+  selectedArcadeSettings = profileSettings.arcade;
+  audioSettings = profileSettings.audio;
+  startMenu.setLocalSetup(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
+  audioSystem.setBusVolume('master', audioSettings.masterVolume);
+  audioSystem.setBusVolume('music', audioSettings.musicVolume);
+  audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
+  audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
+  persistSettings();
+}
+
 function persistSettings(): void {
   const payload: StoredSettings = {
     mode: selectedMode,
@@ -1165,6 +1264,70 @@ function persistSettings(): void {
   }
 }
 
+async function syncArcadeHistoryWithProfile(
+  accountId: string,
+  sourceSettings?: Record<string, unknown> | null,
+): Promise<void> {
+  const remoteSettings = sourceSettings ?? profileSettingsCache ?? {};
+  const remoteHistory = sanitiseArcadeRunHistory((remoteSettings as { arcadeHistory?: unknown }).arcadeHistory);
+  const mergedHistory = mergeArcadeRunHistories(arcadeHistory, remoteHistory, MAX_ARCADE_HISTORY_ENTRIES);
+
+  if (!areArcadeRunHistoriesEqual(arcadeHistory, mergedHistory)) {
+    arcadeHistory = mergedHistory;
+    persistArcadeHistory();
+    applyArcadeHistoryView();
+  }
+
+  if (areArcadeRunHistoriesEqual(mergedHistory, remoteHistory)) {
+    return;
+  }
+
+  const savedProfile = await platform.profile.saveProfile(accountId, {
+    settings: buildProfileSettingsPayload(remoteSettings, mergedHistory),
+  });
+  const savedSettings = asRecord(savedProfile.settings) ?? {};
+  profileSettingsCache = savedSettings;
+  const savedHistory = sanitiseArcadeRunHistory(savedSettings.arcadeHistory);
+  if (!areArcadeRunHistoriesEqual(arcadeHistory, savedHistory)) {
+    arcadeHistory = mergeArcadeRunHistories(savedHistory, arcadeHistory, MAX_ARCADE_HISTORY_ENTRIES);
+    persistArcadeHistory();
+    applyArcadeHistoryView();
+  }
+}
+
+function recordArcadeRunSummary(outcome: 'completed' | 'failed', summary: {
+  stagesCleared: number;
+  totalStages: number;
+  continuesUsed: number;
+  retriesUsed: number;
+  durationSeconds: number;
+}): void {
+  const completedAt = new Date().toISOString();
+  const runId = `${completedAt}:${selectedLoadout.P1}:${selectedAiDifficulty}:${summary.durationSeconds.toFixed(3)}:${outcome}`;
+  const entry: ArcadeRunHistoryEntry = {
+    id: runId,
+    completedAt,
+    playerCharacterId: selectedLoadout.P1,
+    aiDifficulty: selectedAiDifficulty,
+    outcome,
+    completionSeconds: Math.max(0, summary.durationSeconds),
+    stagesCleared: summary.stagesCleared,
+    totalStages: summary.totalStages,
+    continuesUsed: summary.continuesUsed,
+    retriesUsed: summary.retriesUsed,
+  };
+  arcadeHistory = appendArcadeRunHistoryEntry(arcadeHistory, entry, MAX_ARCADE_HISTORY_ENTRIES);
+  persistArcadeHistory();
+  applyArcadeHistoryView();
+  if (sessionAccountId) {
+    void syncArcadeHistoryWithProfile(sessionAccountId, profileSettingsCache).catch((error) => {
+      if (runtimeConfig.features.debugToolsEnabled) {
+        console.warn('[profile] arcade history sync failed', error);
+      }
+    });
+  }
+}
+
 async function bootstrapPlatformProfile(): Promise<void> {
   try {
     const session = await platform.auth.getSession();
@@ -1178,28 +1341,22 @@ async function bootstrapPlatformProfile(): Promise<void> {
       playerRoom = null;
       playerReplayItems = [];
       playerRankedSnapshot = null;
+      profileSettingsCache = {};
     }
     if (!session.accountId) {
       return;
     }
     const profile = await platform.profile.getProfile(session.accountId);
+    const remoteSettings = asRecord(profile.settings) ?? {};
+    profileSettingsCache = remoteSettings;
     if (session.isAuthenticated && profile.displayName) {
       startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
     }
-    const profileSettings = coerceStoredSettings(profile.settings);
+    const profileSettings = coerceStoredSettings(remoteSettings);
     if (profileSettings) {
-      selectedMode = profileSettings.mode;
-      selectedLoadout = profileSettings.loadout;
-      selectedAiDifficulty = profileSettings.aiDifficulty;
-      selectedArcadeSettings = profileSettings.arcade;
-      audioSettings = profileSettings.audio;
-      startMenu.setLocalSetup(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
-      audioSystem.setBusVolume('master', audioSettings.masterVolume);
-      audioSystem.setBusVolume('music', audioSettings.musicVolume);
-      audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
-      audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
-      persistSettings();
+      applyLoadedProfileSettings(profileSettings);
     }
+    await syncArcadeHistoryWithProfile(session.accountId, remoteSettings);
   } catch {
     // Profile bootstrap fallback is intentionally silent for prototype flow.
     startMenu.setEntitlementGate(false, 'Entitlement check failed. Please retry or refresh.');
@@ -1260,12 +1417,20 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
     playerRoom = null;
     playerReplayItems = [];
     playerRankedSnapshot = null;
+    profileSettingsCache = {};
   }
   if (session.accountId) {
     const profile = await platform.profile.getProfile(session.accountId);
+    const remoteSettings = asRecord(profile.settings) ?? {};
+    profileSettingsCache = remoteSettings;
     if (session.isAuthenticated && profile.displayName) {
       startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
     }
+    const loadedProfileSettings = coerceStoredSettings(remoteSettings);
+    if (loadedProfileSettings) {
+      applyLoadedProfileSettings(loadedProfileSettings);
+    }
+    await syncArcadeHistoryWithProfile(session.accountId, remoteSettings);
   }
 }
 
@@ -1314,13 +1479,6 @@ function resolveLoadoutForCurrentMatch(): PlayersById<CharacterId> {
     };
   }
   return selectedLoadout;
-}
-
-function formatDuration(seconds: number): string {
-  const totalSeconds = Math.max(0, Math.floor(seconds));
-  const mins = Math.floor(totalSeconds / 60);
-  const secs = totalSeconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 function resetRoundState(): void {
@@ -1410,13 +1568,13 @@ function beginMode(
   persistSettings();
   if (sessionAccountId) {
     void platform.profile.saveProfile(sessionAccountId, {
-      settings: {
-        mode: selectedMode,
-        loadout: selectedLoadout,
-        aiDifficulty: selectedAiDifficulty,
-        arcade: selectedArcadeSettings,
-        audio: audioSettings,
-      },
+      settings: buildProfileSettingsPayload(profileSettingsCache, arcadeHistory),
+    }).then((savedProfile) => {
+      profileSettingsCache = asRecord(savedProfile.settings) ?? profileSettingsCache;
+    }).catch((error) => {
+      if (runtimeConfig.features.debugToolsEnabled) {
+        console.warn('[profile] settings save skipped', error);
+      }
     });
   }
   void platform.presence.setStatus('playing');
@@ -1830,7 +1988,7 @@ function showArcadeCompletionSummary(): void {
       `Stages cleared: ${stagesCleared}/${arcadeRun.stages.length}`,
       `Continues used: ${arcadeRun.continuesUsed}`,
       `Retries used: ${arcadeRun.retriesUsed}`,
-      `Run time: ${formatDuration(durationSeconds)}`,
+      `Run time: ${formatArcadeDuration(durationSeconds)}`,
     ].join('\n'),
     primaryLabel: 'Run Again',
     secondaryLabel: 'Return to Home',
@@ -1857,7 +2015,7 @@ function showArcadeFailureSummary(): void {
       `Stages cleared: ${stagesCleared}/${arcadeRun.stages.length}`,
       `Continues used: ${arcadeRun.continuesUsed}`,
       `Retries used: ${arcadeRun.retriesUsed}`,
-      `Run time: ${formatDuration(durationSeconds)}`,
+      `Run time: ${formatArcadeDuration(durationSeconds)}`,
     ].join('\n'),
     primaryLabel: 'Try Arcade Again',
     secondaryLabel: 'Return to Home',
@@ -1952,6 +2110,7 @@ function onRoundWin(winner: PlayerId): void {
       void platform.presence.setStatus('match_over');
       hudRoot.style.visibility = 'hidden';
       if (resolution.type === 'run_complete') {
+        recordArcadeRunSummary('completed', resolution.summary);
         const matchWinCallout = voiceCalloutSystem.trigger({
           playerId: winner,
           characterId: state.players[winner].characterId,
@@ -1968,6 +2127,7 @@ function onRoundWin(winner: PlayerId): void {
         showArcadeLossPrompt(resolution.stage.label, resolution.allowedActions);
         return;
       }
+      recordArcadeRunSummary('failed', resolution.summary);
       showArcadeFailureSummary();
       return;
     }

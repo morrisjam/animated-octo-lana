@@ -295,6 +295,8 @@ export class StartMenu {
   private readonly localArcadeContinuesOptionsLabel: HTMLDivElement;
   private readonly localArcadeContinuesButton: HTMLButtonElement;
   private readonly localArcadeRetryButton: HTMLButtonElement;
+  private readonly localArcadeHistoryHeadline: HTMLDivElement;
+  private readonly localArcadeHistoryDetail: HTMLPreElement;
   private readonly p1CharacterButton: HTMLButtonElement;
   private readonly p2CharacterButton: HTMLButtonElement;
   private readonly localCharacterList: HTMLDivElement;
@@ -668,6 +670,9 @@ export class StartMenu {
 
     this.localCharacterList = document.createElement('div');
     this.localCharacterList.className = 'start-character-list';
+    const localArcadeHistoryPanel = this.createStatusPanel('Arcade History');
+    this.localArcadeHistoryHeadline = localArcadeHistoryPanel.headline;
+    this.localArcadeHistoryDetail = localArcadeHistoryPanel.detail;
 
     const localStartRow = this.createActionRow('Start Local Match', () => {
       this.startLocalMatch();
@@ -687,6 +692,7 @@ export class StartMenu {
       localP1Row.row,
       localP2Row.row,
       this.localCharacterList,
+      localArcadeHistoryPanel.root,
       localStartRow.row,
       localBackRow.row,
     );
@@ -850,6 +856,10 @@ export class StartMenu {
       headline: 'No ranked snapshot loaded',
       detail: 'Press "Refresh Ranked Snapshot" to load progression.',
     });
+    this.setArcadeHistoryView(
+      'No arcade runs',
+      'Complete an arcade ladder run to populate recent runs and best completion records.',
+    );
     this.setMatchSelection(0);
     this.pollGamepads();
   }
@@ -967,6 +977,11 @@ export class StartMenu {
     this.currentAiDifficulty = sanitiseAiDifficulty(aiDifficulty);
     this.currentArcadeSettings = sanitiseArcadeSettings(arcadeSettings);
     this.refreshLocalRows();
+  }
+
+  public setArcadeHistoryView(headline: string, detail: string): void {
+    this.localArcadeHistoryHeadline.textContent = headline;
+    this.localArcadeHistoryDetail.textContent = detail;
   }
 
   public setEntitlementGate(canAccessGameplay: boolean, message: string | null): void {
@@ -1159,6 +1174,7 @@ export class StartMenu {
   }
 
   private refreshLocalRows(): void {
+    const arcadeModeSelected = this.currentMode === 'arcade';
     this.localModeButton.textContent = `Mode: ${MODE_LABELS[this.currentMode]}`;
     this.localModeOptionsLabel.textContent = this.enabledModes
       .map((mode) => mode === this.currentMode ? `[${MODE_LABELS[mode]}]` : MODE_LABELS[mode])
@@ -1171,11 +1187,20 @@ export class StartMenu {
           : getAiDifficultyLabel(difficulty)
       ))
       .join('  |  ');
-    this.localArcadeContinuesButton.textContent = `Arcade Continues: ${this.currentArcadeSettings.continues}`;
-    this.localArcadeContinuesOptionsLabel.textContent = ARCADE_CONTINUE_OPTIONS
-      .map((value) => value === this.currentArcadeSettings.continues ? `[${value}]` : `${value}`)
-      .join('  |  ');
-    this.localArcadeRetryButton.textContent = `Arcade Retry: ${this.currentArcadeSettings.retryEnabled ? 'Enabled' : 'Disabled'}`;
+    this.localArcadeContinuesButton.disabled = !arcadeModeSelected;
+    this.localArcadeRetryButton.disabled = !arcadeModeSelected;
+    this.localArcadeContinuesOptionsLabel.classList.toggle('muted', !arcadeModeSelected);
+    if (arcadeModeSelected) {
+      this.localArcadeContinuesButton.textContent = `Arcade Continues: ${this.currentArcadeSettings.continues}`;
+      this.localArcadeContinuesOptionsLabel.textContent = ARCADE_CONTINUE_OPTIONS
+        .map((value) => value === this.currentArcadeSettings.continues ? `[${value}]` : `${value}`)
+        .join('  |  ');
+      this.localArcadeRetryButton.textContent = `Arcade Retry: ${this.currentArcadeSettings.retryEnabled ? 'Enabled' : 'Disabled'}`;
+    } else {
+      this.localArcadeContinuesButton.textContent = 'Arcade Continues: Arcade mode only';
+      this.localArcadeContinuesOptionsLabel.textContent = 'Switch mode to Arcade Ladder to edit continue and retry rules.';
+      this.localArcadeRetryButton.textContent = 'Arcade Retry: Arcade mode only';
+    }
 
     const p1 = CHARACTER_BY_ID[this.currentLoadout.P1];
     const p2 = CHARACTER_BY_ID[this.currentLoadout.P2];
@@ -1461,11 +1486,17 @@ export class StartMenu {
       return;
     }
     if (rowIndex === 2) {
+      if (this.currentMode !== 'arcade') {
+        return;
+      }
       this.currentArcadeSettings.continues = getNextArcadeContinues(this.currentArcadeSettings.continues, direction);
       this.refreshLocalRows();
       return;
     }
     if (rowIndex === 3) {
+      if (this.currentMode !== 'arcade') {
+        return;
+      }
       this.currentArcadeSettings.retryEnabled = !this.currentArcadeSettings.retryEnabled;
       this.refreshLocalRows();
       return;

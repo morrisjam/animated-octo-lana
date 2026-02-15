@@ -1,0 +1,64 @@
+{
+  "generatedAt": "2026-02-15T17:50:32.967Z",
+  "profileIds": [
+    "default",
+    "mobility_focus_v1",
+    "control_focus_v1"
+  ],
+  "fixtureIds": [
+    "launch_connect",
+    "launch_vs_parry",
+    "dunk_connect",
+    "special_projectile_spawn"
+  ],
+  "profiles": {
+    "default": {
+      "fixtures": {
+        "launch_connect": {
+          "finalChecksum": 2256640078
+        },
+        "launch_vs_parry": {
+          "finalChecksum": 135717569
+        },
+        "dunk_connect": {
+          "finalChecksum": 2822649549
+        },
+        "special_projectile_spawn": {
+          "finalChecksum": 963409125
+        }
+      }
+    },
+    "mobility_focus_v1": {
+      "fixtures": {
+        "launch_connect": {
+          "finalChecksum": 2256640078
+        },
+        "launch_vs_parry": {
+          "finalChecksum": 135717569
+        },
+        "dunk_connect": {
+          "finalChecksum": 2822649549
+        },
+        "special_projectile_spawn": {
+          "finalChecksum": 963409125
+        }
+      }
+    },
+    "control_focus_v1": {
+      "fixtures": {
+        "launch_connect": {
+          "finalChecksum": 951242591
+        },
+        "launch_vs_parry": {
+          "finalChecksum": 135717569
+        },
+        "dunk_connect": {
+          "finalChecksum": 2822649549
+        },
+        "special_projectile_spawn": {
+          "finalChecksum": 963409125
+        }
+      }
+    }
+  }
+}

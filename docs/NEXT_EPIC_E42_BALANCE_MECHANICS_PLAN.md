@@ -1,13 +1,13 @@
 # Next Epic Plan: E4.2 Balance And Mechanics Operations
 
 Date: 2026-02-15  
-Status: in progress (`S4.6`, `S4.7`, `S4.8` complete)
+Status: complete (`S4.6`, `S4.7`, `S4.8`, `S4.9` complete)
 
 ## Scope
 - `S4.6` Balance profile registry and validation workflow. (complete)
 - `S4.7` Training telemetry capture for tuning sessions. (complete)
 - `S4.8` Patch note generator from tuning profile diffs. (complete)
-- `S4.9` Matchup regression smoke suite for core move interactions.
+- `S4.9` Matchup regression smoke suite for core move interactions. (complete)
 
 ## S4.6 delivered
 - Data-authored balance profiles under `apps/game-web/content/balance`.
@@ -27,8 +27,12 @@ Status: in progress (`S4.6`, `S4.7`, `S4.8` complete)
 - JSON report artifact for automation and tooling integrations.
 - Build and verify integration through `balance:patch-notes`.
 
+## S4.9 delivered
+- Deterministic matchup fixture suite for launch, parry counter, dunk recovery, and special projectile interactions.
+- Cross-profile checksum baseline with checked-in expected artifact.
+- Semantic assertions per fixture to catch behavior drift beyond checksum mismatches.
+- Build/verify/steam CI integration through `matchup:smoke`.
+
 ## Immediate next story
-- Start `S4.9`:
-  - define matchup smoke fixtures for launch/dunk/parry/special interactions
-  - run fixture suite across active balance profiles
-  - fail CI on deterministic interaction regressions
+- `E4.2` is complete.
+- Next target: `E4.3` visual content and menu theming.

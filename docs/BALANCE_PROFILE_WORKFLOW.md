@@ -42,3 +42,4 @@ Notes:
 
 ## Related release-note workflow
 - Use `docs/BALANCE_PATCH_NOTES_WORKFLOW.md` to generate field-level patch note diffs between profiles.
+- Use `docs/MATCHUP_REGRESSION_SMOKE_WORKFLOW.md` to gate deterministic interaction regressions across profiles.

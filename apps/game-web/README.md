@@ -245,6 +245,26 @@ npm run replay:check
 npm run replay:size-check
 ```
 
+## Matchup regression smoke suite
+
+From repo root:
+
+```bash
+npm run matchup:smoke
+```
+
+From this workspace:
+
+```bash
+npm run matchup:smoke
+```
+
+Optional baseline refresh:
+
+```bash
+npm run matchup:smoke -- --write-expected
+```
+
 ## Replay review viewer
 
 - Open `Replay Review (Smoke Fixture)` from the home menu.

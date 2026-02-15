@@ -24,6 +24,7 @@ npm run character:new -- --id striker --display-name "Striker"
 npm run character:qa
 npm run balance:validate
 npm run balance:patch-notes
+npm run matchup:smoke
 ```
 
 Steam packaging flow:
@@ -72,6 +73,7 @@ npm run migrate -w @gravity-well/api
 - Balance profile workflow: `docs/BALANCE_PROFILE_WORKFLOW.md`
 - Balance patch notes workflow: `docs/BALANCE_PATCH_NOTES_WORKFLOW.md`
 - Training telemetry workflow: `docs/TRAINING_TELEMETRY_WORKFLOW.md`
+- Matchup regression smoke workflow: `docs/MATCHUP_REGRESSION_SMOKE_WORKFLOW.md`
 - Move frame-data registry: `docs/MOVE_FRAME_DATA_REGISTRY.md`
 - Training frame-data overlay: `docs/FRAME_DATA_VISUALIZER_OVERLAY.md`
 - Asset manifest loader: `docs/ASSET_MANIFEST_LOADER.md`

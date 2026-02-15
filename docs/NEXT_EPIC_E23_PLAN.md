@@ -43,4 +43,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S3.6` (platform compliance gap audit) is complete.
 - `S3.7` (console-safe persistence abstraction) is complete.
 - `S3.8` (console entitlement gateway) is complete.
-- Next recommended slice: complete `S2.28` Steam identity link and account merge policy hardening/tests.
+- `S2.28` (Steam identity link and account merge policy) is complete.
+- Next recommended slice: `S1.4` deterministic RNG policy hardening and audit pass.

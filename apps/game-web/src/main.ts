@@ -1329,23 +1329,44 @@ function recordArcadeRunSummary(outcome: 'completed' | 'failed', summary: {
 }
 
 async function bootstrapPlatformProfile(): Promise<void> {
+  let session: PlatformAuthSession;
   try {
-    const session = await platform.auth.getSession();
-    sessionAccountId = session.accountId;
-    startMenu.setAccountSummary(formatAccountSummary(session));
-    startMenu.setAuthState(session.isAuthenticated);
+    session = await platform.auth.getSession();
+  } catch (error) {
+    if (runtimeConfig.features.debugToolsEnabled) {
+      console.warn('[auth] getSession failed during bootstrap; falling back to guest defaults', error);
+    }
+    session = {
+      accountId: null,
+      displayName: 'Guest',
+      isAuthenticated: false,
+    };
+  }
+
+  sessionAccountId = session.accountId;
+  startMenu.setAccountSummary(formatAccountSummary(session));
+  startMenu.setAuthState(session.isAuthenticated);
+  try {
     await refreshEntitlementGate('startup');
-    if (!session.isAuthenticated) {
-      playerRankedTicket = null;
-      playerRankedSession = null;
-      playerRoom = null;
-      playerReplayItems = [];
-      playerRankedSnapshot = null;
-      profileSettingsCache = {};
-    }
-    if (!session.accountId) {
-      return;
-    }
+  } catch {
+    startMenu.setEntitlementGate(false, 'Entitlement check failed. Please retry or refresh.');
+    return;
+  }
+
+  if (!session.isAuthenticated) {
+    playerRankedTicket = null;
+    playerRankedSession = null;
+    playerRoom = null;
+    playerReplayItems = [];
+    playerRankedSnapshot = null;
+    profileSettingsCache = {};
+  }
+
+  if (!session.accountId) {
+    return;
+  }
+
+  try {
     const profile = await platform.profile.getProfile(session.accountId);
     const remoteSettings = asRecord(profile.settings) ?? {};
     profileSettingsCache = remoteSettings;
@@ -1357,9 +1378,10 @@ async function bootstrapPlatformProfile(): Promise<void> {
       applyLoadedProfileSettings(profileSettings);
     }
     await syncArcadeHistoryWithProfile(session.accountId, remoteSettings);
-  } catch {
-    // Profile bootstrap fallback is intentionally silent for prototype flow.
-    startMenu.setEntitlementGate(false, 'Entitlement check failed. Please retry or refresh.');
+  } catch (error) {
+    if (runtimeConfig.features.debugToolsEnabled) {
+      console.warn('[profile] bootstrap hydration failed; continuing without profile sync', error);
+    }
   }
 }
 
@@ -1420,17 +1442,23 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
     profileSettingsCache = {};
   }
   if (session.accountId) {
-    const profile = await platform.profile.getProfile(session.accountId);
-    const remoteSettings = asRecord(profile.settings) ?? {};
-    profileSettingsCache = remoteSettings;
-    if (session.isAuthenticated && profile.displayName) {
-      startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
+    try {
+      const profile = await platform.profile.getProfile(session.accountId);
+      const remoteSettings = asRecord(profile.settings) ?? {};
+      profileSettingsCache = remoteSettings;
+      if (session.isAuthenticated && profile.displayName) {
+        startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
+      }
+      const loadedProfileSettings = coerceStoredSettings(remoteSettings);
+      if (loadedProfileSettings) {
+        applyLoadedProfileSettings(loadedProfileSettings);
+      }
+      await syncArcadeHistoryWithProfile(session.accountId, remoteSettings);
+    } catch (error) {
+      if (runtimeConfig.features.debugToolsEnabled) {
+        console.warn('[profile] post-auth hydration failed; session remains active', error);
+      }
     }
-    const loadedProfileSettings = coerceStoredSettings(remoteSettings);
-    if (loadedProfileSettings) {
-      applyLoadedProfileSettings(loadedProfileSettings);
-    }
-    await syncArcadeHistoryWithProfile(session.accountId, remoteSettings);
   }
 }
 

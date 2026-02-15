@@ -21,6 +21,7 @@ npm run preview
 npm run test
 npm run verify
 npm run character:new -- --id striker --display-name "Striker"
+npm run character:qa
 ```
 
 Steam packaging flow:

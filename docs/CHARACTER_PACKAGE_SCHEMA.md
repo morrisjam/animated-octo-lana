@@ -31,6 +31,18 @@ Optional directory override:
 npm run character:validate -w @gravity-well/game-web -- --dir content/characters
 ```
 
+## QA harness command (S4.5)
+Run from repo root:
+
+```bash
+npm run character:qa -w @gravity-well/game-web
+```
+
+This runs:
+- deterministic checksum smoke replay per package
+- frame-data and balance bounds checks
+- per-package asset budget estimates
+
 ## Required top-level fields
 - `schemaVersion`
 - `id`
@@ -74,6 +86,7 @@ Required payload block per `behaviorId`:
 
 ## Report output
 - Validation report path: `apps/game-web/build-artifacts/character-package-validation-report.json`
+- QA report path: `apps/game-web/build-artifacts/character-package-qa-report.json`
 - Report includes:
   - files scanned
   - valid and invalid counts

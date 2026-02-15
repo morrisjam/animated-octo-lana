@@ -2,6 +2,7 @@
 
 Date: 2026-02-15  
 Priority: P0 (first content production epic)
+Status: complete (`S4.1`, `S4.2`, `S4.3`, `S4.4`, `S4.5`)
 
 ## Why this epic is first
 - It creates the pipeline needed to add custom characters safely without rewriting core sim code.
@@ -59,8 +60,5 @@ Priority: P0 (first content production epic)
 - Risk: content regressions in menus/render.
   - Mitigation: package smoke test boots menu + match load path.
 
-## Immediate next story
-- Start `S4.1` now:
-  - Create package schema types.
-  - Implement package validator script.
-  - Add CI validation command and one example package fixture.
+## Next epic recommendation
+- Move to `E4.2` balance and mechanics operations.

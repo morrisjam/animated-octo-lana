@@ -55,12 +55,25 @@ Optional dry run for scaffolder:
 npm run character:new -- --id striker --dry-run
 ```
 
-## 4. Run the game
+## 4. Run package QA harness
+From repo root:
+
+```bash
+npm run character:qa -w @gravity-well/game-web
+```
+
+What you get:
+- deterministic checksum smoke replay per package
+- frame/balance bounds checks
+- report JSON:
+  - `apps/game-web/build-artifacts/character-package-qa-report.json`
+
+## 5. Run the game
 - `npm run dev -w @gravity-well/game-web`
 - Open local setup in menu.
 - Your packaged character is loaded into runtime registry and can be selected.
 
-## 5. Build and CI checks
+## 6. Build and CI checks
 - Package validation is included in:
   - `npm run build -w @gravity-well/game-web`
   - `npm run build:steam -w @gravity-well/game-web`

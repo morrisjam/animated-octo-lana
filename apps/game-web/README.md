@@ -70,6 +70,12 @@ Then validate:
 npm run character:validate
 ```
 
+Run QA harness:
+
+```bash
+npm run character:qa
+```
+
 ## Rollback scaffold toggle
 
 Optional development flag:

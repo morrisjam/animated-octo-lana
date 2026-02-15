@@ -1,7 +1,7 @@
 # Next Epic Plan: E4 Content Production (No Engine Workflow)
 
 Date: 2026-02-15  
-Status: planned
+Status: in progress (`E4.1` complete; next `E4.2`)
 
 ## Epics
 1. `E4.1` Character package system (first priority).
@@ -25,6 +25,6 @@ Status: planned
 4. Implement cutscene/dialogue runtime (`E4.4`) for narrative content.
 5. Extend adaptive music to full cue graph and cutscene hooks (`E4.5`).
 
-## First implementation target
-- Start with `S4.1` immediately.
-- Detailed execution checklist is in `docs/NEXT_EPIC_E41_CHARACTER_PACKAGE_PLAN.md`.
+## Next implementation target
+- Start `E4.2` (balance and mechanics operations).
+- Keep `E4.1` QA harness in CI while tuning content.

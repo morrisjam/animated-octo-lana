@@ -842,6 +842,10 @@ let playerRankedSnapshot: RankedProgressionView | null = null;
 
 function formatAccountSummary(session: PlatformAuthSession): string {
   if (!session.isAuthenticated || !session.accountId) {
+    const recovery = session.displayName?.trim();
+    if (recovery) {
+      return recovery;
+    }
     return `Guest Account (${session.accountId ?? 'local'})`;
   }
   const name = session.displayName?.trim();

@@ -64,6 +64,15 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - `signup` supports guest upgrade when your current session is a guest account and you confirm upgrade.
 - API recovery responses (duplicate email, disabled account, invalid credentials) are surfaced in the prompt error message.
 
+## Steam sign-in flow (prototype)
+
+- Steam platform builds attempt sign-in automatically via `POST /auth/steam/exchange` at startup.
+- Dev/testing ticket options:
+  - `VITE_STEAM_DEV_TICKET=dev-steam:<steamUserId>`
+  - optional runtime override: `window.__GW_STEAM_TICKET__`
+- `VITE_PROFILE_API_BASE` must be configured for exchange.
+- Failed Steam auth returns explicit recovery guidance in account summary text.
+
 ## Client architecture
 
 - `src/sim`: deterministic simulation and rules.

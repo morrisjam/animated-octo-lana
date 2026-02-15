@@ -406,8 +406,24 @@ export class StartMenu {
     const loginBackRow = this.createActionRow('Back', () => {
       this.setScreen('title');
     });
-    this.loginPanel.append(signInRow.row, signUpRow.row, signOutRow.row, guestRow.row, loginBackRow.row);
-    this.registerRows('login', [signInRow.row, signUpRow.row, signOutRow.row, guestRow.row, loginBackRow.row]);
+    const loginRows: HTMLElement[] = [];
+    if (this.options.onOpenWebAuth) {
+      this.loginPanel.append(signInRow.row, signUpRow.row, signOutRow.row);
+      loginRows.push(signInRow.row, signUpRow.row, signOutRow.row);
+    } else {
+      authFields.hidden = true;
+      signInRow.row.hidden = true;
+      signUpRow.row.hidden = true;
+      signOutRow.row.hidden = true;
+      this.signInButton.disabled = true;
+      this.signUpButton.disabled = true;
+      this.signOutButton.disabled = true;
+      this.authStatusLabel.textContent = 'Steam sign-in is automatic in Steam builds. Retry launch from Steam if sign-in fails.';
+      this.authStatusLabel.classList.remove('error');
+    }
+    this.loginPanel.append(guestRow.row, loginBackRow.row);
+    loginRows.push(guestRow.row, loginBackRow.row);
+    this.registerRows('login', loginRows);
 
     const mainAccountRow = document.createElement('div');
     mainAccountRow.className = 'start-menu-row';

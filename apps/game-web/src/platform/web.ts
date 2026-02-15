@@ -5,6 +5,7 @@ import type {
   WebAuthSigninRequest,
   WebAuthSignupRequest,
 } from './types';
+import { createStorageBackedPersistenceService } from './persistence';
 
 const GUEST_ACCOUNT_KEY = 'gravity_well.guest_account_id';
 const AUTH_ACCOUNT_KEY = 'gravity_well.auth_account_id';
@@ -142,6 +143,7 @@ async function parseApiError(response: Response): Promise<string> {
 
 export function createWebPlatformServices(): PlatformServices {
   const storage = createBrowserStorage();
+  const persistence = createStorageBackedPersistenceService(storage, ['local']);
   let presenceStatus: string | null = null;
   let guestAccountPromise: Promise<string> | null = null;
 
@@ -225,6 +227,7 @@ export function createWebPlatformServices(): PlatformServices {
   return {
     kind: 'web',
     storage,
+    persistence,
     auth: {
       async getSession() {
         return await resolveSession();

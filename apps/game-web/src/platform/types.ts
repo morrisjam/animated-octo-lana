@@ -31,6 +31,42 @@ export interface PlatformStorageService {
   removeItem(key: string): void;
 }
 
+export type PersistenceScope = 'local' | 'cloud';
+
+export interface PersistenceReadSuccess<T> {
+  ok: true;
+  status: 'ok';
+  value: T;
+}
+
+export interface PersistenceReadFailure {
+  ok: false;
+  status: 'not_found' | 'unsupported' | 'invalid_data' | 'error';
+  reason: string;
+}
+
+export type PersistenceReadResult<T> = PersistenceReadSuccess<T> | PersistenceReadFailure;
+
+export interface PersistenceWriteSuccess {
+  ok: true;
+  status: 'ok';
+}
+
+export interface PersistenceWriteFailure {
+  ok: false;
+  status: 'unsupported' | 'error';
+  reason: string;
+}
+
+export type PersistenceWriteResult = PersistenceWriteSuccess | PersistenceWriteFailure;
+
+export interface PlatformPersistenceService {
+  isScopeSupported(scope: PersistenceScope): boolean;
+  readJson<T>(key: string, options?: { scope?: PersistenceScope }): PersistenceReadResult<T>;
+  writeJson(key: string, value: unknown, options?: { scope?: PersistenceScope }): PersistenceWriteResult;
+  remove(key: string, options?: { scope?: PersistenceScope }): PersistenceWriteResult;
+}
+
 export interface PlatformPresenceService {
   setStatus(status: string): Promise<void>;
   getStatus(): string | null;
@@ -56,6 +92,7 @@ export interface PlatformServices {
   kind: PlatformKind;
   auth: PlatformAuthService;
   storage: PlatformStorageService;
+  persistence: PlatformPersistenceService;
   presence: PlatformPresenceService;
   profile: PlatformProfileService;
   dispose?(): void;

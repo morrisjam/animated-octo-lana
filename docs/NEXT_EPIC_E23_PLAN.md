@@ -41,4 +41,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S3.2` (backup and disaster recovery drills) is complete.
 - `S3.3` (safe deployment strategy) is complete.
 - `S3.6` (platform compliance gap audit) is complete.
-- Next start with `S3.7` (console-safe persistence abstraction) as the first console-readiness implementation slice.
+- `S3.7` (console-safe persistence abstraction) is complete.
+- Next recommended slice: define and implement a console entitlement gateway story (`P0` follow-up from the compliance audit).

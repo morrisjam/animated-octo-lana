@@ -1,4 +1,5 @@
 import type { PlatformServices, PlatformStorageService } from './types';
+import { createStorageBackedPersistenceService } from './persistence';
 
 function createMemoryStorage(): PlatformStorageService {
   const store = new Map<string, string>();
@@ -17,11 +18,13 @@ function createMemoryStorage(): PlatformStorageService {
 
 export function createSteamPlatformServices(): PlatformServices {
   const storage = createMemoryStorage();
+  const persistence = createStorageBackedPersistenceService(storage, ['local']);
   let presenceStatus: string | null = null;
 
   return {
     kind: 'steam',
     storage,
+    persistence,
     auth: {
       async getSession() {
         // Placeholder adapter for non-Steam runtime.

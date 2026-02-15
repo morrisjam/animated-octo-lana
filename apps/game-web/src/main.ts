@@ -882,17 +882,12 @@ function loadSettings(): LoadedSettings {
     },
   };
 
-  const raw = platform.storage.getItem(SETTINGS_STORAGE_KEY);
-  if (!raw) {
+  const persisted = platform.persistence.readJson<StoredSettings>(SETTINGS_STORAGE_KEY);
+  if (!persisted.ok) {
     return fallback;
   }
 
-  let parsed: StoredSettings;
-  try {
-    parsed = JSON.parse(raw) as StoredSettings;
-  } catch {
-    return fallback;
-  }
+  const parsed = persisted.value;
 
   const mode = resolveStoredMode(parsed.mode);
   const parsedP1 = parsed.loadout?.P1;
@@ -917,7 +912,10 @@ function persistSettings(): void {
       P2: selectedLoadout.P2,
     },
   };
-  platform.storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+  const result = platform.persistence.writeJson(SETTINGS_STORAGE_KEY, payload);
+  if (!result.ok && runtimeConfig.features.debugToolsEnabled) {
+    console.warn('[persistence] settings write skipped', result);
+  }
 }
 
 async function bootstrapPlatformProfile(): Promise<void> {
@@ -1147,23 +1145,21 @@ function persistRollbackDiagnostics(reason: string): void {
   };
   console.info('[rollback] match diagnostics', entry);
 
-  const raw = platform.storage.getItem(ROLLBACK_DIAGNOSTICS_STORAGE_KEY);
   let entries: StoredRollbackDiagnosticsEntry[] = [];
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as StoredRollbackDiagnosticsEntry[];
-      if (Array.isArray(parsed)) {
-        entries = parsed;
-      }
-    } catch {
-      entries = [];
-    }
+  const persistedEntries = platform.persistence.readJson<StoredRollbackDiagnosticsEntry[]>(
+    ROLLBACK_DIAGNOSTICS_STORAGE_KEY,
+  );
+  if (persistedEntries.ok && Array.isArray(persistedEntries.value)) {
+    entries = persistedEntries.value;
   }
   entries.push(entry);
   if (entries.length > 20) {
     entries = entries.slice(entries.length - 20);
   }
-  platform.storage.setItem(ROLLBACK_DIAGNOSTICS_STORAGE_KEY, JSON.stringify(entries));
+  const writeResult = platform.persistence.writeJson(ROLLBACK_DIAGNOSTICS_STORAGE_KEY, entries);
+  if (!writeResult.ok && runtimeConfig.features.debugToolsEnabled) {
+    console.warn('[persistence] rollback diagnostics write skipped', writeResult);
+  }
 }
 
 function restartTrainingRound(): void {

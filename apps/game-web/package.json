@@ -27,10 +27,10 @@
     "verify": "npm run test && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run replay:check && npm run replay:size-check && npm run matchup:smoke && npm run build"
   },
   "dependencies": {
-    "three": "0.161.0"
+    "three": "0.182.0"
   },
   "devDependencies": {
-    "tsx": "4.20.6",
+    "tsx": "4.21.0",
     "vite": "7.3.1",
     "vitest": "4.0.18"
   }

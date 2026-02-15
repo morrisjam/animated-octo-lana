@@ -835,7 +835,7 @@ function movement(
     player.launchBreaks -= 1;
     player.helpless = 0;
     player.breakFlash = BREAK_FLASH_SECONDS;
-    setStunned(player, framesToSeconds(breakMove.selfStunFrames));
+    setStunned(player, framesToSeconds(breakMove.recoveryFrames));
     player.vel.x *= breakMove.velocityRetain;
     player.vel.y *= breakMove.velocityRetain;
     if (player.lastLaunchedBy) {

@@ -13,6 +13,7 @@ without changing core simulation flow.
 
 ## Primary data source
 - `apps/game-web/src/sim/characters.ts`
+- Shared timing registry: `apps/game-web/src/sim/moveData.ts` (`COMBAT_MOVE_FRAME_REGISTRY`)
 
 Each `CharacterDefinition` now includes:
 - `stats`: gameplay multipliers (including fuel capacity and fuel multipliers)
@@ -21,8 +22,8 @@ Each `CharacterDefinition` now includes:
 - `moves`:
   - `launch`: startup, active, hit and whiff recovery frames
   - `dunk`: startup, active, range, hit and whiff recovery frames
-  - `parry`: active window, recovery, counter stun
-  - `break`: self stun and post-break velocity retention
+  - `parry`: startup, active window, recovery, counter stun
+  - `break`: startup, active window, recovery, and post-break velocity retention
   - `movement`: per-second fuel drain while moving
   - `special`: per-character unique move definition:
     - `kind`: `projectile`, `command_grab`, `movement`, or `block`
@@ -54,4 +55,5 @@ Each `CharacterDefinition` now includes:
 3. Special moves:
    - replace placeholder `moves.special` payload per character with concrete command-grab, movement, or block implementations.
 4. Balance updates:
-   - tune frame data, size, and type-specific special values in one file (`characters.ts`) per character.
+   - tune startup/active/recovery frame data in one shared registry (`moveData.ts`).
+   - tune per-character size and type-specific special values in `characters.ts`.

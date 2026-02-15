@@ -1,6 +1,6 @@
 import type { PlayersById } from './types';
 import type { MoveFrameData } from './moveData';
-import { MOVE_FRAME_DATA } from './moveData';
+import { createMoveFrameData } from './moveData';
 
 export type CharacterId = 'vanguard' | 'duelist' | 'ace' | 'warden';
 
@@ -83,81 +83,7 @@ function baseAudio(id: CharacterId): CharacterAudioProfile {
 }
 
 function baseMoves(projectileVisualId: string): MoveFrameData {
-  return {
-    launch: {
-      startupFrames: MOVE_FRAME_DATA.launch.startupFrames,
-      activeFrames: MOVE_FRAME_DATA.launch.activeFrames,
-      recoveryOnHitFrames: MOVE_FRAME_DATA.launch.recoveryOnHitFrames,
-      recoveryOnWhiffFrames: MOVE_FRAME_DATA.launch.recoveryOnWhiffFrames,
-    },
-    dunk: {
-      startupFrames: MOVE_FRAME_DATA.dunk.startupFrames,
-      activeFrames: MOVE_FRAME_DATA.dunk.activeFrames,
-      recoveryOnHitFrames: MOVE_FRAME_DATA.dunk.recoveryOnHitFrames,
-      recoveryOnWhiffFrames: MOVE_FRAME_DATA.dunk.recoveryOnWhiffFrames,
-      hitRange: MOVE_FRAME_DATA.dunk.hitRange,
-    },
-    parry: {
-      activeFrames: MOVE_FRAME_DATA.parry.activeFrames,
-      recoveryFrames: MOVE_FRAME_DATA.parry.recoveryFrames,
-      counterStunFrames: MOVE_FRAME_DATA.parry.counterStunFrames,
-    },
-    break: {
-      selfStunFrames: MOVE_FRAME_DATA.break.selfStunFrames,
-      velocityRetain: MOVE_FRAME_DATA.break.velocityRetain,
-    },
-    movement: {
-      fuelPerSecond: MOVE_FRAME_DATA.movement.fuelPerSecond,
-    },
-    special: {
-      id: MOVE_FRAME_DATA.special.id,
-      label: MOVE_FRAME_DATA.special.label,
-      kind: MOVE_FRAME_DATA.special.kind,
-      fuelCost: MOVE_FRAME_DATA.special.fuelCost,
-      timing: {
-        startupFrames: MOVE_FRAME_DATA.special.timing.startupFrames,
-        activeFrames: MOVE_FRAME_DATA.special.timing.activeFrames,
-        recoveryFrames: MOVE_FRAME_DATA.special.timing.recoveryFrames,
-        cooldownFrames: MOVE_FRAME_DATA.special.timing.cooldownFrames,
-      },
-      size: {
-        range: MOVE_FRAME_DATA.special.size.range,
-        radius: MOVE_FRAME_DATA.special.size.radius,
-        width: MOVE_FRAME_DATA.special.size.width,
-        length: MOVE_FRAME_DATA.special.size.length,
-      },
-      projectile: {
-        speed: MOVE_FRAME_DATA.special.projectile?.speed ?? 42,
-        lifeSeconds: MOVE_FRAME_DATA.special.projectile?.lifeSeconds ?? 2,
-        hitRadius: MOVE_FRAME_DATA.special.projectile?.hitRadius ?? 0.8,
-        stunSeconds: MOVE_FRAME_DATA.special.projectile?.stunSeconds ?? 0.7,
-        fuelDamage: MOVE_FRAME_DATA.special.projectile?.fuelDamage ?? 4,
-        visualId: projectileVisualId,
-      },
-      commandGrab: MOVE_FRAME_DATA.special.commandGrab
-        ? { stunFrames: MOVE_FRAME_DATA.special.commandGrab.stunFrames }
-        : undefined,
-      movement: MOVE_FRAME_DATA.special.movement
-        ? { dashSpeed: MOVE_FRAME_DATA.special.movement.dashSpeed }
-        : undefined,
-      block: MOVE_FRAME_DATA.special.block
-        ? { guardFrames: MOVE_FRAME_DATA.special.block.guardFrames }
-        : undefined,
-    },
-    boost: {
-      holdSpeedMultiplier: MOVE_FRAME_DATA.boost.holdSpeedMultiplier,
-      holdFuelPerSecond: MOVE_FRAME_DATA.boost.holdFuelPerSecond,
-    },
-    superBoost: {
-      holdSpeedMultiplier: MOVE_FRAME_DATA.superBoost.holdSpeedMultiplier,
-      steerLerpMultiplier: MOVE_FRAME_DATA.superBoost.steerLerpMultiplier,
-      velocityBlendMultiplier: MOVE_FRAME_DATA.superBoost.velocityBlendMultiplier,
-      startFuelCost: MOVE_FRAME_DATA.superBoost.startFuelCost,
-      travelFuelPerDistance: MOVE_FRAME_DATA.superBoost.travelFuelPerDistance,
-      nonCommitPenalty: MOVE_FRAME_DATA.superBoost.nonCommitPenalty,
-      turnPenaltyGainMultiplier: MOVE_FRAME_DATA.superBoost.turnPenaltyGainMultiplier,
-    },
-  };
+  return createMoveFrameData(projectileVisualId);
 }
 
 function baseSpecials(): CharacterSpecialMoveDefinition[] {

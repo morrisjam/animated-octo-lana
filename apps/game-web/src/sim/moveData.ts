@@ -14,13 +14,16 @@ export interface DunkFrameData {
 }
 
 export interface ParryFrameData {
+  startupFrames: number;
   activeFrames: number;
   recoveryFrames: number;
   counterStunFrames: number;
 }
 
 export interface BreakMoveData {
-  selfStunFrames: number;
+  startupFrames: number;
+  activeFrames: number;
+  recoveryFrames: number;
   velocityRetain: number;
 }
 
@@ -104,75 +107,138 @@ export interface MoveFrameData {
   superBoost: SuperBoostMoveData;
 }
 
-export const MOVE_FRAME_DATA: MoveFrameData = {
+export interface CombatMoveFrameRegistry {
+  launch: LaunchFrameData;
+  dunk: Pick<DunkFrameData, 'startupFrames' | 'activeFrames' | 'recoveryOnHitFrames' | 'recoveryOnWhiffFrames'>;
+  parry: Pick<ParryFrameData, 'startupFrames' | 'activeFrames' | 'recoveryFrames' | 'counterStunFrames'>;
+  break: Pick<BreakMoveData, 'startupFrames' | 'activeFrames' | 'recoveryFrames'>;
+  special: Pick<SpecialTimingData, 'startupFrames' | 'activeFrames' | 'recoveryFrames' | 'cooldownFrames'>;
+}
+
+// All move timing values are authored in 60Hz frame units.
+export const SIMULATION_FRAME_RATE_HZ = 60;
+const DEFAULT_PROJECTILE_VISUAL_ID = 'default_orb';
+
+export const COMBAT_MOVE_FRAME_REGISTRY: CombatMoveFrameRegistry = {
   launch: {
-    // Startup, active, and recovery are tuned as frame counts at 60Hz.
     startupFrames: 6,
     activeFrames: 3,
     recoveryOnHitFrames: 30,
     recoveryOnWhiffFrames: 42,
   },
   dunk: {
-    // Slow startup and heavy whiff recovery make neutral dunk attempts high risk.
     startupFrames: 30,
     activeFrames: 4,
     recoveryOnHitFrames: 24,
     recoveryOnWhiffFrames: 66,
-    hitRange: 8,
   },
   parry: {
+    startupFrames: 0,
     activeFrames: 11,
     recoveryFrames: 13,
     counterStunFrames: 45,
   },
   break: {
-    selfStunFrames: 24,
-    velocityRetain: 0.3,
-  },
-  movement: {
-    fuelPerSecond: 0.65,
+    startupFrames: 0,
+    activeFrames: 1,
+    recoveryFrames: 24,
   },
   special: {
-    id: 'basic_projectile',
-    label: 'Basic Projectile',
-    kind: 'projectile',
-    fuelCost: 5,
-    timing: {
-      startupFrames: 0,
-      activeFrames: 1,
-      recoveryFrames: 0,
-      cooldownFrames: 19,
-    },
-    size: {
-      range: 100,
-      radius: 0.8,
-      width: 1.6,
-      length: 1.6,
-    },
-    projectile: {
-      speed: 42,
-      lifeSeconds: 2,
-      hitRadius: 0.8,
-      stunSeconds: 0.7,
-      fuelDamage: 4,
-      visualId: 'default_orb',
-    },
-  },
-  boost: {
-    holdSpeedMultiplier: 1,
-    holdFuelPerSecond: 0.2,
-  },
-  superBoost: {
-    holdSpeedMultiplier: 1,
-    steerLerpMultiplier: 1,
-    velocityBlendMultiplier: 1,
-    startFuelCost: 6,
-    travelFuelPerDistance: 0.05,
-    nonCommitPenalty: 2.5,
-    turnPenaltyGainMultiplier: 1,
+    startupFrames: 0,
+    activeFrames: 1,
+    recoveryFrames: 0,
+    cooldownFrames: 19,
   },
 };
 
+export function createMoveFrameData(projectileVisualId = DEFAULT_PROJECTILE_VISUAL_ID): MoveFrameData {
+  return {
+    launch: {
+      startupFrames: COMBAT_MOVE_FRAME_REGISTRY.launch.startupFrames,
+      activeFrames: COMBAT_MOVE_FRAME_REGISTRY.launch.activeFrames,
+      recoveryOnHitFrames: COMBAT_MOVE_FRAME_REGISTRY.launch.recoveryOnHitFrames,
+      recoveryOnWhiffFrames: COMBAT_MOVE_FRAME_REGISTRY.launch.recoveryOnWhiffFrames,
+    },
+    dunk: {
+      startupFrames: COMBAT_MOVE_FRAME_REGISTRY.dunk.startupFrames,
+      activeFrames: COMBAT_MOVE_FRAME_REGISTRY.dunk.activeFrames,
+      recoveryOnHitFrames: COMBAT_MOVE_FRAME_REGISTRY.dunk.recoveryOnHitFrames,
+      recoveryOnWhiffFrames: COMBAT_MOVE_FRAME_REGISTRY.dunk.recoveryOnWhiffFrames,
+      hitRange: 8,
+    },
+    parry: {
+      startupFrames: COMBAT_MOVE_FRAME_REGISTRY.parry.startupFrames,
+      activeFrames: COMBAT_MOVE_FRAME_REGISTRY.parry.activeFrames,
+      recoveryFrames: COMBAT_MOVE_FRAME_REGISTRY.parry.recoveryFrames,
+      counterStunFrames: COMBAT_MOVE_FRAME_REGISTRY.parry.counterStunFrames,
+    },
+    break: {
+      startupFrames: COMBAT_MOVE_FRAME_REGISTRY.break.startupFrames,
+      activeFrames: COMBAT_MOVE_FRAME_REGISTRY.break.activeFrames,
+      recoveryFrames: COMBAT_MOVE_FRAME_REGISTRY.break.recoveryFrames,
+      velocityRetain: 0.3,
+    },
+    movement: {
+      fuelPerSecond: 0.65,
+    },
+    special: {
+      id: 'basic_projectile',
+      label: 'Basic Projectile',
+      kind: 'projectile',
+      fuelCost: 5,
+      timing: {
+        startupFrames: COMBAT_MOVE_FRAME_REGISTRY.special.startupFrames,
+        activeFrames: COMBAT_MOVE_FRAME_REGISTRY.special.activeFrames,
+        recoveryFrames: COMBAT_MOVE_FRAME_REGISTRY.special.recoveryFrames,
+        cooldownFrames: COMBAT_MOVE_FRAME_REGISTRY.special.cooldownFrames,
+      },
+      size: {
+        range: 100,
+        radius: 0.8,
+        width: 1.6,
+        length: 1.6,
+      },
+      projectile: {
+        speed: 42,
+        lifeSeconds: 2,
+        hitRadius: 0.8,
+        stunSeconds: 0.7,
+        fuelDamage: 4,
+        visualId: projectileVisualId,
+      },
+    },
+    boost: {
+      holdSpeedMultiplier: 1,
+      holdFuelPerSecond: 0.2,
+    },
+    superBoost: {
+      holdSpeedMultiplier: 1,
+      steerLerpMultiplier: 1,
+      velocityBlendMultiplier: 1,
+      startFuelCost: 6,
+      travelFuelPerDistance: 0.05,
+      nonCommitPenalty: 2.5,
+      turnPenaltyGainMultiplier: 1,
+    },
+  };
+}
+
+export const MOVE_FRAME_DATA: MoveFrameData = createMoveFrameData();
+
 export function framesToSeconds(frames: number): number {
-  return Math.max(0, frames) / 60;
+  return Math.max(0, frames) / SIMULATION_FRAME_RATE_HZ;
+}
+
+export function secondsToFrames(seconds: number): number {
+  if (!Number.isFinite(seconds)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(seconds * SIMULATION_FRAME_RATE_HZ));
+}
+
+export function secondsToSignedFrames(seconds: number): number {
+  if (!Number.isFinite(seconds)) {
+    return 0;
+  }
+  return Math.round(seconds * SIMULATION_FRAME_RATE_HZ);
 }

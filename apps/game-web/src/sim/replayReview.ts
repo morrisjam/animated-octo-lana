@@ -1,4 +1,5 @@
 import { createInitialState, createStateSnapshot, getRenderSnapshot, step } from './sim';
+import { secondsToFrames, secondsToSignedFrames } from './moveData';
 import type { ReplayPayload, ReplayRoundDescriptor } from './replay';
 import type { FrameInput, GameState, PlayerFrameInput, PlayerId, PlayersById, RenderSnapshot } from './types';
 
@@ -396,17 +397,11 @@ function formatAdvantageSuffix(advantageFrames: number | null): string {
 }
 
 function toFrames(seconds: number): number {
-  if (!Number.isFinite(seconds)) {
-    return 0;
-  }
-  return Math.max(0, Math.round(seconds * 60));
+  return secondsToFrames(seconds);
 }
 
 function toSignedFrames(seconds: number): number {
-  if (!Number.isFinite(seconds)) {
-    return 0;
-  }
-  return Math.round(seconds * 60);
+  return secondsToSignedFrames(seconds);
 }
 
 function normaliseFrameInput(input: Partial<FrameInput> | undefined): FrameInput {

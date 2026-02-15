@@ -49,4 +49,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S1.6` (checksum replay runner) is complete.
 - `S1.9` (Steam sign-in path) is complete.
 - `S1.2` (Steam build profile and packaging) is complete.
-- Next recommended slice: `S1.11` Move frame-data registry.
+- `S1.11` (Move frame-data registry) is complete.
+- Next recommended slice: `S1.12` Frame data visualiser overlay.

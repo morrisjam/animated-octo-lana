@@ -63,6 +63,7 @@ npm run migrate -w @gravity-well/api
 
 - Structure guardrails: `docs/REPO_STRUCTURE.md`
 - Game architecture and kits: `docs/CHARACTER_KITS.md`
+- Move frame-data registry: `docs/MOVE_FRAME_DATA_REGISTRY.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

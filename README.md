@@ -63,6 +63,7 @@ npm run migrate -w @gravity-well/api
 
 - Structure guardrails: `docs/REPO_STRUCTURE.md`
 - Game architecture and kits: `docs/CHARACTER_KITS.md`
+- Character package schema and validation flow: `docs/CHARACTER_PACKAGE_SCHEMA.md`
 - Move frame-data registry: `docs/MOVE_FRAME_DATA_REGISTRY.md`
 - Training frame-data overlay: `docs/FRAME_DATA_VISUALIZER_OVERLAY.md`
 - Asset manifest loader: `docs/ASSET_MANIFEST_LOADER.md`

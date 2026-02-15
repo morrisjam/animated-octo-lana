@@ -3,6 +3,7 @@
 Planning status:
 - Tracked as first-priority epic `E4.1 Character package system`.
 - Execution plan: `docs/NEXT_EPIC_E41_CHARACTER_PACKAGE_PLAN.md`.
+- Current schema/validator entrypoint: `docs/CHARACTER_PACKAGE_SCHEMA.md`.
 
 ## Goal
 Each character can own custom:

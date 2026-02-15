@@ -106,6 +106,8 @@ jobs:
             exit 1
           fi
 
+          sudo chown -R "${USER}:${USER}" drill-artifacts
+
           RPO_SECONDS="0"
           RTO_SECONDS="${RESTORE_SECONDS}"
           RPO_PASS="yes"

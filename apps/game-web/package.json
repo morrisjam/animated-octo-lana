@@ -8,13 +8,14 @@
     "balance:validate": "tsx scripts/balance-profile-validate.ts",
     "theme:validate": "tsx scripts/menu-theme-validate.ts",
     "theme:contrast-check": "tsx scripts/menu-theme-contrast-check.ts",
+    "stage:validate": "tsx scripts/stage-atmosphere-validate.ts",
     "balance:patch-notes": "tsx scripts/balance-patch-notes.ts",
     "character:new": "tsx scripts/character-package-new.ts",
     "character:validate": "tsx scripts/character-package-validate.ts",
     "character:qa": "tsx scripts/character-package-qa.ts",
     "asset:budget-check": "tsx scripts/asset-budget-check.ts",
-    "build": "npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run asset:budget-check && npm run matchup:smoke && vite build",
-    "build:steam": "npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run asset:budget-check && npm run matchup:smoke && vite build --mode steam",
+    "build": "npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run asset:budget-check && npm run matchup:smoke && vite build",
+    "build:steam": "npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run asset:budget-check && npm run matchup:smoke && vite build --mode steam",
     "package:steam": "tsx scripts/steam-package.ts --dist dist --out-dir steam-artifact",
     "smoke:steam": "tsx scripts/steam-smoke.ts --packaged-dir steam-artifact",
     "preview": "vite preview",
@@ -23,7 +24,7 @@
     "replay:check": "tsx scripts/replay-runner.ts --input replays/smoke.replay.json --expected replays/smoke.expected.json",
     "replay:size-check": "tsx scripts/replay-size-check.ts --dir replays --max-median-bytes 4096",
     "matchup:smoke": "tsx scripts/matchup-regression-smoke.ts",
-    "verify": "npm run test && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run replay:check && npm run replay:size-check && npm run matchup:smoke && npm run build"
+    "verify": "npm run test && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run replay:check && npm run replay:size-check && npm run matchup:smoke && npm run build"
   },
   "dependencies": {
     "three": "0.161.0"

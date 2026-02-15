@@ -1,12 +1,12 @@
 # Next Epic Plan: E4.3 Visual Content And Menu Theming
 
 Date: 2026-02-15  
-Status: in progress (`S5.1`, `S5.2` complete)
+Status: in progress (`S5.1`, `S5.2`, `S5.3` complete)
 
 ## Scope
 - `S5.1` Menu theme registry, runtime application, and persistence. (complete)
 - `S5.2` In-game HUD theme tokens and accessibility contrast presets. (complete)
-- `S5.3` Stage atmosphere presets (background gradients, fog, color grading controls).
+- `S5.3` Stage atmosphere presets (background gradients, fog, color grading controls). (complete)
 - `S5.4` Menu motion pass (intentional transitions and panel choreography).
 
 ## S5.1 delivered
@@ -23,7 +23,7 @@ Status: in progress (`S5.1`, `S5.2` complete)
 - Contrast report artifact `menu-theme-contrast-report.json` for design review.
 
 ## Immediate next story
-- Start `S5.3`:
-  - define stage atmosphere preset schema
-  - apply presets to scene background/fog/color grading hooks
-  - add preview and validation flow for atmosphere payloads
+- Start `S5.4`:
+  - add menu-panel transition choreography
+  - tune staggered reveal timings per panel category
+  - keep keyboard/mouse/controller nav parity during transitions

@@ -64,7 +64,7 @@ import { createOnlineDevMenu, type OnlineDiagnosticsUpdate, type OnlineDevSectio
 import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay';
 import { createReplayViewer } from './view/replayViewer';
 import { renderFrame } from './view/render';
-import { createScene, resizeScene } from './view/scene';
+import { applyStageAtmospherePreset, createScene, resizeScene } from './view/scene';
 import { createAudioSystem } from './view/audio/system';
 import type { CombatVfxEvent } from './view/vfx/types';
 import { createMusicStateController, type MusicState } from './view/audio/musicState';
@@ -92,11 +92,17 @@ import {
   MENU_THEME_OPTIONS,
   resolveMenuTheme,
 } from './view/menuThemes';
+import {
+  DEFAULT_STAGE_ATMOSPHERE_ID,
+  resolveStageAtmosphere,
+  STAGE_ATMOSPHERE_OPTIONS,
+} from './view/stageAtmosphere';
 
 type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev';
 interface StoredSettings {
   mode?: string;
   menuThemeId?: string;
+  stageAtmosphereId?: string;
   loadout?: {
     P1?: string;
     P2?: string;
@@ -111,6 +117,7 @@ interface StoredSettings {
 interface LoadedSettings {
   mode: GameMode;
   menuThemeId: string;
+  stageAtmosphereId: string;
   loadout: PlayersById<CharacterId>;
   aiDifficulty: AiDifficultyId;
   arcade: ArcadeMenuSettings;
@@ -236,6 +243,8 @@ audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
 audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
 let selectedMenuThemeId = loadedSettings.menuThemeId;
 applyMenuTheme(resolveMenuTheme(selectedMenuThemeId), document.documentElement.style);
+let selectedStageAtmosphereId = loadedSettings.stageAtmosphereId;
+selectedStageAtmosphereId = applyStageAtmospherePreset(sceneContext, selectedStageAtmosphereId);
 let selectedLoadout: PlayersById<CharacterId> = loadedSettings.loadout;
 let selectedAiDifficulty: AiDifficultyId = loadedSettings.aiDifficulty;
 let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
@@ -997,6 +1006,8 @@ const startMenu = createStartMenu({
   initialMode: selectedMode,
   initialMenuThemeId: selectedMenuThemeId,
   availableMenuThemes: MENU_THEME_OPTIONS,
+  initialStageAtmosphereId: selectedStageAtmosphereId,
+  availableStageAtmospheres: STAGE_ATMOSPHERE_OPTIONS,
   initialLoadout: selectedLoadout,
   initialAiDifficulty: selectedAiDifficulty,
   initialArcadeSettings: selectedArcadeSettings,
@@ -1057,6 +1068,10 @@ const startMenu = createStartMenu({
   onMenuThemeChange: (themeId: string) => {
     selectedMenuThemeId = resolveMenuTheme(themeId).id;
     applyMenuTheme(resolveMenuTheme(selectedMenuThemeId), document.documentElement.style);
+    persistSettings();
+  },
+  onStageAtmosphereChange: (atmosphereId: string) => {
+    selectedStageAtmosphereId = applyStageAtmospherePreset(sceneContext, atmosphereId);
     persistSettings();
   },
 });
@@ -1156,6 +1171,10 @@ function resolveStoredMenuThemeId(value: string | undefined): string {
   return resolveMenuTheme(value).id;
 }
 
+function resolveStoredStageAtmosphereId(value: string | undefined): string {
+  return resolveStageAtmosphere(value).id;
+}
+
 function sanitiseArcadeMenuSettings(raw: unknown): ArcadeMenuSettings {
   const value = raw && typeof raw === 'object' ? raw as { continues?: unknown; retryEnabled?: unknown } : {};
   const requestedContinues = Number(value.continues);
@@ -1177,6 +1196,7 @@ function coerceStoredSettings(raw: unknown): LoadedSettings | null {
   const parsed = raw as StoredSettings;
   const hasKnownKeys = 'mode' in parsed
     || 'menuThemeId' in parsed
+    || 'stageAtmosphereId' in parsed
     || 'loadout' in parsed
     || 'audio' in parsed
     || 'aiDifficulty' in parsed
@@ -1192,11 +1212,13 @@ function coerceStoredSettings(raw: unknown): LoadedSettings | null {
   const audio = sanitiseAudioSettings(parsed.audio);
   const aiDifficulty = resolveStoredAiDifficulty(parsed.aiDifficulty);
   const menuThemeId = resolveStoredMenuThemeId(parsed.menuThemeId);
+  const stageAtmosphereId = resolveStoredStageAtmosphereId(parsed.stageAtmosphereId);
   const arcade = sanitiseArcadeMenuSettings(parsed.arcade);
 
   return {
     mode,
     menuThemeId,
+    stageAtmosphereId,
     loadout: {
       P1: p1,
       P2: p2,
@@ -1212,6 +1234,7 @@ function loadSettings(): LoadedSettings {
   const fallback: LoadedSettings = {
     mode: fallbackMode,
     menuThemeId: DEFAULT_MENU_THEME_ID,
+    stageAtmosphereId: DEFAULT_STAGE_ATMOSPHERE_ID,
     loadout: {
       P1: DEFAULT_CHARACTER_LOADOUT.P1,
       P2: DEFAULT_CHARACTER_LOADOUT.P2,
@@ -1291,6 +1314,7 @@ function buildFullProfileSettingsPayload(
     ...(baseSettings ?? {}),
     mode: selectedMode,
     menuThemeId: selectedMenuThemeId,
+    stageAtmosphereId: selectedStageAtmosphereId,
     loadout: selectedLoadout,
     aiDifficulty: selectedAiDifficulty,
     arcade: selectedArcadeSettings,
@@ -1312,12 +1336,15 @@ function buildHistorySyncProfileSettingsPayload(
 function applyLoadedProfileSettings(profileSettings: LoadedSettings): void {
   selectedMode = profileSettings.mode;
   selectedMenuThemeId = profileSettings.menuThemeId;
+  selectedStageAtmosphereId = profileSettings.stageAtmosphereId;
   selectedLoadout = profileSettings.loadout;
   selectedAiDifficulty = profileSettings.aiDifficulty;
   selectedArcadeSettings = profileSettings.arcade;
   audioSettings = profileSettings.audio;
   applyMenuTheme(resolveMenuTheme(selectedMenuThemeId), document.documentElement.style);
+  selectedStageAtmosphereId = applyStageAtmospherePreset(sceneContext, selectedStageAtmosphereId);
   startMenu.setMenuTheme(selectedMenuThemeId);
+  startMenu.setStageAtmosphere(selectedStageAtmosphereId);
   startMenu.setLocalSetup(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
   audioSystem.setBusVolume('master', audioSettings.masterVolume);
   audioSystem.setBusVolume('music', audioSettings.musicVolume);
@@ -1330,6 +1357,7 @@ function persistSettings(): void {
   const payload: StoredSettings = {
     mode: selectedMode,
     menuThemeId: selectedMenuThemeId,
+    stageAtmosphereId: selectedStageAtmosphereId,
     loadout: {
       P1: selectedLoadout.P1,
       P2: selectedLoadout.P2,

@@ -5,6 +5,10 @@ import { DEFAULT_CHARACTER_LOADOUT } from '../sim/characters';
 import { createCharacterVisualHandle, type CharacterVisualHandle } from './characterVisual';
 import { createCombatVfxRuntime, type CombatVfxRuntime } from './vfx/runtime';
 import type { CombatVfxEvent, VfxSoundCuePreset } from './vfx/types';
+import {
+  DEFAULT_STAGE_ATMOSPHERE_ID,
+  resolveStageAtmosphere,
+} from './stageAtmosphere';
 
 const MAX_RENDER_PIXEL_RATIO = 1.25;
 
@@ -32,6 +36,13 @@ export interface SceneContext {
   projectileMeshes: Map<number, THREE.Mesh>;
   combatVfxRuntime: CombatVfxRuntime;
   lastRenderSnapshot: RenderSnapshot | null;
+  ambientLight: THREE.AmbientLight;
+  keyLight: THREE.DirectionalLight;
+  arenaBoundary: THREE.LineLoop;
+  stars: THREE.Points;
+  stageBackgroundImage: THREE.Mesh;
+  stageBackgroundModel: THREE.Mesh;
+  stageAtmosphereId: string;
 }
 
 export interface SceneOptions {
@@ -42,7 +53,11 @@ function getClampedPixelRatio(): number {
   return Math.min(window.devicePixelRatio || 1, MAX_RENDER_PIXEL_RATIO);
 }
 
-function addArena(scene: THREE.Scene): { gravityWell: THREE.Mesh; ring: THREE.Mesh } {
+function addArena(scene: THREE.Scene): {
+  boundary: THREE.LineLoop;
+  gravityWell: THREE.Mesh;
+  ring: THREE.Mesh;
+} {
   const boundaryPoints: THREE.Vector3[] = [];
   const segments = 128;
   for (let i = 0; i < segments; i += 1) {
@@ -75,10 +90,10 @@ function addArena(scene: THREE.Scene): { gravityWell: THREE.Mesh; ring: THREE.Me
   ring.rotation.x = Math.PI / 2;
   scene.add(ring);
 
-  return { gravityWell, ring };
+  return { boundary, gravityWell, ring };
 }
 
-function addStars(scene: THREE.Scene): void {
+function addStars(scene: THREE.Scene): THREE.Points {
   const stars = new THREE.Points(
     new THREE.BufferGeometry(),
     new THREE.PointsMaterial({ color: '#99a8ff', size: 0.35 }),
@@ -89,6 +104,42 @@ function addStars(scene: THREE.Scene): void {
   }
   stars.geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
   scene.add(stars);
+  return stars;
+}
+
+function addStageBackgroundImage(scene: THREE.Scene): THREE.Mesh {
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(420, 250),
+    new THREE.MeshBasicMaterial({
+      color: '#ffffff',
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    }),
+  );
+  mesh.position.set(0, 0, -180);
+  mesh.visible = false;
+  mesh.userData.textureId = null;
+  scene.add(mesh);
+  return mesh;
+}
+
+function addStageBackgroundModel(scene: THREE.Scene): THREE.Mesh {
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(64, 40, 20),
+    new THREE.MeshStandardMaterial({
+      color: '#9fb7ff',
+      transparent: true,
+      opacity: 0.5,
+      roughness: 0.75,
+      metalness: 0.05,
+    }),
+  );
+  mesh.position.set(0, -6, -116);
+  mesh.visible = false;
+  mesh.userData.modelId = null;
+  scene.add(mesh);
+  return mesh;
 }
 
 function createPlayerVisuals(scene: THREE.Scene): {
@@ -157,15 +208,17 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
   keyLight.position.set(24, 16, 35);
   scene.add(ambient, keyLight);
 
-  const { gravityWell, ring } = addArena(scene);
-  addStars(scene);
+  const { boundary, gravityWell, ring } = addArena(scene);
+  const stars = addStars(scene);
+  const stageBackgroundImage = addStageBackgroundImage(scene);
+  const stageBackgroundModel = addStageBackgroundModel(scene);
   const { playerVisuals, playerMeshes } = createPlayerVisuals(scene);
   const playerIndicators = createPlayerIndicators(scene);
   const combatVfxRuntime = createCombatVfxRuntime(scene, {
     onAudioCue: options?.onCombatAudioCue,
   });
 
-  return {
+  const context: SceneContext = {
     renderer,
     scene,
     camera,
@@ -184,7 +237,16 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
     projectileMeshes: new Map<number, THREE.Mesh>(),
     combatVfxRuntime,
     lastRenderSnapshot: null,
+    ambientLight: ambient,
+    keyLight,
+    arenaBoundary: boundary,
+    stars,
+    stageBackgroundImage,
+    stageBackgroundModel,
+    stageAtmosphereId: DEFAULT_STAGE_ATMOSPHERE_ID,
   };
+  applyStageAtmospherePreset(context, DEFAULT_STAGE_ATMOSPHERE_ID);
+  return context;
 }
 
 export function resizeScene(context: SceneContext): void {
@@ -192,4 +254,56 @@ export function resizeScene(context: SceneContext): void {
   context.renderer.setSize(window.innerWidth, window.innerHeight);
   context.camera.aspect = window.innerWidth / window.innerHeight;
   context.camera.updateProjectionMatrix();
+}
+
+function clampOpacity(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: string): string {
+  const preset = resolveStageAtmosphere(atmosphereId);
+  const tokens = preset.tokens;
+
+  context.stageAtmosphereId = preset.id;
+  context.scene.background = new THREE.Color(tokens.sceneBackgroundColor);
+  context.scene.fog = new THREE.Fog(tokens.fogColor, tokens.fogNear, tokens.fogFar);
+
+  context.ambientLight.color.set(tokens.ambientLightColor);
+  context.ambientLight.intensity = tokens.ambientLightIntensity;
+  context.keyLight.color.set(tokens.keyLightColor);
+  context.keyLight.intensity = tokens.keyLightIntensity;
+  context.keyLight.position.set(tokens.keyLightPositionX, tokens.keyLightPositionY, tokens.keyLightPositionZ);
+
+  const boundaryMaterial = context.arenaBoundary.material as THREE.LineBasicMaterial;
+  boundaryMaterial.color.set(tokens.ringColor);
+
+  const gravityWellMaterial = context.gravityWell.material as THREE.MeshStandardMaterial;
+  gravityWellMaterial.color.set(tokens.gravityWellColor);
+  gravityWellMaterial.emissive.set(tokens.gravityWellEmissive);
+  gravityWellMaterial.emissiveIntensity = tokens.gravityWellEmissiveIntensity;
+
+  const ringMaterial = context.ring.material as THREE.MeshBasicMaterial;
+  ringMaterial.color.set(tokens.ringColor);
+  ringMaterial.opacity = clampOpacity(tokens.ringOpacity);
+
+  const starsMaterial = context.stars.material as THREE.PointsMaterial;
+  starsMaterial.color.set(tokens.starsColor);
+  starsMaterial.size = tokens.starsSize;
+
+  const imageMaterial = context.stageBackgroundImage.material as THREE.MeshBasicMaterial;
+  imageMaterial.color.set(tokens.backgroundImageTint);
+  imageMaterial.opacity = clampOpacity(tokens.backgroundImageOpacity);
+  context.stageBackgroundImage.visible = Boolean(tokens.backgroundImageTextureId);
+  context.stageBackgroundImage.userData.textureId = tokens.backgroundImageTextureId ?? null;
+
+  const modelMaterial = context.stageBackgroundModel.material as THREE.MeshStandardMaterial;
+  modelMaterial.color.set(tokens.backgroundModelTint);
+  modelMaterial.opacity = clampOpacity(tokens.backgroundModelOpacity);
+  context.stageBackgroundModel.visible = Boolean(tokens.backgroundModelId);
+  context.stageBackgroundModel.userData.modelId = tokens.backgroundModelId ?? null;
+
+  return preset.id;
 }

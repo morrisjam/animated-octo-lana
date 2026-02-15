@@ -25,6 +25,11 @@ export interface StartMenuThemeOption {
   label: string;
   description: string;
 }
+export interface StartStageAtmosphereOption {
+  id: string;
+  label: string;
+  description: string;
+}
 export interface WebAuthMenuRequest {
   email?: string;
   password?: string;
@@ -77,6 +82,8 @@ interface StartMenuOptions {
   initialArcadeSettings?: ArcadeMenuSettings;
   initialMenuThemeId?: string;
   availableMenuThemes?: StartMenuThemeOption[];
+  initialStageAtmosphereId?: string;
+  availableStageAtmospheres?: StartStageAtmosphereOption[];
   enabledModes?: GameMode[];
   initialAccountSummary?: string;
   onStartMode(
@@ -99,6 +106,7 @@ interface StartMenuOptions {
   onOpenOnlineDevMenu?(target?: OnlineDevMenuTarget): void;
   onOpenReplayReview?(): void;
   onMenuThemeChange?(themeId: string): void;
+  onStageAtmosphereChange?(atmosphereId: string): void;
   onReturnHome(): void;
   onPlayAgain(): void;
 }
@@ -122,6 +130,7 @@ const MODE_LABELS: Record<GameMode, string> = {
 const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'arcade', 'training'];
 const ARCADE_CONTINUE_OPTIONS = [0, 1, 2, 3];
 const SETTINGS_THEME_ROW_INDEX = 3;
+const SETTINGS_STAGE_ATMOSPHERE_ROW_INDEX = 4;
 
 function getAiDifficultyLabel(difficulty: AiDifficultyId): string {
   return AI_DIFFICULTY_PROFILES[difficulty]?.label ?? AI_DIFFICULTY_PROFILES[DEFAULT_AI_DIFFICULTY].label;
@@ -275,6 +284,60 @@ function getNextMenuThemeId(current: string, options: StartMenuThemeOption[], di
   return options[nextIndex].id;
 }
 
+function sanitiseStageAtmosphereOptions(raw: StartStageAtmosphereOption[] | undefined): StartStageAtmosphereOption[] {
+  if (!raw || raw.length === 0) {
+    return [{
+      id: 'default',
+      label: 'Default Arena',
+      description: 'Baseline Gravity Well arena lighting and atmosphere.',
+    }];
+  }
+  const deduped: StartStageAtmosphereOption[] = [];
+  const seen = new Set<string>();
+  for (const option of raw) {
+    const id = option.id.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    deduped.push({
+      id,
+      label: option.label.trim() || id,
+      description: option.description.trim() || 'No description.',
+    });
+  }
+  if (deduped.length === 0) {
+    return [{
+      id: 'default',
+      label: 'Default Arena',
+      description: 'Baseline Gravity Well arena lighting and atmosphere.',
+    }];
+  }
+  return deduped;
+}
+
+function resolveInitialStageAtmosphereId(raw: string | undefined, options: StartStageAtmosphereOption[]): string {
+  if (!raw) {
+    return options[0].id;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return options[0].id;
+  }
+  const match = options.find((option) => option.id === trimmed);
+  return match?.id ?? options[0].id;
+}
+
+function getNextStageAtmosphereId(current: string, options: StartStageAtmosphereOption[], direction: 1 | -1): string {
+  if (options.length === 0) {
+    return current;
+  }
+  const currentIndex = options.findIndex((option) => option.id === current);
+  const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = (safeIndex + direction + options.length) % options.length;
+  return options[nextIndex].id;
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -335,6 +398,9 @@ export class StartMenu {
   private readonly settingsThemeOptionsLabel: HTMLDivElement;
   private readonly settingsThemeDescriptionLabel: HTMLDivElement;
   private readonly settingsThemeButton: HTMLButtonElement;
+  private readonly settingsStageAtmosphereOptionsLabel: HTMLDivElement;
+  private readonly settingsStageAtmosphereDescriptionLabel: HTMLDivElement;
+  private readonly settingsStageAtmosphereButton: HTMLButtonElement;
   private readonly rankedStatusHeadline: HTMLDivElement;
   private readonly rankedStatusDetail: HTMLPreElement;
   private readonly roomStatusHeadline: HTMLDivElement;
@@ -379,8 +445,10 @@ export class StartMenu {
 
   private readonly enabledModes: GameMode[];
   private readonly menuThemeOptions: StartMenuThemeOption[];
+  private readonly stageAtmosphereOptions: StartStageAtmosphereOption[];
   private currentMode: GameMode;
   private currentMenuThemeId: string;
+  private currentStageAtmosphereId: string;
   private currentAiDifficulty: AiDifficultyId;
   private currentArcadeSettings: ArcadeMenuSettings;
   private currentLoadout: PlayersById<CharacterId>;
@@ -444,7 +512,9 @@ export class StartMenu {
   public constructor(private readonly options: StartMenuOptions) {
     this.enabledModes = sanitiseEnabledModes(options.enabledModes);
     this.menuThemeOptions = sanitiseMenuThemeOptions(options.availableMenuThemes);
+    this.stageAtmosphereOptions = sanitiseStageAtmosphereOptions(options.availableStageAtmospheres);
     this.currentMenuThemeId = resolveInitialMenuThemeId(options.initialMenuThemeId, this.menuThemeOptions);
+    this.currentStageAtmosphereId = resolveInitialStageAtmosphereId(options.initialStageAtmosphereId, this.stageAtmosphereOptions);
     this.currentMode = options.initialMode && this.enabledModes.includes(options.initialMode)
       ? options.initialMode
       : this.enabledModes[0];
@@ -847,6 +917,17 @@ export class StartMenu {
       this.cycleMenuTheme(1);
     });
     this.settingsThemeButton = settingsThemeRow.button;
+    const settingsStageAtmosphereInfoRow = document.createElement('div');
+    settingsStageAtmosphereInfoRow.className = 'start-menu-row';
+    this.settingsStageAtmosphereOptionsLabel = document.createElement('div');
+    this.settingsStageAtmosphereOptionsLabel.className = 'start-mode-options';
+    this.settingsStageAtmosphereDescriptionLabel = document.createElement('div');
+    this.settingsStageAtmosphereDescriptionLabel.className = 'start-mode-options';
+    settingsStageAtmosphereInfoRow.append(this.settingsStageAtmosphereOptionsLabel, this.settingsStageAtmosphereDescriptionLabel);
+    const settingsStageAtmosphereRow = this.createActionRow('Stage Atmosphere', () => {
+      this.cycleStageAtmosphere(1);
+    });
+    this.settingsStageAtmosphereButton = settingsStageAtmosphereRow.button;
     const settingsBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
@@ -856,9 +937,18 @@ export class StartMenu {
       settingsSocialRow.row,
       settingsThemeInfoRow,
       settingsThemeRow.row,
+      settingsStageAtmosphereInfoRow,
+      settingsStageAtmosphereRow.row,
       settingsBackRow.row,
     );
-    this.registerRows('settings', [settingsAccountRow.row, settingsSignOutRow.row, settingsSocialRow.row, settingsThemeRow.row, settingsBackRow.row]);
+    this.registerRows('settings', [
+      settingsAccountRow.row,
+      settingsSignOutRow.row,
+      settingsSocialRow.row,
+      settingsThemeRow.row,
+      settingsStageAtmosphereRow.row,
+      settingsBackRow.row,
+    ]);
 
     const padHint = document.createElement('p');
     padHint.className = 'start-pad-hint';
@@ -949,6 +1039,7 @@ export class StartMenu {
       'Complete an arcade ladder run to populate recent runs and best completion records.',
     );
     this.refreshSettingsThemeRows();
+    this.refreshSettingsStageAtmosphereRows();
     this.setMatchSelection(0);
     this.pollGamepads();
   }
@@ -1072,6 +1163,12 @@ export class StartMenu {
     const resolved = resolveInitialMenuThemeId(themeId, this.menuThemeOptions);
     this.currentMenuThemeId = resolved;
     this.refreshSettingsThemeRows();
+  }
+
+  public setStageAtmosphere(atmosphereId: string): void {
+    const resolved = resolveInitialStageAtmosphereId(atmosphereId, this.stageAtmosphereOptions);
+    this.currentStageAtmosphereId = resolved;
+    this.refreshSettingsStageAtmosphereRows();
   }
 
   public setArcadeHistoryView(headline: string, detail: string): void {
@@ -1609,10 +1706,14 @@ export class StartMenu {
     if (this.currentScreen !== 'settings') {
       return;
     }
-    if (this.getCurrentRowIndex() !== SETTINGS_THEME_ROW_INDEX) {
+    const rowIndex = this.getCurrentRowIndex();
+    if (rowIndex === SETTINGS_THEME_ROW_INDEX) {
+      this.cycleMenuTheme(direction);
       return;
     }
-    this.cycleMenuTheme(direction);
+    if (rowIndex === SETTINGS_STAGE_ATMOSPHERE_ROW_INDEX) {
+      this.cycleStageAtmosphere(direction);
+    }
   }
 
   private applyHorizontalNavigation(direction: 1 | -1): void {
@@ -1635,6 +1736,16 @@ export class StartMenu {
     this.options.onMenuThemeChange?.(nextThemeId);
   }
 
+  private cycleStageAtmosphere(direction: 1 | -1): void {
+    const nextAtmosphereId = getNextStageAtmosphereId(this.currentStageAtmosphereId, this.stageAtmosphereOptions, direction);
+    if (nextAtmosphereId === this.currentStageAtmosphereId) {
+      return;
+    }
+    this.currentStageAtmosphereId = nextAtmosphereId;
+    this.refreshSettingsStageAtmosphereRows();
+    this.options.onStageAtmosphereChange?.(nextAtmosphereId);
+  }
+
   private refreshSettingsThemeRows(): void {
     const activeTheme = this.menuThemeOptions.find((theme) => theme.id === this.currentMenuThemeId) ?? this.menuThemeOptions[0];
     this.settingsThemeButton.textContent = `Menu Theme: ${activeTheme.label}`;
@@ -1642,6 +1753,17 @@ export class StartMenu {
       .map((theme) => theme.id === activeTheme.id ? `[${theme.label}]` : theme.label)
       .join('  |  ');
     this.settingsThemeDescriptionLabel.textContent = activeTheme.description;
+  }
+
+  private refreshSettingsStageAtmosphereRows(): void {
+    const activeAtmosphere = this.stageAtmosphereOptions.find(
+      (atmosphere) => atmosphere.id === this.currentStageAtmosphereId,
+    ) ?? this.stageAtmosphereOptions[0];
+    this.settingsStageAtmosphereButton.textContent = `Stage Atmosphere: ${activeAtmosphere.label}`;
+    this.settingsStageAtmosphereOptionsLabel.textContent = this.stageAtmosphereOptions
+      .map((atmosphere) => atmosphere.id === activeAtmosphere.id ? `[${atmosphere.label}]` : atmosphere.label)
+      .join('  |  ');
+    this.settingsStageAtmosphereDescriptionLabel.textContent = activeAtmosphere.description;
   }
 
   private handleBackAction(): void {

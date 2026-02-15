@@ -316,4 +316,28 @@ export function cleanupRender(context: SceneContext): void {
       material.dispose();
     }
   }
+
+  context.scene.remove(context.stageBackgroundImage);
+  context.stageBackgroundImage.geometry.dispose();
+  (context.stageBackgroundImage.material as THREE.Material).dispose();
+
+  context.scene.remove(context.stageBackgroundModel);
+  context.stageBackgroundModel.geometry.dispose();
+  (context.stageBackgroundModel.material as THREE.Material).dispose();
+
+  context.scene.remove(context.stars);
+  context.stars.geometry.dispose();
+  (context.stars.material as THREE.Material).dispose();
+
+  context.scene.remove(context.arenaBoundary);
+  context.arenaBoundary.geometry.dispose();
+  (context.arenaBoundary.material as THREE.Material).dispose();
+
+  context.scene.remove(context.gravityWell);
+  context.gravityWell.geometry.dispose();
+  (context.gravityWell.material as THREE.Material).dispose();
+
+  context.scene.remove(context.ring);
+  context.ring.geometry.dispose();
+  (context.ring.material as THREE.Material).dispose();
 }

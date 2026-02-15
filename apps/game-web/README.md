@@ -91,6 +91,25 @@ Runtime:
 - Select `Menu Theme` and cycle options with mouse click, keyboard Left/Right, or controller Left/Right.
 - Includes accessibility preset: `high_contrast_v1`.
 
+## Stage atmosphere validation
+
+From repo root:
+
+```bash
+npm run stage:validate
+```
+
+From this workspace:
+
+```bash
+npm run stage:validate
+```
+
+Runtime:
+- Open `Settings` in the home flow.
+- Select `Stage Atmosphere` and cycle options with mouse click, keyboard Left/Right, or controller Left/Right.
+- Selection persists in `stageAtmosphereId` and applies scene fog/light/background hooks immediately.
+
 ## Balance patch notes generator
 
 From repo root:

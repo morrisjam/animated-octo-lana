@@ -13,6 +13,24 @@ export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
         estimatedVfxEmitters: 4,
       },
     },
+    {
+      id: 'stage_spire_model',
+      src: 'data:application/octet-stream;base64,AA==',
+      budget: {
+        estimatedBytes: 24 * 1024,
+        estimatedTriangles: 3_200,
+        estimatedVertices: 2_100,
+      },
+    },
+    {
+      id: 'stage_ruins_model',
+      src: 'data:application/octet-stream;base64,AA==',
+      budget: {
+        estimatedBytes: 28 * 1024,
+        estimatedTriangles: 4_100,
+        estimatedVertices: 2_800,
+      },
+    },
   ],
   sprites: [
     {
@@ -30,6 +48,30 @@ export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
       budget: {
         estimatedBytes: 1 * 1024 * 1024,
         estimatedTextureBytes: 1 * 1024 * 1024,
+      },
+    },
+    {
+      id: 'stage_nebula_texture',
+      src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==',
+      budget: {
+        estimatedBytes: 768 * 1024,
+        estimatedTextureBytes: 768 * 1024,
+      },
+    },
+    {
+      id: 'stage_ion_clouds_texture',
+      src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==',
+      budget: {
+        estimatedBytes: 768 * 1024,
+        estimatedTextureBytes: 768 * 1024,
+      },
+    },
+    {
+      id: 'stage_sunset_haze_texture',
+      src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==',
+      budget: {
+        estimatedBytes: 768 * 1024,
+        estimatedTextureBytes: 768 * 1024,
       },
     },
   ],

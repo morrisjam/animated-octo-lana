@@ -25,6 +25,7 @@ npm run character:qa
 npm run balance:validate
 npm run theme:validate
 npm run theme:contrast-check
+npm run stage:validate
 npm run balance:patch-notes
 npm run matchup:smoke
 ```
@@ -74,6 +75,7 @@ npm run migrate -w @gravity-well/api
 - Character package user guide: `docs/CHARACTER_PACKAGE_USER_GUIDE.md`
 - Balance profile workflow: `docs/BALANCE_PROFILE_WORKFLOW.md`
 - Menu theme workflow: `docs/MENU_THEME_WORKFLOW.md`
+- Stage atmosphere preset workflow: `docs/STAGE_ATMOSPHERE_PRESET_WORKFLOW.md`
 - Balance patch notes workflow: `docs/BALANCE_PATCH_NOTES_WORKFLOW.md`
 - Training telemetry workflow: `docs/TRAINING_TELEMETRY_WORKFLOW.md`
 - Matchup regression smoke workflow: `docs/MATCHUP_REGRESSION_SMOKE_WORKFLOW.md`

@@ -207,6 +207,11 @@ html, body {
   border-color: rgba(186, 211, 255, 0.55);
 }
 
+.start-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .start-menu-row {
   border: 1px solid rgba(167, 195, 255, 0.18);
   border-radius: 10px;
@@ -296,6 +301,10 @@ html, body {
   letter-spacing: .08em;
   text-transform: uppercase;
   color: #b4c9f3;
+}
+
+.start-row-label.error {
+  color: #ff9e9e;
 }
 
 .start-mode-actions {

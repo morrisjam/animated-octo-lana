@@ -5,6 +5,7 @@ import type {
   WebAuthSigninRequest,
   WebAuthSignupRequest,
 } from './types';
+import { createConfiguredEntitlementService, parseEntitlementMode } from './entitlement';
 import { createStorageBackedPersistenceService } from './persistence';
 
 const GUEST_ACCOUNT_KEY = 'gravity_well.guest_account_id';
@@ -143,6 +144,13 @@ async function parseApiError(response: Response): Promise<string> {
 
 export function createWebPlatformServices(): PlatformServices {
   const storage = createBrowserStorage();
+  const entitlementMode = parseEntitlementMode(import.meta.env.VITE_ENTITLEMENT_MODE as string | undefined, 'open');
+  const entitlement = createConfiguredEntitlementService({
+    mode: entitlementMode,
+    platformLabel: 'web',
+    deniedMessage: String(import.meta.env.VITE_ENTITLEMENT_DENY_MESSAGE ?? '').trim() || undefined,
+    unavailableMessage: 'Entitlement service is unavailable. Please retry later or contact support.',
+  });
   const persistence = createStorageBackedPersistenceService(storage, ['local']);
   let presenceStatus: string | null = null;
   let guestAccountPromise: Promise<string> | null = null;
@@ -227,6 +235,7 @@ export function createWebPlatformServices(): PlatformServices {
   return {
     kind: 'web',
     storage,
+    entitlement,
     persistence,
     auth: {
       async getSession() {

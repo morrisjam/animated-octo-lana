@@ -553,6 +553,14 @@
   - Unsupported operations fail safely.
 - Points: `3`
 
+### S3.8 Console entitlement gateway
+- Story: As a developer, I can enforce entitlement checks at startup and session entry with safe user-facing failure behavior.
+- Acceptance criteria:
+  - Platform entitlement adapter interface supports startup and session checks.
+  - Web and Steam adapter behaviors are covered by tests.
+  - Blocked access is surfaced in UI with explicit recovery guidance.
+- Points: `3`
+
 ## Suggested first 2 sprints
 - Sprint 1:
   - `S1.1`, `S1.4`, `S1.7`, `S1.8`

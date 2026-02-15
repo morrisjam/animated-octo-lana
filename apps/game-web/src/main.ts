@@ -817,6 +817,7 @@ const startMenu = createStartMenu({
     void beginReplayReviewFromFixture('smoke.replay.json');
   },
 });
+startMenu.setEntitlementGate(true, null);
 
 const fixedDt = 1 / 60;
 const maxAccumulatedTime = 0.25;
@@ -924,6 +925,7 @@ async function bootstrapPlatformProfile(): Promise<void> {
     sessionAccountId = session.accountId;
     startMenu.setAccountSummary(formatAccountSummary(session));
     startMenu.setAuthState(session.isAuthenticated);
+    await refreshEntitlementGate('startup');
     if (!session.isAuthenticated) {
       playerRankedTicket = null;
       playerRankedSession = null;
@@ -940,6 +942,7 @@ async function bootstrapPlatformProfile(): Promise<void> {
     }
   } catch {
     // Profile bootstrap fallback is intentionally silent for prototype flow.
+    startMenu.setEntitlementGate(false, 'Entitlement check failed. Please retry or refresh.');
   }
 }
 
@@ -990,6 +993,7 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
   sessionAccountId = session.accountId;
   startMenu.setAccountSummary(formatAccountSummary(session));
   startMenu.setAuthState(session.isAuthenticated);
+  await refreshEntitlementGate('session');
   if (!session.isAuthenticated) {
     playerRankedTicket = null;
     playerRankedSession = null;
@@ -1002,6 +1006,27 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
     if (session.isAuthenticated && profile.displayName) {
       startMenu.setAccountSummary(`Signed in: ${profile.displayName}`);
     }
+  }
+}
+
+async function refreshEntitlementGate(stage: 'startup' | 'session'): Promise<void> {
+  const access = await platform.entitlement.checkAccess({
+    stage,
+    accountId: sessionAccountId,
+  });
+  if (access.allowed) {
+    startMenu.setEntitlementGate(true, null);
+    return;
+  }
+
+  startMenu.setEntitlementGate(false, `${access.message} [${access.code}]`);
+  if (runtimeConfig.features.debugToolsEnabled) {
+    console.warn('[entitlement] access blocked', {
+      stage,
+      code: access.code,
+      status: access.status,
+      accountId: sessionAccountId,
+    });
   }
 }
 

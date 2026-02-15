@@ -1,4 +1,5 @@
 import type { PlatformServices, PlatformStorageService } from './types';
+import { createConfiguredEntitlementService, parseEntitlementMode } from './entitlement';
 import { createStorageBackedPersistenceService } from './persistence';
 
 function createMemoryStorage(): PlatformStorageService {
@@ -18,12 +19,23 @@ function createMemoryStorage(): PlatformStorageService {
 
 export function createSteamPlatformServices(): PlatformServices {
   const storage = createMemoryStorage();
+  const bypass = (import.meta.env.VITE_STEAM_ENTITLEMENT_BYPASS as string | undefined)?.trim().toLowerCase();
+  const entitlementMode = bypass === 'true'
+    ? 'open'
+    : parseEntitlementMode(import.meta.env.VITE_STEAM_ENTITLEMENT_MODE as string | undefined, 'unavailable');
+  const entitlement = createConfiguredEntitlementService({
+    mode: entitlementMode,
+    platformLabel: 'steam',
+    deniedMessage: String(import.meta.env.VITE_STEAM_ENTITLEMENT_DENY_MESSAGE ?? '').trim() || undefined,
+    unavailableMessage: 'Steam entitlement verification is unavailable in this runtime.',
+  });
   const persistence = createStorageBackedPersistenceService(storage, ['local']);
   let presenceStatus: string | null = null;
 
   return {
     kind: 'steam',
     storage,
+    entitlement,
     persistence,
     auth: {
       async getSession() {

@@ -173,6 +173,7 @@ export class StartMenu {
   private readonly roundBanner: HTMLDivElement;
 
   private readonly titlePanel: HTMLDivElement;
+  private readonly titleSubtitle: HTMLParagraphElement;
   private readonly loginPanel: HTMLDivElement;
   private readonly mainPanel: HTMLDivElement;
   private readonly onlinePanel: HTMLDivElement;
@@ -199,7 +200,11 @@ export class StartMenu {
   private readonly signInButton: HTMLButtonElement;
   private readonly signUpButton: HTMLButtonElement;
   private readonly signOutButton: HTMLButtonElement;
+  private readonly titleContinueButton: HTMLButtonElement;
   private readonly continueButton: HTMLButtonElement;
+  private readonly mainOnlineButton: HTMLButtonElement;
+  private readonly mainLocalButton: HTMLButtonElement;
+  private readonly entitlementStatusLabel: HTMLDivElement;
   private readonly settingsSignOutButton: HTMLButtonElement;
   private readonly rankedStatusHeadline: HTMLDivElement;
   private readonly rankedStatusDetail: HTMLPreElement;
@@ -305,6 +310,11 @@ export class StartMenu {
     this.root.hidden = true;
 
     this.titlePanel = this.createPanel('Gravity Well', 'Press continue to enter the portal.');
+    const titleSubtitle = this.titlePanel.querySelector('p');
+    if (!(titleSubtitle instanceof HTMLParagraphElement)) {
+      throw new Error('Missing title subtitle paragraph.');
+    }
+    this.titleSubtitle = titleSubtitle;
     this.loginPanel = this.createPanel('Login', 'Sign in, sign up, or continue as guest.');
     this.mainPanel = this.createPanel('Main Menu', 'Choose a category.');
     this.onlinePanel = this.createPanel('Online', 'Matchmaking and custom rooms.');
@@ -318,6 +328,7 @@ export class StartMenu {
     const continueRow = this.createActionRow('Continue', () => {
       this.setScreen('login');
     });
+    this.titleContinueButton = continueRow.button;
     this.titlePanel.appendChild(continueRow.row);
     this.registerRows('title', [continueRow.row]);
 
@@ -405,13 +416,22 @@ export class StartMenu {
     this.accountSummaryLabel.textContent = this.accountSummary;
     mainAccountRow.appendChild(this.accountSummaryLabel);
     this.mainPanel.appendChild(mainAccountRow);
+    const entitlementRow = document.createElement('div');
+    entitlementRow.className = 'start-menu-row';
+    this.entitlementStatusLabel = document.createElement('div');
+    this.entitlementStatusLabel.className = 'start-row-label';
+    this.entitlementStatusLabel.textContent = '';
+    entitlementRow.appendChild(this.entitlementStatusLabel);
+    this.mainPanel.appendChild(entitlementRow);
 
     const mainOnlineRow = this.createActionRow('Online', () => {
       this.setScreen('online');
     });
+    this.mainOnlineButton = mainOnlineRow.button;
     const mainLocalRow = this.createActionRow('Local', () => {
       this.setScreen('local');
     });
+    this.mainLocalButton = mainLocalRow.button;
     const mainReplaysRow = this.createActionRow('Replays', () => {
       this.setScreen('replays');
     });
@@ -766,6 +786,17 @@ export class StartMenu {
       this.authStatusLabel.textContent = 'Guest session active.';
       this.authStatusLabel.classList.remove('error');
     }
+  }
+
+  public setEntitlementGate(canAccessGameplay: boolean, message: string | null): void {
+    this.mainOnlineButton.disabled = !canAccessGameplay;
+    this.mainLocalButton.disabled = !canAccessGameplay;
+    this.titleContinueButton.disabled = false;
+    this.titleSubtitle.textContent = canAccessGameplay
+      ? 'Press continue to enter the portal.'
+      : 'Access to gameplay is currently blocked. See status details.';
+    this.entitlementStatusLabel.textContent = message ?? '';
+    this.entitlementStatusLabel.classList.toggle('error', !canAccessGameplay && Boolean(message));
   }
 
   private createPanel(title: string, subtitle: string): HTMLDivElement {

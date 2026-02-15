@@ -31,6 +31,17 @@ export interface PlatformStorageService {
   removeItem(key: string): void;
 }
 
+export interface PlatformEntitlementAccess {
+  allowed: boolean;
+  status: 'granted' | 'denied' | 'unavailable';
+  code: string;
+  message: string;
+}
+
+export interface PlatformEntitlementService {
+  checkAccess(context?: { stage?: 'startup' | 'session'; accountId?: string | null }): Promise<PlatformEntitlementAccess>;
+}
+
 export type PersistenceScope = 'local' | 'cloud';
 
 export interface PersistenceReadSuccess<T> {
@@ -92,6 +103,7 @@ export interface PlatformServices {
   kind: PlatformKind;
   auth: PlatformAuthService;
   storage: PlatformStorageService;
+  entitlement: PlatformEntitlementService;
   persistence: PlatformPersistenceService;
   presence: PlatformPresenceService;
   profile: PlatformProfileService;

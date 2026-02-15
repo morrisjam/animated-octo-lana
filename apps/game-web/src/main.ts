@@ -16,6 +16,12 @@ import {
   DEFAULT_BALANCE_PROFILE_ID,
   resolveBalanceProfile,
 } from './sim/balanceProfiles';
+import {
+  createTrainingTelemetryTracker,
+  type TrainingRoundEndReason,
+  type TrainingTelemetrySummary,
+  type TrainingTelemetryTracker,
+} from './sim/trainingTelemetry';
 import { sanitiseTuning } from './sim/tuning';
 import type { PlayerId, PlayersById, RenderSnapshot } from './sim/types';
 import {
@@ -106,6 +112,7 @@ interface LoadedSettings {
 const SETTINGS_STORAGE_KEY = 'gravity_well.settings.v1';
 const ARCADE_HISTORY_STORAGE_KEY = 'gravity_well.arcade_history.v1';
 const ROLLBACK_DIAGNOSTICS_STORAGE_KEY = 'gravity_well.rollback_diagnostics.v1';
+const TRAINING_TELEMETRY_STORAGE_KEY = 'gravity_well.training_telemetry.v1';
 const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
 const DEFAULT_ARCADE_MENU_SETTINGS: ArcadeMenuSettings = {
@@ -230,6 +237,11 @@ let selectedMatchSeed = Number.isFinite(forcedSeed) ? (forcedSeed as number) : 1
 let selectedMode: GameMode = loadedSettings.mode;
 const configuredBalanceProfileId = (import.meta.env.VITE_BALANCE_PROFILE_ID as string | undefined)?.trim();
 const activeBalanceProfile = resolveBalanceProfile(configuredBalanceProfileId);
+const runtimeRulesetVersion = (
+  (import.meta.env.VITE_RULESET_VERSION as string | undefined)?.trim()
+  || 'prototype-2026.02'
+);
+const activeRulesetVersion = `${runtimeRulesetVersion}${activeBalanceProfile.id === DEFAULT_BALANCE_PROFILE_ID ? '' : `+${activeBalanceProfile.id}`}`;
 if (
   configuredBalanceProfileId
   && configuredBalanceProfileId.length > 0
@@ -247,6 +259,12 @@ let state = createInitialState({
   rules: getRulesForMode(selectedMode),
 });
 state.tuning = { ...activeBalanceProfile.tuning };
+let trainingTelemetry: TrainingTelemetryTracker = createTrainingTelemetryTracker({
+  balanceProfileId: activeBalanceProfile.id,
+  rulesetVersion: activeRulesetVersion,
+  playerCharacterId: selectedLoadout.P1,
+  opponentCharacterId: selectedLoadout.P2,
+});
 const assetBudgetReport = buildAssetBudgetReport(DEFAULT_ASSET_MANIFEST, DEFAULT_ASSET_BUDGET_LIMITS);
 let assetPreloadBytesLoaded = 0;
 let appPhase: AppPhase = 'home';
@@ -283,6 +301,13 @@ interface StoredRollbackDiagnosticsEntry {
   mode: GameMode;
   seed: number;
   diagnostics: RollbackDiagnosticsSnapshot;
+}
+
+interface StoredTrainingTelemetryEntry {
+  exportedAt: string;
+  rulesetVersion: string;
+  balanceProfileId: string;
+  summary: TrainingTelemetrySummary;
 }
 
 type QueueType = 'unranked' | 'ranked';
@@ -404,6 +429,13 @@ const pauseMenu = createPauseMenu({
     persistSettings();
   },
   enableDebugTab: runtimeConfig.features.debugToolsEnabled,
+  canExportTrainingTelemetry: () => selectedMode === 'training',
+  onExportTrainingTelemetry: async () => {
+    if (selectedMode !== 'training') {
+      return 'Training telemetry export is only available in training mode.';
+    }
+    return exportTrainingTelemetrySession();
+  },
   onRestartTraining: () => {
     restartTrainingRound();
   },
@@ -442,10 +474,7 @@ const diagnosticsBuildId = (
   || (import.meta.env.VITE_COMMIT_SHA as string | undefined)?.trim()
   || 'dev-local'
 );
-const diagnosticsRulesetVersion = (
-  (import.meta.env.VITE_RULESET_VERSION as string | undefined)?.trim()
-  || 'prototype-2026.02'
-) + (activeBalanceProfile.id === DEFAULT_BALANCE_PROFILE_ID ? '' : `+${activeBalanceProfile.id}`);
+const diagnosticsRulesetVersion = activeRulesetVersion;
 const diagnosticsEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDiagnosticsEnabled;
 let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   ticketId: null,
@@ -1549,6 +1578,15 @@ function resolveRecordedArcadeDifficulty(run: ArcadeRunState): AiDifficultyId {
   return aiDifficultyByRank(maxRank);
 }
 
+function createTrainingTelemetryForCurrentSelection(): TrainingTelemetryTracker {
+  return createTrainingTelemetryTracker({
+    balanceProfileId: activeBalanceProfile.id,
+    rulesetVersion: activeRulesetVersion,
+    playerCharacterId: selectedLoadout.P1,
+    opponentCharacterId: selectedLoadout.P2,
+  });
+}
+
 function resetRoundState(): void {
   persistRollbackDiagnostics('round_reset');
   const tuning = state.tuning;
@@ -1590,6 +1628,15 @@ function resetRoundState(): void {
   if (roundStartCallout && audioSettings.subtitlesEnabled) {
     hud.showVoiceSubtitle(roundStartCallout.text);
   }
+  if (selectedMode === 'training') {
+    trainingTelemetry.updateMetadata({
+      playerCharacterId: matchLoadout.P1,
+      opponentCharacterId: matchLoadout.P2,
+      balanceProfileId: activeBalanceProfile.id,
+      rulesetVersion: activeRulesetVersion,
+    });
+    trainingTelemetry.startRound(state);
+  }
 }
 
 function beginMode(
@@ -1612,6 +1659,9 @@ function beginMode(
     selectedArcadeSettings = sanitiseArcadeMenuSettings(arcadeSettings);
   }
   selectedMode = resolvedMode;
+  if (selectedMode === 'training') {
+    trainingTelemetry = createTrainingTelemetryForCurrentSelection();
+  }
   if (!Number.isFinite(forcedSeed)) {
     selectedMatchSeed = ((Date.now() ^ Math.floor(performance.now() * 1000)) >>> 0) || 1;
   }
@@ -1657,6 +1707,9 @@ function beginMode(
 
 function returnToHome(): void {
   persistRollbackDiagnostics('return_home');
+  if (selectedMode === 'training') {
+    trainingTelemetry.endRound('mode_exit');
+  }
   arcadePendingLossState = null;
   if (selectedMode === 'arcade') {
     arcadeRun = null;
@@ -1767,10 +1820,39 @@ function persistRollbackDiagnostics(reason: string): void {
   }
 }
 
-function restartTrainingRound(): void {
+function exportTrainingTelemetrySession(): string {
+  const summary = trainingTelemetry.toSummary();
+  const payload: StoredTrainingTelemetryEntry = {
+    exportedAt: summary.exportedAt,
+    rulesetVersion: summary.rulesetVersion,
+    balanceProfileId: summary.balanceProfileId,
+    summary,
+  };
+  const timestamp = summary.exportedAt.replace(/[:.]/g, '-');
+  const fileName = `gravity-well-training-telemetry-${timestamp}.json`;
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+
+  const writeResult = platform.persistence.writeJson(TRAINING_TELEMETRY_STORAGE_KEY, payload);
+  if (!writeResult.ok && runtimeConfig.features.debugToolsEnabled) {
+    console.warn('[persistence] training telemetry write skipped', writeResult);
+  }
+
+  return `Training telemetry exported: ${fileName}`;
+}
+
+function restartTrainingRound(reason: TrainingRoundEndReason = 'manual_restart'): void {
   if (selectedMode !== 'training') {
     return;
   }
+  trainingTelemetry.endRound(reason);
   resetRoundState();
   appPhase = 'playing';
   startMenu.hideRoundBanner();
@@ -2138,7 +2220,7 @@ function showArcadeLossPrompt(stageLabel: string, allowedActions: ArcadeLossActi
 
 function onRoundWin(winner: PlayerId): void {
   if (selectedMode === 'training') {
-    restartTrainingRound();
+    restartTrainingRound('round_win');
     return;
   }
 
@@ -2338,6 +2420,9 @@ function tick(nowMs: number): void {
         state = rollbackSession.getStateSnapshot();
       } else {
         step(state, frameInput, fixedDt);
+      }
+      if (selectedMode === 'training') {
+        trainingTelemetry.recordFrame(frameInput, state, fixedDt);
       }
       simulationFrame += 1;
       accumulator -= fixedDt;

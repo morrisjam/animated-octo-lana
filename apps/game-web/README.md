@@ -70,6 +70,13 @@ Runtime profile override:
 VITE_BALANCE_PROFILE_ID=mobility_focus_v1
 ```
 
+## Training telemetry export
+
+- In `Training` mode, open pause menu -> `Debug Tuning`.
+- Use `Export Training Telemetry` to download session metrics JSON.
+- Latest export is also saved in local persistence key:
+  - `gravity_well.training_telemetry.v1`
+
 ## Character package scaffolding
 
 From repo root:

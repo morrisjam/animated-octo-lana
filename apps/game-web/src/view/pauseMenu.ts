@@ -8,6 +8,8 @@ interface PauseMenuOptions {
   getAudioSettings(): AudioSettings;
   setAudioSettings(settings: AudioSettings): void;
   enableDebugTab?: boolean;
+  canExportTrainingTelemetry?(): boolean;
+  onExportTrainingTelemetry?(): Promise<string> | string;
   onRestartTraining?(): void;
 }
 
@@ -59,6 +61,7 @@ export class PauseMenu {
   private readonly tabButtons: Record<PauseTabId, HTMLButtonElement>;
   private readonly debugTabEnabled: boolean;
   private readonly restartTrainingButton!: HTMLButtonElement;
+  private readonly exportTrainingTelemetryButton: HTMLButtonElement | null = null;
   private readonly tabPanels: Record<PauseTabId, HTMLDivElement>;
   private readonly fieldInputs = new Map<keyof GameTuning, HTMLInputElement>();
   private readonly audioVolumeInputs = new Map<AudioVolumeField['key'], HTMLInputElement>();
@@ -69,6 +72,7 @@ export class PauseMenu {
   };
   private paused = false;
   private canRestartTraining = false;
+  private exportingTrainingTelemetry = false;
   private activeTab: PauseTabId = 'pause';
 
   constructor(private readonly options: PauseMenuOptions) {
@@ -138,6 +142,7 @@ export class PauseMenu {
       this.setActiveTab('pause');
       this.syncInputsFromTuning();
       this.syncInputsFromAudioSettings();
+      this.refreshTrainingTelemetryControls();
       if (this.copyStatus) {
         this.copyStatus.textContent = '';
       }
@@ -147,6 +152,7 @@ export class PauseMenu {
   setCanRestartTraining(enabled: boolean): void {
     this.canRestartTraining = enabled;
     this.restartTrainingButton.hidden = !enabled;
+    this.refreshTrainingTelemetryControls();
   }
 
   private createTabButton(label: string, tabId: PauseTabId): HTMLButtonElement {
@@ -183,6 +189,12 @@ export class PauseMenu {
     resume.className = 'pause-action';
     resume.textContent = 'Resume';
     resume.addEventListener('click', () => this.setPaused(false));
+
+    const toAudio = document.createElement('button');
+    toAudio.type = 'button';
+    toAudio.className = 'pause-action';
+    toAudio.textContent = 'Audio Settings';
+    toAudio.addEventListener('click', () => this.setActiveTab('audio'));
 
     const toBindings = document.createElement('button');
     toBindings.type = 'button';
@@ -376,8 +388,24 @@ export class PauseMenu {
       this.copyTuningToClipboard();
     });
 
-    actions.append(resetButton, copyButton);
+    let exportTrainingTelemetryButton: HTMLButtonElement | null = null;
+    if (this.options.onExportTrainingTelemetry) {
+      exportTrainingTelemetryButton = document.createElement('button');
+      exportTrainingTelemetryButton.type = 'button';
+      exportTrainingTelemetryButton.className = 'pause-action';
+      exportTrainingTelemetryButton.textContent = 'Export Training Telemetry';
+      exportTrainingTelemetryButton.addEventListener('click', () => {
+        void this.exportTrainingTelemetry();
+      });
+    }
+
+    if (exportTrainingTelemetryButton) {
+      actions.append(resetButton, copyButton, exportTrainingTelemetryButton);
+    } else {
+      actions.append(resetButton, copyButton);
+    }
     tab.appendChild(actions);
+    this.exportTrainingTelemetryButton = exportTrainingTelemetryButton;
 
     this.copyStatus = document.createElement('div');
     this.copyStatus.className = 'copy-status';
@@ -455,13 +483,45 @@ export class PauseMenu {
       }
     }
   }
+
+  private refreshTrainingTelemetryControls(): void {
+    if (!this.exportTrainingTelemetryButton) {
+      return;
+    }
+    const canExport = this.options.canExportTrainingTelemetry
+      ? this.options.canExportTrainingTelemetry()
+      : this.canRestartTraining;
+    this.exportTrainingTelemetryButton.hidden = !canExport;
+    this.exportTrainingTelemetryButton.disabled = !canExport || this.exportingTrainingTelemetry;
+  }
+
+  private async exportTrainingTelemetry(): Promise<void> {
+    if (!this.options.onExportTrainingTelemetry) {
+      return;
+    }
+    this.exportingTrainingTelemetry = true;
+    this.refreshTrainingTelemetryControls();
+    if (this.copyStatus) {
+      this.copyStatus.textContent = 'Exporting training telemetry...';
+    }
+    try {
+      const result = await this.options.onExportTrainingTelemetry();
+      if (this.copyStatus) {
+        this.copyStatus.textContent = result || 'Training telemetry exported.';
+      }
+    } catch (error) {
+      if (this.copyStatus) {
+        this.copyStatus.textContent = error instanceof Error
+          ? `Training telemetry export failed: ${error.message}`
+          : 'Training telemetry export failed.';
+      }
+    } finally {
+      this.exportingTrainingTelemetry = false;
+      this.refreshTrainingTelemetryControls();
+    }
+  }
 }
 
 export function createPauseMenu(options: PauseMenuOptions): PauseMenu {
   return new PauseMenu(options);
 }
-    const toAudio = document.createElement('button');
-    toAudio.type = 'button';
-    toAudio.className = 'pause-action';
-    toAudio.textContent = 'Audio Settings';
-    toAudio.addEventListener('click', () => this.setActiveTab('audio'));

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "character:new": "tsx scripts/character-package-new.ts",
     "character:validate": "tsx scripts/character-package-validate.ts",
     "asset:budget-check": "tsx scripts/asset-budget-check.ts",
     "build": "npm run character:validate && npm run asset:budget-check && vite build",

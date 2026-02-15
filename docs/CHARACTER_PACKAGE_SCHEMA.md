@@ -5,9 +5,18 @@ Schema version:
 
 Source:
 - Schema parser/validator: `apps/game-web/src/content/characterPackageSchema.ts`
+- Scaffolder: `apps/game-web/scripts/character-package-new.ts`
 - CLI validator: `apps/game-web/scripts/character-package-validate.ts`
 - Example package: `apps/game-web/content/characters/vanguard/vanguard.character.package.json`
+- Commented template: `apps/game-web/content/characters/_template/template.character.package.jsonc`
 - Author workflow guide: `docs/CHARACTER_PACKAGE_USER_GUIDE.md`
+
+## Scaffolding command
+Run from repo root:
+
+```bash
+npm run character:new -- --id striker --display-name "Striker" --author "Your Name"
+```
 
 ## Validation command
 Run from repo root:

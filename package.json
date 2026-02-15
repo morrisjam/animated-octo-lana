@@ -17,6 +17,7 @@
     "test": "npm run test --workspace @gravity-well/game-web",
     "replay:run": "npm run replay:run --workspace @gravity-well/game-web --",
     "replay:check": "npm run replay:check --workspace @gravity-well/game-web",
+    "character:new": "npm run character:new --workspace @gravity-well/game-web --",
     "verify": "npm run verify --workspace @gravity-well/game-web",
     "api:dev": "npm run dev --workspace @gravity-well/api",
     "api:test": "npm run test --workspace @gravity-well/api",

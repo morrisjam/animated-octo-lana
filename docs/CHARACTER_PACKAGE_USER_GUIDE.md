@@ -10,14 +10,25 @@ This guide is for creating and validating character packages without editing cor
   - visual ids and audio ids
   - special move metadata
 
-## 1. Create a new package folder
-- Copy the example package:
-  - `apps/game-web/content/characters/vanguard/vanguard.character.package.json`
-- Rename the folder and file to your character id.
+## 1. Scaffold a new package
+Preferred command (from repo root):
 
-Example:
+```bash
+npm run character:new -- --id striker --display-name "Striker" --author "Your Name"
+```
+
+Workspace direct variant:
+
+```bash
+npm run character:new -w @gravity-well/game-web -- --id striker --display-name "Striker"
+```
+
+What it creates:
 - Folder: `apps/game-web/content/characters/striker/`
 - File: `apps/game-web/content/characters/striker/striker.character.package.json`
+
+Template reference (commented JSONC, not loaded at runtime):
+- `apps/game-web/content/characters/_template/template.character.package.jsonc`
 
 ## 2. Edit required fields
 - Use schema: `docs/CHARACTER_PACKAGE_SCHEMA.md`
@@ -37,6 +48,12 @@ What you get:
 - pass/fail output per package file
 - report JSON:
   - `apps/game-web/build-artifacts/character-package-validation-report.json`
+
+Optional dry run for scaffolder:
+
+```bash
+npm run character:new -- --id striker --dry-run
+```
 
 ## 4. Run the game
 - `npm run dev -w @gravity-well/game-web`

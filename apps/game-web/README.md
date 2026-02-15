@@ -50,6 +50,26 @@ Notes:
 npm run verify
 ```
 
+## Character package scaffolding
+
+From repo root:
+
+```bash
+npm run character:new -- --id striker --display-name "Striker" --author "Your Name"
+```
+
+From this workspace:
+
+```bash
+npm run character:new -- --id striker --display-name "Striker"
+```
+
+Then validate:
+
+```bash
+npm run character:validate
+```
+
 ## Rollback scaffold toggle
 
 Optional development flag:

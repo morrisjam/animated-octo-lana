@@ -50,6 +50,7 @@ Each `CharacterDefinition` now includes:
 - Renderer reads visual presentation profile through adapter interface so 3D, sprite, and hybrid fighters can coexist.
 - Renderer reads special projectile `visualId` from snapshot so projectile art can differ by character.
 - Renderer binds combat events (`boost`, `launch`, `parry`, `projectile`, `dunk`) to data-driven VFX presets (`src/view/vfx`), with per-profile overrides.
+- Asset manifests include budget hints for texture bytes, mesh triangles, and VFX emitters; build-time checks enforce project limits.
 
 ## Extension points
 1. Model and animation loading:

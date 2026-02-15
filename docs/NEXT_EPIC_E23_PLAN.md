@@ -54,4 +54,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S1.13` (Asset manifest and loader abstraction) is complete.
 - `S1.14` (Character visual profile abstraction) is complete.
 - `S1.15` (VFX event binding and tuning presets) is complete.
-- Next recommended slice: `S1.16` Asset budgets and validation checks.
+- `S1.16` (Asset budgets and validation checks) is complete.
+- Next recommended slice: `S1.17` Audio event bus and routing.

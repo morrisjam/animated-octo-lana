@@ -13,8 +13,13 @@ import { validateReplayPayload } from './sim/replay';
 import { buildReplayReviewData, type ReplayReviewData } from './sim/replayReview';
 import { createInitialState, getRenderSnapshot, step } from './sim/sim';
 import { sanitiseTuning } from './sim/tuning';
-import type { PlayerId, PlayersById } from './sim/types';
-import { createHud, type RollbackDiagnosticsView } from './view/hud';
+import type { PlayerId, PlayersById, RenderSnapshot } from './sim/types';
+import {
+  createHud,
+  type RollbackDiagnosticsView,
+  type RuntimeMemoryDiagnosticsView,
+} from './view/hud';
+import { buildAssetBudgetReport, DEFAULT_ASSET_BUDGET_LIMITS } from './view/assets/budget';
 import { DEFAULT_ASSET_MANIFEST } from './view/assets/defaultManifest';
 import { preloadAssetManifest } from './view/assets/loader';
 import { createPauseMenu } from './view/pauseMenu';
@@ -82,6 +87,8 @@ let state = createInitialState({
   seed: selectedMatchSeed,
   rules: getRulesForMode(selectedMode),
 });
+const assetBudgetReport = buildAssetBudgetReport(DEFAULT_ASSET_MANIFEST, DEFAULT_ASSET_BUDGET_LIMITS);
+let assetPreloadBytesLoaded = 0;
 let appPhase: AppPhase = 'home';
 let p1RoundWins = 0;
 let p2RoundWins = 0;
@@ -826,6 +833,8 @@ void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
       console.info(`[assets] preloaded ${progress.loaded}/${progress.total} manifest entries`);
     }
   },
+}).then((result) => {
+  assetPreloadBytesLoaded = result.entries.reduce((total, entry) => total + entry.bytes, 0);
 }).catch((error) => {
   console.error('[assets] preload failed', error);
 });
@@ -1087,9 +1096,9 @@ function resetRoundState(): void {
       maxHistoryFrames: 60 * 20,
     })
     : null;
-  const showRollbackDiagnostics = runtimeConfig.features.debugToolsEnabled && rollbackSession !== null;
-  hud.setRollbackDiagnosticsVisible(showRollbackDiagnostics);
-  hud.updateRollbackDiagnostics(showRollbackDiagnostics ? getRollbackDiagnosticsView(rollbackSession) : null);
+  const showDebugDiagnostics = runtimeConfig.features.debugToolsEnabled;
+  hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
+  hud.updateRollbackDiagnostics(showDebugDiagnostics && rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null);
 }
 
 function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
@@ -1186,6 +1195,17 @@ function getRollbackDiagnosticsView(session: RollbackSession): RollbackDiagnosti
     lastRollbackDepth: snapshot.lastRollbackDepth,
     lastRollbackFromFrame: snapshot.lastRollbackFromFrame,
     desyncEventCount: snapshot.desyncEvents.length,
+  };
+}
+
+function getRuntimeMemoryDiagnosticsView(snapshot: RenderSnapshot): RuntimeMemoryDiagnosticsView {
+  return {
+    assetBytesLoaded: assetPreloadBytesLoaded,
+    textureBytesBudgeted: assetBudgetReport.usage.textureBytes,
+    meshTrianglesBudgeted: assetBudgetReport.usage.meshTriangles,
+    vfxBudgeted: assetBudgetReport.usage.vfxEmitters,
+    vfxActive: sceneContext.combatVfxRuntime.active.length,
+    projectilesActive: snapshot.projectiles.length,
   };
 }
 
@@ -1616,15 +1636,21 @@ function tick(nowMs: number): void {
     ? replayReviewData.frames[replayFrameIndex].snapshot
     : getRenderSnapshot(state);
 
+  renderFrame(sceneContext, snapshot);
+  const memoryDiagnostics = runtimeConfig.features.debugToolsEnabled
+    ? getRuntimeMemoryDiagnosticsView(snapshot)
+    : null;
+
   if (appPhase === 'replay_review') {
     hud.setRollbackDiagnosticsVisible(false);
     hud.updateRollbackDiagnostics(null);
-  } else if (runtimeConfig.features.debugToolsEnabled && rollbackSession) {
-    hud.updateRollbackDiagnostics(getRollbackDiagnosticsView(rollbackSession));
+  } else if (runtimeConfig.features.debugToolsEnabled) {
+    hud.setRollbackDiagnosticsVisible(true);
+    hud.updateRollbackDiagnostics(rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null, memoryDiagnostics);
   } else {
+    hud.setRollbackDiagnosticsVisible(false);
     hud.updateRollbackDiagnostics(null);
   }
-  renderFrame(sceneContext, snapshot);
   hud.update(snapshot);
   updateMatchInfo();
   updateOnlineDiagnosticsOverlay();

@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "build:steam": "vite build --mode steam",
+    "asset:budget-check": "tsx scripts/asset-budget-check.ts",
+    "build": "npm run asset:budget-check && vite build",
+    "build:steam": "npm run asset:budget-check && vite build --mode steam",
     "package:steam": "tsx scripts/steam-package.ts --dist dist --out-dir steam-artifact",
     "smoke:steam": "tsx scripts/steam-smoke.ts --packaged-dir steam-artifact",
     "preview": "vite preview",

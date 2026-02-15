@@ -117,8 +117,12 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
   - `src/view/assets/defaultManifest.ts`
 - Async preloader:
   - `src/view/assets/loader.ts`
+- Budget checker and report:
+  - `src/view/assets/budget.ts`
+  - `scripts/asset-budget-check.ts`
 - Startup preload call:
   - `src/main.ts` preloads `DEFAULT_ASSET_MANIFEST` and reports progress in debug logs.
+- Build commands run asset budget validation before compiling and emit `build-artifacts/asset-budget-report.json`.
 
 ## Character visual presentation adapters
 
@@ -133,6 +137,10 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Runtime playback for particles, trails, flashes, and sound cues lives in `src/view/vfx/runtime.ts`.
 - Supported bound events are `boost`, `launch`, `parry`, `projectile`, and `dunk`.
 - Tuning preset values in `presets.ts` does not require simulation gameplay code edits.
+
+## Runtime debug memory counters
+
+- With debug tools enabled, HUD debug diagnostics include budgeted texture bytes, mesh triangles, VFX emitter counts, active VFX count, projectile count, and preloaded asset bytes.
 
 ## Replay scripts
 

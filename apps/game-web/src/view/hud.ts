@@ -22,11 +22,23 @@ export interface RollbackDiagnosticsView {
   desyncEventCount: number;
 }
 
+export interface RuntimeMemoryDiagnosticsView {
+  assetBytesLoaded: number;
+  textureBytesBudgeted: number;
+  meshTrianglesBudgeted: number;
+  vfxBudgeted: number;
+  vfxActive: number;
+  projectilesActive: number;
+}
+
 export interface HudController {
   update(snapshot: RenderSnapshot): void;
   setTrainingFrameDataVisible(visible: boolean): void;
   setRollbackDiagnosticsVisible(visible: boolean): void;
-  updateRollbackDiagnostics(diagnostics: RollbackDiagnosticsView | null): void;
+  updateRollbackDiagnostics(
+    diagnostics: RollbackDiagnosticsView | null,
+    memoryDiagnostics?: RuntimeMemoryDiagnosticsView | null,
+  ): void;
 }
 
 const MAX_BREAK_ICONS = 3;
@@ -99,20 +111,39 @@ export function createHud(): HudController {
     setRollbackDiagnosticsVisible(visible: boolean): void {
       elements.rollbackDiagnostics.hidden = !visible;
     },
-    updateRollbackDiagnostics(diagnostics: RollbackDiagnosticsView | null): void {
-      if (!diagnostics) {
+    updateRollbackDiagnostics(
+      diagnostics: RollbackDiagnosticsView | null,
+      memoryDiagnostics?: RuntimeMemoryDiagnosticsView | null,
+    ): void {
+      if (!diagnostics && !memoryDiagnostics) {
         elements.rollbackDiagnostics.innerHTML = '';
         return;
       }
-      const remoteResolvedFrames = diagnostics.predictedRemoteFrames + diagnostics.authoritativeRemoteFrames;
-      const predictedRatio = remoteResolvedFrames > 0
-        ? Math.round((diagnostics.predictedRemoteFrames / remoteResolvedFrames) * 100)
-        : 0;
+      const rows: string[] = [];
+      if (diagnostics) {
+        const remoteResolvedFrames = diagnostics.predictedRemoteFrames + diagnostics.authoritativeRemoteFrames;
+        const predictedRatio = remoteResolvedFrames > 0
+          ? Math.round((diagnostics.predictedRemoteFrames / remoteResolvedFrames) * 100)
+          : 0;
+        rows.push(
+          `<div class="row">Frames: ${diagnostics.totalFramesSimulated} | Predicted remote: ${diagnostics.predictedRemoteFrames} (${predictedRatio}%) | Authoritative remote: ${diagnostics.authoritativeRemoteFrames}</div>`,
+          `<div class="row">Rollbacks: ${diagnostics.totalRollbacks} | Max depth: ${diagnostics.maxRollbackDepth} | Last depth: ${diagnostics.lastRollbackDepth}</div>`,
+          `<div class="row">Last rollback frame: ${diagnostics.lastRollbackFromFrame ?? '-'} | Desync events: ${diagnostics.desyncEventCount}</div>`,
+        );
+      } else {
+        rows.push('<div class="row">Rollback session inactive.</div>');
+      }
+
+      if (memoryDiagnostics) {
+        rows.push(
+          `<div class="row">Asset bytes loaded: ${memoryDiagnostics.assetBytesLoaded} | Texture budgeted: ${memoryDiagnostics.textureBytesBudgeted} | Mesh triangles budgeted: ${memoryDiagnostics.meshTrianglesBudgeted}</div>`,
+          `<div class="row">VFX emitters budgeted: ${memoryDiagnostics.vfxBudgeted} | VFX active: ${memoryDiagnostics.vfxActive} | Projectiles active: ${memoryDiagnostics.projectilesActive}</div>`,
+        );
+      }
+
       elements.rollbackDiagnostics.innerHTML = `
-        <div class="title">Rollback Diagnostics</div>
-        <div class="row">Frames: ${diagnostics.totalFramesSimulated} | Predicted remote: ${diagnostics.predictedRemoteFrames} (${predictedRatio}%) | Authoritative remote: ${diagnostics.authoritativeRemoteFrames}</div>
-        <div class="row">Rollbacks: ${diagnostics.totalRollbacks} | Max depth: ${diagnostics.maxRollbackDepth} | Last depth: ${diagnostics.lastRollbackDepth}</div>
-        <div class="row">Last rollback frame: ${diagnostics.lastRollbackFromFrame ?? '-'} | Desync events: ${diagnostics.desyncEventCount}</div>
+        <div class="title">Debug Diagnostics</div>
+        ${rows.join('')}
       `;
     },
     update(snapshot: RenderSnapshot): void {

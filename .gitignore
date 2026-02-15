@@ -3,5 +3,6 @@ dist/
 **/node_modules/
 **/dist/
 apps/game-web/steam-artifact/
+apps/game-web/build-artifacts/
 steam-artifacts/
 .env

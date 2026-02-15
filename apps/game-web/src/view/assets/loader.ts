@@ -68,6 +68,20 @@ function assertManifestEntryBase(kind: AssetKind, entry: AssetManifestEntryBase,
   if (normaliseText(entry.id).length === 0) {
     throw new AssetManifestValidationError(`Invalid asset manifest: ${kind}[${index}] is missing a non-empty id.`);
   }
+  if (!entry.budget) {
+    return;
+  }
+  const budgetEntries = Object.entries(entry.budget);
+  for (const [field, value] of budgetEntries) {
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      throw new AssetManifestValidationError(
+        `Invalid asset manifest: ${kind}[${index}] (${entry.id}) has invalid budget.${field}.`,
+      );
+    }
+  }
 }
 
 function assertAssetFileEntry(kind: Exclude<AssetKind, 'shader'>, entry: AssetFileEntry, index: number): void {

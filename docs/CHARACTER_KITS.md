@@ -55,6 +55,7 @@ Each `CharacterDefinition` now includes:
 - Music uses state-based transitions (`menu`, `neutral`, `launch`, `end`) with configurable fades.
 - Voice callouts use per-character voice profiles with locale fallback, priority ordering, cooldowns, and anti-spam gating.
 - Audio settings include per-bus mix controls, voice ducking, dynamic-range mode, and subtitle visibility.
+- Deterministic AI controller (`src/sim/ai.ts`) uses the same `PlayerFrameInput` contract as human inputs.
 
 ## Extension points
 1. Model and animation loading:

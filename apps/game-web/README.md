@@ -100,6 +100,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 
 - `src/sim`: deterministic simulation and rules.
   - combat timing registry: `src/sim/moveData.ts` (`COMBAT_MOVE_FRAME_REGISTRY`, 60Hz units)
+  - deterministic AI behaviour policy: `src/sim/ai.ts`
 - `src/view`: Three.js rendering and HUD.
 - `src/input`: keyboard/gamepad input mapping.
 - `src/platform`: platform adapters.

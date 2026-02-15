@@ -73,6 +73,7 @@ npm run migrate -w @gravity-well/api
 - Adaptive music state system: `docs/ADAPTIVE_MUSIC_STATE_SYSTEM.md`
 - Voice line and callout system: `docs/VOICE_LINE_CALLOUT_SYSTEM.md`
 - Audio mix, loudness, and accessibility controls: `docs/AUDIO_MIX_LOUDNESS_ACCESSIBILITY.md`
+- AI behaviour framework: `docs/AI_BEHAVIOUR_FRAMEWORK.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

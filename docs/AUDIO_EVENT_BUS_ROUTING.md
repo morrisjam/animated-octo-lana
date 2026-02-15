@@ -18,7 +18,9 @@ Route gameplay/view audio through typed events and named buses, without clip-pat
   - `combat.dunk`
 - Music:
   - `music.menu`
-  - `music.match`
+  - `music.neutral`
+  - `music.launch`
+  - `music.end`
 - Voice:
   - `voice.round_start`
 
@@ -33,10 +35,15 @@ Combat events are emitted from VFX runtime callback wiring in `src/main.ts` when
 - WebAudio sink creates gain nodes per bus and routes event cues through the mapped bus.
 - Bus volumes are clamped and adjustable via `setBusVolume`.
 
+## Adaptive music state
+- Music state controller lives in `apps/game-web/src/view/audio/musicState.ts`.
+- States: `menu`, `neutral`, `launch`, `end`.
+- Main loop resolves state from app phase and render snapshot, then applies deterministic state-change triggers.
+- Music bus gain transitions use configurable fade duration to avoid abrupt transitions.
+
 ## Missing route diagnostics
 - Router tracks emitted/routed/missing counts.
 - Missing route or missing cue handling policy:
   - `warn` (default): log diagnostic warning.
   - `throw`: fail immediately with explicit error for dev strictness.
 - Main web runtime uses strict `throw` behavior when debug tools are enabled.
-

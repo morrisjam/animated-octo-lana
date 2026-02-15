@@ -30,6 +30,7 @@ import { renderFrame } from './view/render';
 import { createScene, resizeScene } from './view/scene';
 import { createAudioSystem } from './view/audio/system';
 import type { CombatVfxEvent } from './view/vfx/types';
+import { createMusicStateController, type MusicState } from './view/audio/musicState';
 import {
   createStartMenu,
   type GameMode,
@@ -73,6 +74,20 @@ function toCombatAudioEventType(eventType: CombatVfxEvent['type']): 'combat.boos
     case 'dunk':
     default:
       return 'combat.dunk';
+  }
+}
+
+function toMusicAudioEventType(state: MusicState): 'music.menu' | 'music.neutral' | 'music.launch' | 'music.end' {
+  switch (state) {
+    case 'neutral':
+      return 'music.neutral';
+    case 'launch':
+      return 'music.launch';
+    case 'end':
+      return 'music.end';
+    case 'menu':
+    default:
+      return 'music.menu';
   }
 }
 
@@ -132,6 +147,22 @@ let simulationFrame = 0;
 const inputTimeline = createInputTimelineBuffer({ maxFrames: 60 * 20 });
 const enableRollbackScaffold = (import.meta.env.VITE_FEATURE_ROLLBACK_SCAFFOLD ?? 'false').toLowerCase() === 'true';
 let rollbackSession: RollbackSession | null = null;
+const musicStateController = createMusicStateController({
+  fadeSeconds: 0.35,
+  gainByState: {
+    menu: 0.55,
+    neutral: 0.72,
+    launch: 0.9,
+    end: 0.62,
+  },
+  initialState: 'menu',
+  initialTimeSeconds: 0,
+  onStateChanged: (nextState) => {
+    audioSystem.emit({ type: toMusicAudioEventType(nextState) });
+  },
+});
+audioSystem.setBusVolume('music', musicStateController.tick(0));
+audioSystem.emit({ type: toMusicAudioEventType(musicStateController.getState()) });
 
 interface StoredRollbackDiagnosticsEntry {
   capturedAt: string;
@@ -1163,7 +1194,6 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
       },
     });
   }
-  audioSystem.emit({ type: 'music.match' });
   void platform.presence.setStatus('playing');
   pauseMenu.setPaused(false);
   pauseMenu.setCanRestartTraining(selectedMode === 'training');
@@ -1177,7 +1207,6 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
 function returnToHome(): void {
   persistRollbackDiagnostics('return_home');
   appPhase = 'home';
-  audioSystem.emit({ type: 'music.menu' });
   void platform.presence.setStatus('home');
   pauseMenu.setPaused(false);
   pauseMenu.setCanRestartTraining(false);
@@ -1440,6 +1469,20 @@ function updateMatchInfo(): void {
   matchInfo.textContent = `Mode: Best of 3 | ${getRoundScoreText()}`;
 }
 
+function resolveAdaptiveMusicState(phase: AppPhase, snapshot: RenderSnapshot): MusicState {
+  if (phase === 'home' || phase === 'online_dev') {
+    return 'menu';
+  }
+  if (phase === 'match_over' || snapshot.winner) {
+    return 'end';
+  }
+  const launchActive = snapshot.players.P1.helpless > 0 || snapshot.players.P2.helpless > 0;
+  if (launchActive) {
+    return 'launch';
+  }
+  return 'neutral';
+}
+
 function updateOnlineDiagnosticsOverlay(): void {
   if (!diagnosticsOverlay) {
     return;
@@ -1676,6 +1719,15 @@ function tick(nowMs: number): void {
     ? replayReviewData.frames[replayFrameIndex].snapshot
     : getRenderSnapshot(state);
 
+  const usesSimulationClock = appPhase === 'playing'
+    || appPhase === 'round_transition'
+    || appPhase === 'replay_review'
+    || appPhase === 'match_over';
+  const musicClockSeconds = usesSimulationClock ? snapshot.gameTime : nowSeconds;
+  const nextMusicState = resolveAdaptiveMusicState(appPhase, snapshot);
+  musicStateController.setState(nextMusicState, musicClockSeconds);
+  audioSystem.setBusVolume('music', musicStateController.tick(musicClockSeconds));
+
   renderFrame(sceneContext, snapshot);
   const memoryDiagnostics = runtimeConfig.features.debugToolsEnabled
     ? getRuntimeMemoryDiagnosticsView(snapshot)
@@ -1703,7 +1755,6 @@ syncTrainingFrameDataVisibility();
 void bootstrapPlatformProfile();
 void platform.presence.setStatus('home');
 startMenu.showHome();
-audioSystem.emit({ type: 'music.menu' });
 requestAnimationFrame(tick);
 
 window.addEventListener('resize', () => {

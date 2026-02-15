@@ -10,6 +10,9 @@ export type AudioEventType =
   | 'combat.dunk'
   | 'music.menu'
   | 'music.match'
+  | 'music.neutral'
+  | 'music.launch'
+  | 'music.end'
   | 'voice.round_start';
 
 export interface AudioToneCue {
@@ -39,4 +42,3 @@ export interface AudioDiagnostics {
   missingRoutes: number;
   lastMissingType: AudioEventType | null;
 }
-

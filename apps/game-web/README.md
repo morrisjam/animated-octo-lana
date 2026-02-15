@@ -148,6 +148,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Router supports `master`, `music`, `sfx`, and `voice` buses with WebAudio gain-node routing.
 - VFX combat events in `src/view/vfx/runtime.ts` emit typed combat audio events through `src/main.ts` wiring, not clip-path logic in sim.
 - Missing route diagnostics are explicit; debug mode uses strict fail behavior.
+- Adaptive music state controller (`src/view/audio/musicState.ts`) switches `menu`, `neutral`, `launch`, and `end` states with configurable fades.
 
 ## Replay scripts
 

@@ -52,6 +52,7 @@ Each `CharacterDefinition` now includes:
 - Renderer binds combat events (`boost`, `launch`, `parry`, `projectile`, `dunk`) to data-driven VFX presets (`src/view/vfx`), with per-profile overrides.
 - Asset manifests include budget hints for texture bytes, mesh triangles, and VFX emitters; build-time checks enforce project limits.
 - Audio playback routes through typed audio events and bus routing (`src/view/audio`) instead of hardcoded clip paths in gameplay logic.
+- Music uses state-based transitions (`menu`, `neutral`, `launch`, `end`) with configurable fades.
 
 ## Extension points
 1. Model and animation loading:

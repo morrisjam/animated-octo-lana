@@ -38,6 +38,18 @@ const DEFAULT_ROUTE_TABLE: AudioRouteTable = {
     bus: 'music',
     cue: { waveform: 'square', frequencyHz: 196, durationSeconds: 0.16, gain: 0.012 },
   },
+  'music.neutral': {
+    bus: 'music',
+    cue: { waveform: 'triangle', frequencyHz: 188, durationSeconds: 0.15, gain: 0.011 },
+  },
+  'music.launch': {
+    bus: 'music',
+    cue: { waveform: 'sawtooth', frequencyHz: 228, durationSeconds: 0.14, gain: 0.013 },
+  },
+  'music.end': {
+    bus: 'music',
+    cue: { waveform: 'sine', frequencyHz: 164, durationSeconds: 0.2, gain: 0.012 },
+  },
   'voice.round_start': {
     bus: 'voice',
     cue: { waveform: 'triangle', frequencyHz: 320, durationSeconds: 0.15, gain: 0.014 },
@@ -220,4 +232,3 @@ export function createAudioSystem(options?: AudioSystemOptions): AudioSystem {
     },
   };
 }
-

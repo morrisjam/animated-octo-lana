@@ -7,6 +7,7 @@ Source:
 - Schema parser/validator: `apps/game-web/src/content/characterPackageSchema.ts`
 - CLI validator: `apps/game-web/scripts/character-package-validate.ts`
 - Example package: `apps/game-web/content/characters/vanguard/vanguard.character.package.json`
+- Author workflow guide: `docs/CHARACTER_PACKAGE_USER_GUIDE.md`
 
 ## Validation command
 Run from repo root:

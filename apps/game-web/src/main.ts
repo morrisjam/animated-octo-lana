@@ -7,7 +7,7 @@ import {
   RollbackSession,
   type RollbackDiagnosticsSnapshot,
 } from './net/rollbackSession';
-import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT, type CharacterId } from './sim/characters';
+import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT, isCharacterId, type CharacterId } from './sim/characters';
 import { createPlatformServices, type PlatformAuthSession } from './platform';
 import { validateReplayPayload } from './sim/replay';
 import { buildReplayReviewData, type ReplayReviewData } from './sim/replayReview';
@@ -1100,13 +1100,6 @@ function sanitiseArcadeMenuSettings(raw: unknown): ArcadeMenuSettings {
       ? DEFAULT_ARCADE_MENU_SETTINGS.retryEnabled
       : Boolean(value.retryEnabled),
   };
-}
-
-function isCharacterId(value: string | undefined): value is CharacterId {
-  if (!value) {
-    return false;
-  }
-  return value in CHARACTER_BY_ID;
 }
 
 function coerceStoredSettings(raw: unknown): LoadedSettings | null {

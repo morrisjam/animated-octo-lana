@@ -1,5 +1,5 @@
 import type { AiDifficultyId } from './ai';
-import type { CharacterId } from './characters';
+import { isCharacterId, type CharacterId } from './characters';
 
 export type ArcadeRunOutcome = 'completed' | 'failed';
 
@@ -29,12 +29,7 @@ export interface ArcadeBestRecord {
   runId: string;
 }
 
-const CHARACTER_IDS: CharacterId[] = ['vanguard', 'duelist', 'ace', 'warden'];
 const AI_DIFFICULTY_IDS: AiDifficultyId[] = ['rookie', 'cadet', 'veteran', 'ace'];
-
-function isCharacterId(value: unknown): value is CharacterId {
-  return typeof value === 'string' && CHARACTER_IDS.includes(value as CharacterId);
-}
 
 function isAiDifficultyId(value: unknown): value is AiDifficultyId {
   return typeof value === 'string' && AI_DIFFICULTY_IDS.includes(value as AiDifficultyId);

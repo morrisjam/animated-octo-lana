@@ -1,8 +1,10 @@
 import type { PlayersById } from './types';
 import type { MoveFrameData } from './moveData';
 import { createMoveFrameData } from './moveData';
+import { loadCharacterPackagesFromContent } from '../content/characterPackageLoader';
 
-export type CharacterId = 'vanguard' | 'duelist' | 'ace' | 'warden';
+export type CharacterId = string;
+type CoreCharacterId = 'vanguard' | 'duelist' | 'ace' | 'warden';
 
 export interface CharacterStats {
   fuelCapacityMultiplier: number;
@@ -67,8 +69,8 @@ function baseStats(): CharacterStats {
   };
 }
 
-function baseVisuals(id: CharacterId): CharacterVisualProfile {
-  const presentationByCharacterId: Record<CharacterId, CharacterVisualPresentation> = {
+function baseVisuals(id: CoreCharacterId): CharacterVisualProfile {
+  const presentationByCharacterId: Record<CoreCharacterId, CharacterVisualPresentation> = {
     vanguard: '3d',
     duelist: 'sprite',
     ace: 'hybrid',
@@ -84,7 +86,7 @@ function baseVisuals(id: CharacterId): CharacterVisualProfile {
   };
 }
 
-function baseAudio(id: CharacterId): CharacterAudioProfile {
+function baseAudio(id: CoreCharacterId): CharacterAudioProfile {
   return {
     sfxProfileId: `character_${id}_sfx`,
     voiceProfileId: `character_${id}_voice`,
@@ -104,7 +106,7 @@ function baseSpecials(): CharacterSpecialMoveDefinition[] {
 }
 
 function makePlaceholderCharacter(
-  id: CharacterId,
+  id: CoreCharacterId,
   displayName: string,
   mechanicsTag: string,
 ): CharacterDefinition {
@@ -122,23 +124,71 @@ function makePlaceholderCharacter(
   };
 }
 
-export const CHARACTERS: CharacterDefinition[] = [
+const CORE_CHARACTERS: CharacterDefinition[] = [
   makePlaceholderCharacter('vanguard', 'Vanguard', 'future: defensive kit'),
   makePlaceholderCharacter('duelist', 'Duelist', 'future: pressure kit'),
   makePlaceholderCharacter('ace', 'Ace', 'future: mobility kit'),
   makePlaceholderCharacter('warden', 'Warden', 'future: control kit'),
 ];
 
-export const CHARACTER_BY_ID: Record<CharacterId, CharacterDefinition> = {
-  vanguard: CHARACTERS[0],
-  duelist: CHARACTERS[1],
-  ace: CHARACTERS[2],
-  warden: CHARACTERS[3],
-};
+function mergeCharacters(
+  coreCharacters: CharacterDefinition[],
+  packagedCharacters: CharacterDefinition[],
+): CharacterDefinition[] {
+  const byId = new Map<string, CharacterDefinition>();
+  for (const character of coreCharacters) {
+    byId.set(character.id, character);
+  }
+  for (const packagedCharacter of packagedCharacters) {
+    if (byId.has(packagedCharacter.id)) {
+      console.warn(`[character-package] overriding character id "${packagedCharacter.id}" from package.`);
+    }
+    byId.set(packagedCharacter.id, packagedCharacter);
+  }
+  return [...byId.values()];
+}
 
+function buildCharacterById(characters: CharacterDefinition[]): Record<string, CharacterDefinition> {
+  const byId: Record<string, CharacterDefinition> = {};
+  for (const character of characters) {
+    byId[character.id] = character;
+  }
+  return byId;
+}
+
+const PACKAGED_CHARACTERS: CharacterDefinition[] = loadCharacterPackagesFromContent();
+
+export const CHARACTERS: CharacterDefinition[] = mergeCharacters(CORE_CHARACTERS, PACKAGED_CHARACTERS);
+export const CHARACTER_BY_ID: Record<string, CharacterDefinition> = buildCharacterById(CHARACTERS);
 export const CHARACTER_IDS: CharacterId[] = CHARACTERS.map((character) => character.id);
 
+function resolveDefaultCharacterId(preferred: string, fallback: string): CharacterId {
+  if (CHARACTER_BY_ID[preferred]) {
+    return preferred;
+  }
+  if (CHARACTER_BY_ID[fallback]) {
+    return fallback;
+  }
+  return CHARACTER_IDS[0] ?? 'vanguard';
+}
+
+function resolveDefaultOpponentId(playerId: CharacterId): CharacterId {
+  if (CHARACTER_BY_ID.duelist && playerId !== 'duelist') {
+    return 'duelist';
+  }
+  for (const id of CHARACTER_IDS) {
+    if (id !== playerId) {
+      return id;
+    }
+  }
+  return playerId;
+}
+
 export const DEFAULT_CHARACTER_LOADOUT: PlayersById<CharacterId> = {
-  P1: 'vanguard',
-  P2: 'duelist',
+  P1: resolveDefaultCharacterId('vanguard', 'duelist'),
+  P2: resolveDefaultOpponentId(resolveDefaultCharacterId('vanguard', 'duelist')),
 };
+
+export function isCharacterId(value: unknown): value is CharacterId {
+  return typeof value === 'string' && Boolean(CHARACTER_BY_ID[value]);
+}

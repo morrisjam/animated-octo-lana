@@ -21,6 +21,29 @@ npm run build
 npm run preview
 ```
 
+## Steam profile build and package
+
+From repo root:
+
+```bash
+npm run steam:build
+npm run steam:package
+npm run steam:smoke
+```
+
+From this workspace:
+
+```bash
+npm run build:steam
+npm run package:steam
+npm run smoke:steam
+```
+
+Notes:
+- `build:steam` uses root `.env.steam` profile values via Vite mode `steam`.
+- `package:steam` outputs `apps/game-web/steam-artifact` with signed checksums and manifest.
+- `smoke:steam` launches the packaged content on a local static server and verifies asset resolution.
+
 ## Verify
 
 ```bash

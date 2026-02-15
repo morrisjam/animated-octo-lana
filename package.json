@@ -9,6 +9,10 @@
   "scripts": {
     "dev": "npm run dev --workspace @gravity-well/game-web",
     "build": "npm run build --workspace @gravity-well/game-web",
+    "steam:build": "npm run build:steam --workspace @gravity-well/game-web",
+    "steam:package": "npm run package:steam --workspace @gravity-well/game-web",
+    "steam:smoke": "npm run smoke:steam --workspace @gravity-well/game-web",
+    "steam:ci": "npm run steam:build && npm run steam:package && npm run steam:smoke",
     "preview": "npm run preview --workspace @gravity-well/game-web",
     "test": "npm run test --workspace @gravity-well/game-web",
     "replay:run": "npm run replay:run --workspace @gravity-well/game-web --",

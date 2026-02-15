@@ -22,6 +22,12 @@ npm run test
 npm run verify
 ```
 
+Steam packaging flow:
+
+```bash
+npm run steam:ci
+```
+
 API and database:
 
 ```bash
@@ -51,6 +57,7 @@ npm run migrate -w @gravity-well/api
 - Create root `.env` from `.env.example` before running API scripts.
 - Root `.env` is used for API database configuration.
 - Root `.env.development`, `.env.staging`, and `.env.production` are used by the web app via Vite `envDir`.
+- Root `.env.steam` defines the Steam build profile defaults.
 
 ## Project docs
 
@@ -59,3 +66,4 @@ npm run migrate -w @gravity-well/api
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`
+- Steam packaging and CI artifact policy: `docs/STEAM_BUILD_PROFILE.md`

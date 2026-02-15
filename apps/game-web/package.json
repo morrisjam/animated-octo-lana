@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:steam": "vite build --mode steam",
+    "package:steam": "tsx scripts/steam-package.ts --dist dist --out-dir steam-artifact",
+    "smoke:steam": "tsx scripts/steam-smoke.ts --packaged-dir steam-artifact",
     "preview": "vite preview",
     "test": "vitest run",
     "replay:run": "tsx scripts/replay-runner.ts",

@@ -19,9 +19,9 @@
     "api:migrate": "npm run migrate --workspace @gravity-well/api",
     "api:season-reset": "npm run season:reset --workspace @gravity-well/api",
     "api:slo-report": "npm run slo:report --workspace @gravity-well/api",
-    "db:up": "docker compose up -d postgres",
+    "db:up": "docker compose up -d postgres redis",
     "db:down": "docker compose down",
-    "db:logs": "docker compose logs -f postgres",
+    "db:logs": "docker compose logs -f postgres redis",
     "api:local": "npm run db:up && npm run api:migrate && npm run api:dev"
   }
 }

@@ -1,0 +1,66 @@
+name: Ops Backups
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 2 * * *'
+
+jobs:
+  backup-postgres-and-redis:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install backup tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client redis-tools
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          if [[ -z "${DATABASE_URL:-}" ]]; then
+            echo "DATABASE_URL secret is required."
+            exit 1
+          fi
+          if [[ -z "${REDIS_URL:-}" ]]; then
+            echo "REDIS_URL secret is required."
+            exit 1
+          fi
+
+      - name: Create backup snapshots
+        id: backup
+        run: |
+          set -euo pipefail
+          TS="$(date -u +'%Y%m%dT%H%M%SZ')"
+          OUT_DIR="ops-backups/${TS}"
+          mkdir -p "${OUT_DIR}"
+
+          PG_FILE="${OUT_DIR}/postgres-${TS}.dump"
+          REDIS_FILE="${OUT_DIR}/redis-${TS}.rdb"
+
+          pg_dump "${DATABASE_URL}" --format=custom --no-owner --no-privileges --compress=9 --file="${PG_FILE}"
+          redis-cli -u "${REDIS_URL}" --rdb "${REDIS_FILE}"
+
+          sha256sum "${PG_FILE}" "${REDIS_FILE}" > "${OUT_DIR}/checksums.sha256"
+          cat > "${OUT_DIR}/manifest.json" <<EOF
+          {
+            "createdAt": "${TS}",
+            "postgresBackup": "$(basename "${PG_FILE}")",
+            "redisBackup": "$(basename "${REDIS_FILE}")",
+            "retention": "14 days"
+          }
+          EOF
+
+          echo "backup_dir=${OUT_DIR}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops-backup-${{ github.run_id }}
+          path: ${{ steps.backup.outputs.backup_dir }}
+          retention-days: 14

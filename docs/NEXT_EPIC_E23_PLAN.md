@@ -38,4 +38,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S3.4` (ranked anomaly detection) is complete.
 - `S3.5` (enforcement tooling) is complete.
 - `S3.1` (service health and SLO baseline) is complete.
-- Next start with `S3.2` (backup and disaster recovery drills).
+- `S3.2` (backup and disaster recovery drills) is complete.
+- Next start with `S3.3` (safe deployment strategy).

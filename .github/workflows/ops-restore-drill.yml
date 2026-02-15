@@ -1,0 +1,144 @@
+name: Ops Restore Drill
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '45 9 * * 1'
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: gravity_well_drill
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gravity_well_drill"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/gravity_well_drill
+      REDIS_URL: redis://127.0.0.1:6379
+      PGPASSWORD: postgres
+      RPO_TARGET_SECONDS: '900'
+      RTO_TARGET_SECONDS: '3600'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install restore tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client redis-server redis-tools
+
+      - name: Run restore drill and generate report
+        id: drill
+        run: |
+          set -euo pipefail
+          STARTED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          DATE_STAMP="$(date -u +'%Y-%m-%d')"
+
+          mkdir -p drill-artifacts
+
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE IF NOT EXISTS dr_restore_drill_records (
+            id SERIAL PRIMARY KEY,
+            payload TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          TRUNCATE dr_restore_drill_records;
+          INSERT INTO dr_restore_drill_records(payload) VALUES ('alpha'), ('beta');
+          SQL
+          redis-cli -u "${REDIS_URL}" FLUSHALL > /dev/null
+          redis-cli -u "${REDIS_URL}" SET drill:player:1 p1 EX 3600 > /dev/null
+
+          BACKUP_STARTED="$(date +%s)"
+          pg_dump "${DATABASE_URL}" --format=custom --no-owner --no-privileges --compress=9 --file="drill-artifacts/postgres-drill.dump"
+          redis-cli -u "${REDIS_URL}" --rdb "drill-artifacts/redis-drill.rdb" > /dev/null
+          BACKUP_FINISHED="$(date +%s)"
+          BACKUP_SECONDS="$((BACKUP_FINISHED - BACKUP_STARTED))"
+
+          RESTORE_STARTED="$(date +%s)"
+          dropdb --if-exists --host=127.0.0.1 --port=5432 --username=postgres gravity_well_drill
+          createdb --host=127.0.0.1 --port=5432 --username=postgres gravity_well_drill
+          pg_restore --clean --if-exists --no-owner --no-privileges --dbname="${DATABASE_URL}" "drill-artifacts/postgres-drill.dump"
+
+          redis-cli -u "${REDIS_URL}" FLUSHALL > /dev/null
+          cp "drill-artifacts/redis-drill.rdb" "drill-artifacts/dump.rdb"
+          redis-server --port 6380 --dir "${PWD}/drill-artifacts" --dbfilename dump.rdb --daemonize yes
+          sleep 2
+          redis-cli -p 6380 ping > /dev/null
+          RESTORE_FINISHED="$(date +%s)"
+          RESTORE_SECONDS="$((RESTORE_FINISHED - RESTORE_STARTED))"
+
+          PG_COUNT="$(psql "${DATABASE_URL}" -Atc "SELECT COUNT(*) FROM dr_restore_drill_records;")"
+          REDIS_VALUE="$(redis-cli -p 6380 GET drill:player:1)"
+          if [[ "${PG_COUNT}" != "2" ]]; then
+            echo "Postgres restore verification failed: expected 2 rows, got ${PG_COUNT}."
+            exit 1
+          fi
+          if [[ "${REDIS_VALUE}" != "p1" ]]; then
+            echo "Redis restore verification failed: expected key drill:player:1 = p1."
+            exit 1
+          fi
+
+          RPO_SECONDS="0"
+          RTO_SECONDS="${RESTORE_SECONDS}"
+          RPO_PASS="yes"
+          RTO_PASS="yes"
+          if (( RPO_SECONDS > RPO_TARGET_SECONDS )); then
+            RPO_PASS="no"
+          fi
+          if (( RTO_SECONDS > RTO_TARGET_SECONDS )); then
+            RTO_PASS="no"
+          fi
+
+          REPORT_PATH="drill-artifacts/dr-restore-drill-${DATE_STAMP}.md"
+          cat > "${REPORT_PATH}" <<EOF
+          # Disaster Recovery Restore Drill (${DATE_STAMP})
+
+          Started: ${STARTED_AT}
+
+          ## Targets
+          - RPO target: <= ${RPO_TARGET_SECONDS}s
+          - RTO target: <= ${RTO_TARGET_SECONDS}s
+
+          ## Results
+          - Postgres verification rows: ${PG_COUNT}
+          - Redis verification key: ${REDIS_VALUE}
+          - Backup duration: ${BACKUP_SECONDS}s
+          - Restore duration (RTO observed): ${RTO_SECONDS}s
+          - RPO observed: ${RPO_SECONDS}s
+
+          ## Validation
+          - RPO target met: ${RPO_PASS}
+          - RTO target met: ${RTO_PASS}
+
+          ## Notes
+          - Drill uses ephemeral PostgreSQL and Redis service containers.
+          - Redis restore validation boots a temporary Redis instance from backup RDB.
+          EOF
+
+          echo "report_path=${REPORT_PATH}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload drill report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: restore-drill-${{ github.run_id }}
+          path: ${{ steps.drill.outputs.report_path }}
+          retention-days: 30

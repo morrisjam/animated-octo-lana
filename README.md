@@ -75,6 +75,7 @@ npm run migrate -w @gravity-well/api
 - Audio mix, loudness, and accessibility controls: `docs/AUDIO_MIX_LOUDNESS_ACCESSIBILITY.md`
 - AI behaviour framework: `docs/AI_BEHAVIOUR_FRAMEWORK.md`
 - AI difficulty profiles: `docs/AI_DIFFICULTY_PROFILES.md`
+- Arcade mode flow: `docs/ARCADE_MODE_FLOW.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

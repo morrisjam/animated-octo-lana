@@ -102,6 +102,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
   - combat timing registry: `src/sim/moveData.ts` (`COMBAT_MOVE_FRAME_REGISTRY`, 60Hz units)
   - deterministic AI behaviour policy: `src/sim/ai.ts`
   - data-driven AI difficulty profiles (`rookie`, `cadet`, `veteran`, `ace`) with reaction delay, action weights, risk, and error tuning
+  - arcade ladder flow and stage/rule state machine: `src/sim/arcade.ts`
 - `src/view`: Three.js rendering and HUD.
 - `src/input`: keyboard/gamepad input mapping.
 - `src/platform`: platform adapters.
@@ -154,6 +155,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Voice callout system (`src/view/audio/voiceLines.ts`) provides locale fallback, priority, cooldown, and anti-spam line selection per character voice profile.
 - Pause menu audio tab exposes persistent master/music/SFX/voice sliders, voice ducking toggle, dynamic range mode, and subtitle toggle.
 - Local menu includes persistent `AI Difficulty` selection, saved in local settings and profile settings payload.
+- Local menu includes `Arcade Continues` and `Arcade Retry` options used by arcade loss-flow prompts and run summaries.
 
 ## Replay scripts
 

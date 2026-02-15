@@ -208,6 +208,10 @@ html, body {
   color: #b4c9f3;
 }
 
+.start-match-subtitle {
+  white-space: pre-line;
+}
+
 .start-action {
   border: 1px solid rgba(167, 195, 255, 0.25);
   background: rgba(18, 28, 58, 0.9);

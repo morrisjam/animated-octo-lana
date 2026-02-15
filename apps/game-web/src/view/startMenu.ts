@@ -13,9 +13,13 @@ import {
 } from '../sim/ai';
 import type { PlayerId, PlayersById } from '../sim/types';
 
-export type GameMode = 'endless' | 'best_of_3' | 'training';
+export type GameMode = 'endless' | 'best_of_3' | 'arcade' | 'training';
 export type WebAuthMenuAction = 'signin' | 'signup' | 'signout';
 export type OnlineDevMenuTarget = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
+export interface ArcadeMenuSettings {
+  continues: number;
+  retryEnabled: boolean;
+}
 export interface WebAuthMenuRequest {
   email?: string;
   password?: string;
@@ -39,6 +43,14 @@ export interface RankedSnapshotViewState {
   headline: string;
   detail: string;
 }
+export interface MatchOverScreenOptions {
+  title?: string;
+  subtitle?: string;
+  primaryLabel?: string;
+  secondaryLabel?: string;
+  onPrimary?: () => void;
+  onSecondary?: () => void;
+}
 
 type StartScreen =
   | 'title'
@@ -57,9 +69,15 @@ interface StartMenuOptions {
   initialMode?: GameMode;
   initialLoadout?: PlayersById<CharacterId>;
   initialAiDifficulty?: AiDifficultyId;
+  initialArcadeSettings?: ArcadeMenuSettings;
   enabledModes?: GameMode[];
   initialAccountSummary?: string;
-  onStartMode(mode: GameMode, loadout: PlayersById<CharacterId>, aiDifficulty: AiDifficultyId): void;
+  onStartMode(
+    mode: GameMode,
+    loadout: PlayersById<CharacterId>,
+    aiDifficulty: AiDifficultyId,
+    arcadeSettings: ArcadeMenuSettings,
+  ): void;
   onOpenWebAuth?(action: WebAuthMenuAction, request?: WebAuthMenuRequest): Promise<void> | void;
   onJoinRankedQueue?(): Promise<OnlineRankedViewState> | OnlineRankedViewState;
   onRefreshRankedQueue?(): Promise<OnlineRankedViewState> | OnlineRankedViewState;
@@ -90,9 +108,11 @@ interface PadState {
 const MODE_LABELS: Record<GameMode, string> = {
   endless: 'Endless Dev',
   best_of_3: 'Best of 3',
+  arcade: 'Arcade Ladder',
   training: 'Training',
 };
-const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'training'];
+const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'arcade', 'training'];
+const ARCADE_CONTINUE_OPTIONS = [0, 1, 2, 3];
 
 function getAiDifficultyLabel(difficulty: AiDifficultyId): string {
   return AI_DIFFICULTY_PROFILES[difficulty]?.label ?? AI_DIFFICULTY_PROFILES[DEFAULT_AI_DIFFICULTY].label;
@@ -142,7 +162,7 @@ function cycleCharacter(current: CharacterId, direction: 1 | -1): CharacterId {
 
 function sanitiseEnabledModes(rawModes: GameMode[] | undefined): GameMode[] {
   if (!rawModes || rawModes.length === 0) {
-    return ['endless', 'best_of_3'];
+    return ['endless', 'best_of_3', 'arcade'];
   }
   const uniqueModes: GameMode[] = [];
   for (const mode of MODE_ORDER) {
@@ -172,6 +192,24 @@ function getNextAiDifficulty(current: AiDifficultyId, direction: 1 | -1): AiDiff
   const safeIndex = currentIndex >= 0 ? currentIndex : 0;
   const nextIndex = (safeIndex + direction + AI_DIFFICULTY_ORDER.length) % AI_DIFFICULTY_ORDER.length;
   return AI_DIFFICULTY_ORDER[nextIndex];
+}
+
+function sanitiseArcadeSettings(raw: ArcadeMenuSettings | undefined): ArcadeMenuSettings {
+  const requestedContinues = Number(raw?.continues);
+  const nearestContinueOption = ARCADE_CONTINUE_OPTIONS.includes(requestedContinues)
+    ? requestedContinues
+    : 2;
+  return {
+    continues: nearestContinueOption,
+    retryEnabled: raw?.retryEnabled !== false,
+  };
+}
+
+function getNextArcadeContinues(current: number, direction: 1 | -1): number {
+  const currentIndex = ARCADE_CONTINUE_OPTIONS.indexOf(current);
+  const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+  const nextIndex = (safeIndex + direction + ARCADE_CONTINUE_OPTIONS.length) % ARCADE_CONTINUE_OPTIONS.length;
+  return ARCADE_CONTINUE_OPTIONS[nextIndex];
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -254,11 +292,16 @@ export class StartMenu {
   private readonly localModeButton: HTMLButtonElement;
   private readonly localDifficultyOptionsLabel: HTMLDivElement;
   private readonly localDifficultyButton: HTMLButtonElement;
+  private readonly localArcadeContinuesOptionsLabel: HTMLDivElement;
+  private readonly localArcadeContinuesButton: HTMLButtonElement;
+  private readonly localArcadeRetryButton: HTMLButtonElement;
   private readonly p1CharacterButton: HTMLButtonElement;
   private readonly p2CharacterButton: HTMLButtonElement;
   private readonly localCharacterList: HTMLDivElement;
 
   private readonly matchButtons: HTMLButtonElement[] = [];
+  private readonly matchPrimaryButton: HTMLButtonElement;
+  private readonly matchSecondaryButton: HTMLButtonElement;
   private readonly matchTitle: HTMLHeadingElement;
   private readonly matchSubtitle: HTMLParagraphElement;
 
@@ -269,6 +312,7 @@ export class StartMenu {
   private readonly enabledModes: GameMode[];
   private currentMode: GameMode;
   private currentAiDifficulty: AiDifficultyId;
+  private currentArcadeSettings: ArcadeMenuSettings;
   private currentLoadout: PlayersById<CharacterId>;
   private accountSummary: string;
   private isAuthenticated = false;
@@ -277,6 +321,8 @@ export class StartMenu {
   private roomBusy = false;
   private replayBusy = false;
   private rankingsBusy = false;
+  private matchPrimaryAction: () => void;
+  private matchSecondaryAction: () => void;
 
   private readonly keydownHandler = (event: KeyboardEvent): void => {
     if (this.root.hidden) {
@@ -331,8 +377,11 @@ export class StartMenu {
       ? options.initialMode
       : this.enabledModes[0];
     this.currentAiDifficulty = sanitiseAiDifficulty(options.initialAiDifficulty);
+    this.currentArcadeSettings = sanitiseArcadeSettings(options.initialArcadeSettings);
     this.currentLoadout = cloneLoadout(options.initialLoadout ?? DEFAULT_CHARACTER_LOADOUT);
     this.accountSummary = options.initialAccountSummary ?? 'Guest Account';
+    this.matchPrimaryAction = () => this.options.onPlayAgain();
+    this.matchSecondaryAction = () => this.options.onReturnHome();
 
     this.root = document.createElement('div');
     this.root.className = 'start-menu';
@@ -593,6 +642,20 @@ export class StartMenu {
     this.localDifficultyOptionsLabel = document.createElement('div');
     this.localDifficultyOptionsLabel.className = 'start-mode-options';
 
+    const localArcadeContinuesRow = this.createActionRow('', () => {
+      this.currentArcadeSettings.continues = getNextArcadeContinues(this.currentArcadeSettings.continues, 1);
+      this.refreshLocalRows();
+    });
+    this.localArcadeContinuesButton = localArcadeContinuesRow.button;
+    this.localArcadeContinuesOptionsLabel = document.createElement('div');
+    this.localArcadeContinuesOptionsLabel.className = 'start-mode-options';
+
+    const localArcadeRetryRow = this.createActionRow('', () => {
+      this.currentArcadeSettings.retryEnabled = !this.currentArcadeSettings.retryEnabled;
+      this.refreshLocalRows();
+    });
+    this.localArcadeRetryButton = localArcadeRetryRow.button;
+
     const localP1Row = this.createActionRow('', () => {
       this.shiftCharacter('P1', 1);
     });
@@ -618,6 +681,9 @@ export class StartMenu {
       this.localModeOptionsLabel,
       localDifficultyRow.row,
       this.localDifficultyOptionsLabel,
+      localArcadeContinuesRow.row,
+      this.localArcadeContinuesOptionsLabel,
+      localArcadeRetryRow.row,
       localP1Row.row,
       localP2Row.row,
       this.localCharacterList,
@@ -626,7 +692,16 @@ export class StartMenu {
     );
     this.registerRows(
       'local',
-      [localModeRow.row, localDifficultyRow.row, localP1Row.row, localP2Row.row, localStartRow.row, localBackRow.row],
+      [
+        localModeRow.row,
+        localDifficultyRow.row,
+        localArcadeContinuesRow.row,
+        localArcadeRetryRow.row,
+        localP1Row.row,
+        localP2Row.row,
+        localStartRow.row,
+        localBackRow.row,
+      ],
     );
 
     const replayStatusPanel = this.createStatusPanel('Replay Archive');
@@ -713,6 +788,7 @@ export class StartMenu {
     this.matchTitle = document.createElement('h2');
     this.matchTitle.textContent = 'Match Over';
     this.matchSubtitle = document.createElement('p');
+    this.matchSubtitle.className = 'start-match-subtitle';
     this.matchSubtitle.textContent = '';
     this.matchOverPanel.append(this.matchTitle, this.matchSubtitle);
 
@@ -720,13 +796,15 @@ export class StartMenu {
     playAgainButton.type = 'button';
     playAgainButton.className = 'start-action';
     playAgainButton.textContent = 'Play Again';
-    playAgainButton.addEventListener('click', () => this.options.onPlayAgain());
+    playAgainButton.addEventListener('click', () => this.matchPrimaryAction());
+    this.matchPrimaryButton = playAgainButton;
 
     const homeButton = document.createElement('button');
     homeButton.type = 'button';
     homeButton.className = 'start-action';
     homeButton.textContent = 'Return to Home';
-    homeButton.addEventListener('click', () => this.options.onReturnHome());
+    homeButton.addEventListener('click', () => this.matchSecondaryAction());
+    this.matchSecondaryButton = homeButton;
 
     this.matchButtons.push(playAgainButton, homeButton);
     this.matchOverPanel.append(playAgainButton, homeButton);
@@ -803,12 +881,44 @@ export class StartMenu {
     this.roundBanner.hidden = true;
   }
 
+  private resetMatchOverActions(): void {
+    this.matchPrimaryButton.textContent = 'Play Again';
+    this.matchSecondaryButton.textContent = 'Return to Home';
+    this.matchPrimaryAction = () => this.options.onPlayAgain();
+    this.matchSecondaryAction = () => this.options.onReturnHome();
+  }
+
   public showMatchOver(winner: PlayerId, p1Wins: number, p2Wins: number): void {
+    this.resetMatchOverActions();
     this.root.hidden = false;
     this.currentScreen = 'match_over';
     this.prevPadStateByIndex.clear();
     this.matchTitle.textContent = `${winner} wins the match`;
     this.matchSubtitle.textContent = `Final rounds: P1 ${p1Wins} - ${p2Wins} P2`;
+    this.setMatchSelection(0);
+    this.refreshPanelVisibility();
+  }
+
+  public showMatchOverScreen(options: MatchOverScreenOptions): void {
+    this.resetMatchOverActions();
+    if (options.primaryLabel) {
+      this.matchPrimaryButton.textContent = options.primaryLabel;
+    }
+    if (options.secondaryLabel) {
+      this.matchSecondaryButton.textContent = options.secondaryLabel;
+    }
+    if (options.onPrimary) {
+      this.matchPrimaryAction = options.onPrimary;
+    }
+    if (options.onSecondary) {
+      this.matchSecondaryAction = options.onSecondary;
+    }
+
+    this.root.hidden = false;
+    this.currentScreen = 'match_over';
+    this.prevPadStateByIndex.clear();
+    this.matchTitle.textContent = options.title ?? 'Match Over';
+    this.matchSubtitle.textContent = options.subtitle ?? '';
     this.setMatchSelection(0);
     this.refreshPanelVisibility();
   }
@@ -846,10 +956,16 @@ export class StartMenu {
     }
   }
 
-  public setLocalSetup(mode: GameMode, loadout: PlayersById<CharacterId>, aiDifficulty: AiDifficultyId): void {
+  public setLocalSetup(
+    mode: GameMode,
+    loadout: PlayersById<CharacterId>,
+    aiDifficulty: AiDifficultyId,
+    arcadeSettings?: ArcadeMenuSettings,
+  ): void {
     this.currentMode = this.enabledModes.includes(mode) ? mode : (this.enabledModes[0] ?? 'endless');
     this.currentLoadout = cloneLoadout(loadout);
     this.currentAiDifficulty = sanitiseAiDifficulty(aiDifficulty);
+    this.currentArcadeSettings = sanitiseArcadeSettings(arcadeSettings);
     this.refreshLocalRows();
   }
 
@@ -1055,6 +1171,11 @@ export class StartMenu {
           : getAiDifficultyLabel(difficulty)
       ))
       .join('  |  ');
+    this.localArcadeContinuesButton.textContent = `Arcade Continues: ${this.currentArcadeSettings.continues}`;
+    this.localArcadeContinuesOptionsLabel.textContent = ARCADE_CONTINUE_OPTIONS
+      .map((value) => value === this.currentArcadeSettings.continues ? `[${value}]` : `${value}`)
+      .join('  |  ');
+    this.localArcadeRetryButton.textContent = `Arcade Retry: ${this.currentArcadeSettings.retryEnabled ? 'Enabled' : 'Disabled'}`;
 
     const p1 = CHARACTER_BY_ID[this.currentLoadout.P1];
     const p2 = CHARACTER_BY_ID[this.currentLoadout.P2];
@@ -1094,7 +1215,12 @@ export class StartMenu {
   }
 
   private startLocalMatch(): void {
-    this.options.onStartMode(this.currentMode, cloneLoadout(this.currentLoadout), this.currentAiDifficulty);
+    this.options.onStartMode(
+      this.currentMode,
+      cloneLoadout(this.currentLoadout),
+      this.currentAiDifficulty,
+      { ...this.currentArcadeSettings },
+    );
   }
 
   private getErrorMessage(error: unknown): string {
@@ -1335,10 +1461,20 @@ export class StartMenu {
       return;
     }
     if (rowIndex === 2) {
-      this.shiftCharacter('P1', direction);
+      this.currentArcadeSettings.continues = getNextArcadeContinues(this.currentArcadeSettings.continues, direction);
+      this.refreshLocalRows();
       return;
     }
     if (rowIndex === 3) {
+      this.currentArcadeSettings.retryEnabled = !this.currentArcadeSettings.retryEnabled;
+      this.refreshLocalRows();
+      return;
+    }
+    if (rowIndex === 4) {
+      this.shiftCharacter('P1', direction);
+      return;
+    }
+    if (rowIndex === 5) {
       this.shiftCharacter('P2', direction);
     }
   }
@@ -1365,7 +1501,7 @@ export class StartMenu {
         this.setScreen('online');
         return;
       case 'match_over':
-        this.options.onReturnHome();
+        this.matchSecondaryAction();
         return;
       default:
         return;

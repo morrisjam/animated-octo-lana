@@ -15,6 +15,7 @@ import { createInitialState, getRenderSnapshot, step } from './sim/sim';
 import { sanitiseTuning } from './sim/tuning';
 import type { PlayerId, PlayersById, RenderSnapshot } from './sim/types';
 import {
+  AI_DIFFICULTY_ORDER,
   buildFrameInputWithAi,
   createAiController,
   tickAiController,
@@ -22,6 +23,14 @@ import {
   type AiDifficultyId,
   DEFAULT_AI_DIFFICULTY,
 } from './sim/ai';
+import {
+  applyArcadeLossAction,
+  createArcadeRun,
+  getCurrentArcadeStage,
+  resolveArcadeMatch,
+  type ArcadeLossAction,
+  type ArcadeRunState,
+} from './sim/arcade';
 import {
   createHud,
   type RollbackDiagnosticsView,
@@ -46,6 +55,7 @@ import {
   type AudioSettings,
 } from './view/audio/settings';
 import {
+  type ArcadeMenuSettings,
   createStartMenu,
   type GameMode,
   type OnlineDevMenuTarget,
@@ -65,12 +75,17 @@ interface StoredSettings {
     P2?: string;
   };
   aiDifficulty?: string;
+  arcade?: {
+    continues?: number;
+    retryEnabled?: boolean;
+  };
   audio?: unknown;
 }
 interface LoadedSettings {
   mode: GameMode;
   loadout: PlayersById<CharacterId>;
   aiDifficulty: AiDifficultyId;
+  arcade: ArcadeMenuSettings;
   audio: AudioSettings;
 }
 
@@ -78,6 +93,15 @@ const SETTINGS_STORAGE_KEY = 'gravity_well.settings.v1';
 const ROLLBACK_DIAGNOSTICS_STORAGE_KEY = 'gravity_well.rollback_diagnostics.v1';
 const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
+const DEFAULT_ARCADE_MENU_SETTINGS: ArcadeMenuSettings = {
+  continues: 2,
+  retryEnabled: true,
+};
+
+interface ArcadePendingLossState {
+  stageLabel: string;
+  allowedActions: ArcadeLossAction[];
+}
 
 function toCombatAudioEventType(eventType: CombatVfxEvent['type']): 'combat.boost' | 'combat.launch' | 'combat.parry' | 'combat.projectile' | 'combat.dunk' {
   switch (eventType) {
@@ -181,6 +205,7 @@ audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
 audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
 let selectedLoadout: PlayersById<CharacterId> = loadedSettings.loadout;
 let selectedAiDifficulty: AiDifficultyId = loadedSettings.aiDifficulty;
+let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
 const seedParam = new URLSearchParams(window.location.search).get('seed');
 const forcedSeed = seedParam !== null ? Number(seedParam) : undefined;
 let selectedMatchSeed = Number.isFinite(forcedSeed) ? (forcedSeed as number) : 1;
@@ -198,6 +223,8 @@ let p2RoundWins = 0;
 let roundTransitionRemaining = 0;
 let simulationFrame = 0;
 let aiController: AiControllerState | null = null;
+let arcadeRun: ArcadeRunState | null = null;
+let arcadePendingLossState: ArcadePendingLossState | null = null;
 const inputTimeline = createInputTimelineBuffer({ maxFrames: 60 * 20 });
 const enableRollbackScaffold = (import.meta.env.VITE_FEATURE_ROLLBACK_SCAFFOLD ?? 'false').toLowerCase() === 'true';
 let rollbackSession: RollbackSession | null = null;
@@ -899,10 +926,11 @@ const startMenu = createStartMenu({
   initialMode: selectedMode,
   initialLoadout: selectedLoadout,
   initialAiDifficulty: selectedAiDifficulty,
+  initialArcadeSettings: selectedArcadeSettings,
   enabledModes,
   initialAccountSummary: 'Guest Account',
-  onStartMode: (mode, loadout, aiDifficulty) => {
-    beginMode(mode, loadout, aiDifficulty);
+  onStartMode: (mode, loadout, aiDifficulty, arcadeSettings) => {
+    beginMode(mode, loadout, aiDifficulty, arcadeSettings);
   },
   onOpenWebAuth: platform.kind === 'web'
     ? async (action: WebAuthMenuAction, request?: WebAuthMenuRequest) => {
@@ -913,7 +941,7 @@ const startMenu = createStartMenu({
     returnToHome();
   },
   onPlayAgain: () => {
-    beginMode(selectedMode, selectedLoadout, selectedAiDifficulty);
+    beginMode(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
   },
   onJoinRankedQueue: async () => {
     return await joinRankedQueue();
@@ -1021,7 +1049,7 @@ function formatAccountSummary(session: PlatformAuthSession): string {
 }
 
 function getEnabledModes(): GameMode[] {
-  return ['endless', 'best_of_3', 'training'];
+  return ['endless', 'best_of_3', 'arcade', 'training'];
 }
 
 function getRulesForMode(mode: GameMode): { allowDunkWin: boolean } {
@@ -1045,6 +1073,20 @@ function resolveStoredAiDifficulty(value: string | undefined): AiDifficultyId {
   return DEFAULT_AI_DIFFICULTY;
 }
 
+function sanitiseArcadeMenuSettings(raw: unknown): ArcadeMenuSettings {
+  const value = raw && typeof raw === 'object' ? raw as { continues?: unknown; retryEnabled?: unknown } : {};
+  const requestedContinues = Number(value.continues);
+  const continues = Number.isFinite(requestedContinues)
+    ? Math.max(0, Math.min(3, Math.floor(requestedContinues)))
+    : DEFAULT_ARCADE_MENU_SETTINGS.continues;
+  return {
+    continues,
+    retryEnabled: value.retryEnabled === undefined
+      ? DEFAULT_ARCADE_MENU_SETTINGS.retryEnabled
+      : Boolean(value.retryEnabled),
+  };
+}
+
 function isCharacterId(value: string | undefined): value is CharacterId {
   if (!value) {
     return false;
@@ -1057,7 +1099,11 @@ function coerceStoredSettings(raw: unknown): LoadedSettings | null {
     return null;
   }
   const parsed = raw as StoredSettings;
-  const hasKnownKeys = 'mode' in parsed || 'loadout' in parsed || 'audio' in parsed || 'aiDifficulty' in parsed;
+  const hasKnownKeys = 'mode' in parsed
+    || 'loadout' in parsed
+    || 'audio' in parsed
+    || 'aiDifficulty' in parsed
+    || 'arcade' in parsed;
   if (!hasKnownKeys) {
     return null;
   }
@@ -1068,6 +1114,7 @@ function coerceStoredSettings(raw: unknown): LoadedSettings | null {
   const p2 = isCharacterId(parsedP2) ? parsedP2 : DEFAULT_CHARACTER_LOADOUT.P2;
   const audio = sanitiseAudioSettings(parsed.audio);
   const aiDifficulty = resolveStoredAiDifficulty(parsed.aiDifficulty);
+  const arcade = sanitiseArcadeMenuSettings(parsed.arcade);
 
   return {
     mode,
@@ -1076,6 +1123,7 @@ function coerceStoredSettings(raw: unknown): LoadedSettings | null {
       P2: p2,
     },
     aiDifficulty,
+    arcade,
     audio,
   };
 }
@@ -1089,6 +1137,7 @@ function loadSettings(): LoadedSettings {
       P2: DEFAULT_CHARACTER_LOADOUT.P2,
     },
     aiDifficulty: DEFAULT_AI_DIFFICULTY,
+    arcade: { ...DEFAULT_ARCADE_MENU_SETTINGS },
     audio: DEFAULT_AUDIO_SETTINGS,
   };
 
@@ -1107,6 +1156,7 @@ function persistSettings(): void {
       P2: selectedLoadout.P2,
     },
     aiDifficulty: selectedAiDifficulty,
+    arcade: selectedArcadeSettings,
     audio: audioSettings,
   };
   const result = platform.persistence.writeJson(SETTINGS_STORAGE_KEY, payload);
@@ -1141,8 +1191,9 @@ async function bootstrapPlatformProfile(): Promise<void> {
       selectedMode = profileSettings.mode;
       selectedLoadout = profileSettings.loadout;
       selectedAiDifficulty = profileSettings.aiDifficulty;
+      selectedArcadeSettings = profileSettings.arcade;
       audioSettings = profileSettings.audio;
-      startMenu.setLocalSetup(selectedMode, selectedLoadout, selectedAiDifficulty);
+      startMenu.setLocalSetup(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
       audioSystem.setBusVolume('master', audioSettings.masterVolume);
       audioSystem.setBusVolume('music', audioSettings.musicVolume);
       audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
@@ -1239,11 +1290,45 @@ async function refreshEntitlementGate(stage: 'startup' | 'session'): Promise<voi
   }
 }
 
+function getAiDifficultyRank(value: AiDifficultyId): number {
+  const index = AI_DIFFICULTY_ORDER.indexOf(value);
+  return index >= 0 ? index : 0;
+}
+
+function resolveAiDifficultyForCurrentMatch(): AiDifficultyId {
+  if (selectedMode !== 'arcade' || !arcadeRun) {
+    return selectedAiDifficulty;
+  }
+  const stage = getCurrentArcadeStage(arcadeRun);
+  return getAiDifficultyRank(stage.aiDifficulty) > getAiDifficultyRank(selectedAiDifficulty)
+    ? stage.aiDifficulty
+    : selectedAiDifficulty;
+}
+
+function resolveLoadoutForCurrentMatch(): PlayersById<CharacterId> {
+  if (selectedMode === 'arcade' && arcadeRun) {
+    const stage = getCurrentArcadeStage(arcadeRun);
+    return {
+      P1: selectedLoadout.P1,
+      P2: stage.opponentCharacterId,
+    };
+  }
+  return selectedLoadout;
+}
+
+function formatDuration(seconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
 function resetRoundState(): void {
   persistRollbackDiagnostics('round_reset');
   const tuning = state.tuning;
+  const matchLoadout = resolveLoadoutForCurrentMatch();
   state = createInitialState({
-    loadout: selectedLoadout,
+    loadout: matchLoadout,
     seed: selectedMatchSeed,
     rules: getRulesForMode(selectedMode),
   });
@@ -1265,7 +1350,7 @@ function resetRoundState(): void {
     ? null
     : createAiController({
       seed: selectedMatchSeed ^ 0x9e3779b9,
-      profileId: selectedAiDifficulty,
+      profileId: resolveAiDifficultyForCurrentMatch(),
     });
   const showDebugDiagnostics = runtimeConfig.features.debugToolsEnabled;
   hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
@@ -1281,7 +1366,12 @@ function resetRoundState(): void {
   }
 }
 
-function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>, aiDifficulty?: AiDifficultyId): void {
+function beginMode(
+  mode: GameMode,
+  loadout?: PlayersById<CharacterId>,
+  aiDifficulty?: AiDifficultyId,
+  arcadeSettings?: ArcadeMenuSettings,
+): void {
   const resolvedMode = resolveStoredMode(mode);
   if (loadout) {
     selectedLoadout = {
@@ -1292,10 +1382,25 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>, aiDifficu
   if (aiDifficulty) {
     selectedAiDifficulty = resolveStoredAiDifficulty(aiDifficulty);
   }
+  if (arcadeSettings) {
+    selectedArcadeSettings = sanitiseArcadeMenuSettings(arcadeSettings);
+  }
   selectedMode = resolvedMode;
   if (!Number.isFinite(forcedSeed)) {
     selectedMatchSeed = ((Date.now() ^ Math.floor(performance.now() * 1000)) >>> 0) || 1;
   }
+  arcadePendingLossState = null;
+  arcadeRun = selectedMode === 'arcade'
+    ? createArcadeRun({
+      startedAtMs: Date.now(),
+      rules: {
+        roundsToWin: 2,
+        maxContinues: selectedArcadeSettings.continues,
+        allowContinueAfterLoss: true,
+        allowRetryStage: selectedArcadeSettings.retryEnabled,
+      },
+    })
+    : null;
   p1RoundWins = 0;
   p2RoundWins = 0;
   roundTransitionRemaining = 0;
@@ -1309,6 +1414,7 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>, aiDifficu
         mode: selectedMode,
         loadout: selectedLoadout,
         aiDifficulty: selectedAiDifficulty,
+        arcade: selectedArcadeSettings,
         audio: audioSettings,
       },
     });
@@ -1325,6 +1431,10 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>, aiDifficu
 
 function returnToHome(): void {
   persistRollbackDiagnostics('return_home');
+  arcadePendingLossState = null;
+  if (selectedMode === 'arcade') {
+    arcadeRun = null;
+  }
   appPhase = 'home';
   void platform.presence.setStatus('home');
   pauseMenu.setPaused(false);
@@ -1585,6 +1695,15 @@ function updateMatchInfo(): void {
     return;
   }
 
+  if (selectedMode === 'arcade') {
+    const stage = arcadeRun ? getCurrentArcadeStage(arcadeRun) : null;
+    const stageIndex = arcadeRun ? arcadeRun.stageIndex + 1 : 1;
+    const totalStages = arcadeRun?.stages.length ?? 1;
+    const stageLabel = stage?.label ?? 'Stage';
+    matchInfo.textContent = `Mode: Arcade | ${stageIndex}/${totalStages} ${stageLabel} | ${getRoundScoreText()}`;
+    return;
+  }
+
   matchInfo.textContent = `Mode: Best of 3 | ${getRoundScoreText()}`;
 }
 
@@ -1678,6 +1797,119 @@ function isFrameDataToggleButtonDown(): boolean {
   return false;
 }
 
+function restartArcadeStageFromLoss(action: ArcadeLossAction): void {
+  if (!arcadeRun) {
+    return;
+  }
+  applyArcadeLossAction(arcadeRun, action, Date.now());
+  arcadePendingLossState = null;
+  p1RoundWins = 0;
+  p2RoundWins = 0;
+  appPhase = 'playing';
+  pauseMenu.setPaused(false);
+  startMenu.hideRoundBanner();
+  startMenu.hideHome();
+  hudRoot.style.visibility = 'visible';
+  syncTrainingFrameDataVisibility();
+  resetRoundState();
+  accumulator = 0;
+  void platform.presence.setStatus('playing');
+}
+
+function showArcadeCompletionSummary(): void {
+  if (!arcadeRun) {
+    return;
+  }
+  const finalResolution = arcadeRun.records[arcadeRun.records.length - 1];
+  const stagesCleared = arcadeRun.records.filter((record) => record.result === 'clear').length;
+  const durationSeconds = Math.max(0, (Date.now() - arcadeRun.startedAtMs) / 1000);
+  startMenu.showMatchOverScreen({
+    title: 'Arcade Complete',
+    subtitle: [
+      `Final encounter cleared: ${finalResolution?.stageLabel ?? 'Unknown'}`,
+      `Stages cleared: ${stagesCleared}/${arcadeRun.stages.length}`,
+      `Continues used: ${arcadeRun.continuesUsed}`,
+      `Retries used: ${arcadeRun.retriesUsed}`,
+      `Run time: ${formatDuration(durationSeconds)}`,
+    ].join('\n'),
+    primaryLabel: 'Run Again',
+    secondaryLabel: 'Return to Home',
+    onPrimary: () => {
+      beginMode('arcade', selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
+    },
+    onSecondary: () => {
+      returnToHome();
+    },
+  });
+}
+
+function showArcadeFailureSummary(): void {
+  if (!arcadeRun) {
+    return;
+  }
+  const lastRecord = arcadeRun.records[arcadeRun.records.length - 1] ?? null;
+  const stagesCleared = arcadeRun.records.filter((record) => record.result === 'clear').length;
+  const durationSeconds = Math.max(0, (Date.now() - arcadeRun.startedAtMs) / 1000);
+  startMenu.showMatchOverScreen({
+    title: 'Arcade Run Ended',
+    subtitle: [
+      `Fell at: ${lastRecord?.stageLabel ?? 'Unknown stage'}`,
+      `Stages cleared: ${stagesCleared}/${arcadeRun.stages.length}`,
+      `Continues used: ${arcadeRun.continuesUsed}`,
+      `Retries used: ${arcadeRun.retriesUsed}`,
+      `Run time: ${formatDuration(durationSeconds)}`,
+    ].join('\n'),
+    primaryLabel: 'Try Arcade Again',
+    secondaryLabel: 'Return to Home',
+    onPrimary: () => {
+      beginMode('arcade', selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
+    },
+    onSecondary: () => {
+      returnToHome();
+    },
+  });
+}
+
+function showArcadeLossPrompt(stageLabel: string, allowedActions: ArcadeLossAction[]): void {
+  arcadePendingLossState = { stageLabel, allowedActions };
+  const remainingContinues = Math.max(0, selectedArcadeSettings.continues - (arcadeRun?.continuesUsed ?? 0));
+  const canContinue = allowedActions.includes('continue');
+  const canRetry = allowedActions.includes('retry_stage');
+
+  const primaryLabel = canContinue
+    ? `Continue (${remainingContinues} left)`
+    : 'Retry Stage';
+  const secondaryLabel = canContinue && canRetry
+    ? 'Retry Stage'
+    : 'Return to Home';
+
+  startMenu.showMatchOverScreen({
+    title: 'Arcade Stage Lost',
+    subtitle: [
+      `${stageLabel}`,
+      `Choose how to proceed.`,
+      `Continues left: ${remainingContinues}`,
+      `Retry stage: ${canRetry ? 'Enabled' : 'Disabled'}`,
+    ].join('\n'),
+    primaryLabel,
+    secondaryLabel,
+    onPrimary: () => {
+      if (canContinue) {
+        restartArcadeStageFromLoss('continue');
+      } else {
+        restartArcadeStageFromLoss('retry_stage');
+      }
+    },
+    onSecondary: () => {
+      if (canContinue && canRetry) {
+        restartArcadeStageFromLoss('retry_stage');
+      } else {
+        returnToHome();
+      }
+    },
+  });
+}
+
 function onRoundWin(winner: PlayerId): void {
   if (selectedMode === 'training') {
     restartTrainingRound();
@@ -1697,7 +1929,49 @@ function onRoundWin(winner: PlayerId): void {
     p2RoundWins += 1;
   }
 
-  if (p1RoundWins >= 2 || p2RoundWins >= 2) {
+  const roundsToWin = selectedMode === 'arcade' && arcadeRun
+    ? arcadeRun.rules.roundsToWin
+    : 2;
+  if (p1RoundWins >= roundsToWin || p2RoundWins >= roundsToWin) {
+    if (selectedMode === 'arcade' && arcadeRun) {
+      persistRollbackDiagnostics('arcade_match_end');
+      const resolution = resolveArcadeMatch(arcadeRun, winner, p1RoundWins, p2RoundWins, Date.now());
+      if (resolution.type === 'advance_stage') {
+        p1RoundWins = 0;
+        p2RoundWins = 0;
+        appPhase = 'round_transition';
+        roundTransitionRemaining = 1.2;
+        startMenu.showRoundBanner(
+          winner,
+          `Stage Clear: ${resolution.clearedStage.label} -> ${resolution.nextStage.label}`,
+        );
+        return;
+      }
+
+      appPhase = 'match_over';
+      void platform.presence.setStatus('match_over');
+      hudRoot.style.visibility = 'hidden';
+      if (resolution.type === 'run_complete') {
+        const matchWinCallout = voiceCalloutSystem.trigger({
+          playerId: winner,
+          characterId: state.players[winner].characterId,
+          event: 'match_win',
+          timeSeconds: performance.now() / 1000,
+        });
+        if (matchWinCallout && audioSettings.subtitlesEnabled) {
+          hud.showVoiceSubtitle(matchWinCallout.text);
+        }
+        showArcadeCompletionSummary();
+        return;
+      }
+      if (resolution.type === 'stage_loss') {
+        showArcadeLossPrompt(resolution.stage.label, resolution.allowedActions);
+        return;
+      }
+      showArcadeFailureSummary();
+      return;
+    }
+
     persistRollbackDiagnostics('match_over');
     appPhase = 'match_over';
     const matchWinCallout = voiceCalloutSystem.trigger({
@@ -1717,7 +1991,12 @@ function onRoundWin(winner: PlayerId): void {
 
   appPhase = 'round_transition';
   roundTransitionRemaining = 1.2;
-  startMenu.showRoundBanner(winner, getRoundScoreText());
+  if (selectedMode === 'arcade' && arcadeRun) {
+    const stage = getCurrentArcadeStage(arcadeRun);
+    startMenu.showRoundBanner(winner, `${stage.label} | ${getRoundScoreText()}`);
+  } else {
+    startMenu.showRoundBanner(winner, getRoundScoreText());
+  }
 }
 
 window.addEventListener('keydown', (event) => {

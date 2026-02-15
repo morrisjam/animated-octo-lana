@@ -42,7 +42,7 @@ jobs:
 
           PG_BASENAME="postgres-${TS}.dump"
           PG_FILE="${OUT_DIR}/${PG_BASENAME}"
-          REDIS_FILE="${OUT_DIR}/redis-${TS}.rdb"
+          REDIS_FILE="${OUT_DIR}/redis-${TS}.ndjson"
 
           docker run --rm \
             -e DATABASE_URL \
@@ -50,7 +50,23 @@ jobs:
             -v "${PWD}/${OUT_DIR}:/backup" \
             postgres:17-alpine \
             sh -lc 'pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --compress=9 --file="/backup/$BACKUP_FILE"'
-          redis-cli -u "${REDIS_URL}" --rdb "${REDIS_FILE}"
+
+          : > "${REDIS_FILE}"
+          while IFS= read -r redis_key; do
+            key_b64="$(printf '%s' "${redis_key}" | base64 -w0)"
+            key_ttl_ms="$(redis-cli -u "${REDIS_URL}" --raw PTTL "${redis_key}")"
+            key_type="$(redis-cli -u "${REDIS_URL}" --raw TYPE "${redis_key}")"
+            key_dump_b64="$(redis-cli -u "${REDIS_URL}" --raw DUMP "${redis_key}" | base64 -w0)"
+            printf '{"key_b64":"%s","type":"%s","pttl_ms":%s,"dump_b64":"%s"}\n' \
+              "${key_b64}" \
+              "${key_type}" \
+              "${key_ttl_ms}" \
+              "${key_dump_b64}" \
+              >> "${REDIS_FILE}"
+          done < <(redis-cli -u "${REDIS_URL}" --scan)
+
+          gzip -9 "${REDIS_FILE}"
+          REDIS_FILE="${REDIS_FILE}.gz"
 
           sha256sum "${PG_FILE}" "${REDIS_FILE}" > "${OUT_DIR}/checksums.sha256"
           cat > "${OUT_DIR}/manifest.json" <<EOF
@@ -58,6 +74,7 @@ jobs:
             "createdAt": "${TS}",
             "postgresBackup": "$(basename "${PG_FILE}")",
             "redisBackup": "$(basename "${REDIS_FILE}")",
+            "redisBackupFormat": "logical_dump_ndjson_gzip",
             "retention": "14 days"
           }
           EOF

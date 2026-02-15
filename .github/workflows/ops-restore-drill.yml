@@ -44,7 +44,7 @@ jobs:
       - name: Install restore tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client redis-server redis-tools
+          sudo apt-get install -y postgresql-client redis-tools
 
       - name: Run restore drill and generate report
         id: drill
@@ -80,8 +80,17 @@ jobs:
 
           redis-cli -u "${REDIS_URL}" FLUSHALL > /dev/null
           cp "drill-artifacts/redis-drill.rdb" "drill-artifacts/dump.rdb"
-          redis-server --port 6380 --dir "${PWD}/drill-artifacts" --dbfilename dump.rdb --daemonize yes
-          sleep 2
+          docker rm -f redis-drill-restore >/dev/null 2>&1 || true
+          docker run -d --name redis-drill-restore -p 6380:6379 \
+            -v "${PWD}/drill-artifacts:/data" \
+            redis:7-alpine \
+            redis-server --dir /data --dbfilename dump.rdb --save "" --appendonly no >/dev/null
+          for i in {1..20}; do
+            if redis-cli -p 6380 ping > /dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
           redis-cli -p 6380 ping > /dev/null
           RESTORE_FINISHED="$(date +%s)"
           RESTORE_SECONDS="$((RESTORE_FINISHED - RESTORE_STARTED))"
@@ -135,6 +144,8 @@ jobs:
           EOF
 
           echo "report_path=${REPORT_PATH}" >> "${GITHUB_OUTPUT}"
+
+          docker rm -f redis-drill-restore >/dev/null 2>&1 || true
 
       - name: Upload drill report artifact
         uses: actions/upload-artifact@v4

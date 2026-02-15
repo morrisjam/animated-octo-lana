@@ -77,6 +77,8 @@ npm run migrate -w @gravity-well/api
 - AI difficulty profiles: `docs/AI_DIFFICULTY_PROFILES.md`
 - Arcade mode flow: `docs/ARCADE_MODE_FLOW.md`
 - Arcade run history and best records: `docs/ARCADE_RUN_HISTORY.md`
+- E4 content production epic map: `docs/NEXT_EPIC_E4_CONTENT_PRODUCTION_PLAN.md`
+- E4.1 character package first-priority plan: `docs/NEXT_EPIC_E41_CHARACTER_PACKAGE_PLAN.md`
 - API usage: `apps/api/README.md`
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`

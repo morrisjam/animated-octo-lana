@@ -8,16 +8,21 @@
 ## Status snapshot (2026-02-15)
 - Tracker source: `JIRA_STORY_BACKLOG.csv`.
 - Stories marked `Done`: `64`.
-- Stories marked `Backlog`: `0`.
-- Recent status sync marked these as done: `S1.1`, `S1.7`, `S1.8`.
+- Stories marked `Backlog`: `13`.
+- New planning stories added: `S4.1` to `S4.13` (content production epics).
 
 ## Next epic slice (recommended)
-- Current state: all tracked stories in `JIRA_STORY_BACKLOG.csv` are complete.
-- Recommended next planning slice: add a new epic for post-backlog production hardening:
-  - Suspend/resume resilience suite.
-  - Console privacy policy mapping.
-  - Save-failure simulation harness.
-  - Certification evidence automation.
+- Priority 1: `E4.1 Character package system`.
+- Why first:
+  - Unlocks custom fighters without touching core simulation code.
+  - Creates one pipeline foundation used by mechanics, visuals, dialogue, and audio content teams.
+  - Reduces integration risk before large-scale content production begins.
+- First execution order:
+  - `S4.1` Character package schema and validator.
+  - `S4.2` Runtime package loader and registry integration.
+  - `S4.3` Deterministic custom move behavior contract.
+  - `S4.4` Character package scaffolding and docs.
+  - `S4.5` Character package QA harness.
 
 ## Phase 1 stories
 
@@ -554,6 +559,117 @@
   - Blocked access is surfaced in UI with explicit recovery guidance.
 - Points: `3`
 
+## Phase 4 stories
+
+## Epic E4.1 Character package system
+### S4.1 Character package schema and validator
+- Story: As a content creator, I can define new characters in a package without touching core code.
+- Acceptance criteria:
+  - Package schema covers identity, mechanics, moves, visuals, audio, and metadata.
+  - Build validation reports precise field errors.
+  - Package schema uses explicit versioning for compatibility.
+- Points: `5`
+
+### S4.2 Runtime package loader and registry integration
+- Story: As a developer, I can load character packages and expose them in gameplay and menus.
+- Acceptance criteria:
+  - Package loader registers valid characters at boot.
+  - Character select and local setup menus show packaged fighters.
+  - Invalid packages fail safely with diagnostics and do not crash startup.
+- Points: `5`
+
+### S4.3 Deterministic custom move behavior contract
+- Story: As a combat designer, I can map packaged moves to supported deterministic behaviors.
+- Acceptance criteria:
+  - Package moves reference approved behavior ids rather than arbitrary runtime code.
+  - Simulation consumes behavior ids with deterministic outputs.
+  - Unsupported behavior ids fail validation and runtime load.
+- Points: `5`
+
+### S4.4 Character package scaffolding and docs
+- Story: As a creator, I can generate a starter character package quickly.
+- Acceptance criteria:
+  - CLI or script scaffolds package files and placeholders.
+  - Generated package includes validation-ready defaults.
+  - Authoring docs cover required assets, fields, and iteration flow.
+- Points: `3`
+
+### S4.5 Character package QA harness
+- Story: As QA, I can verify packaged characters before merge.
+- Acceptance criteria:
+  - Automated checks run replay determinism, frame-data bounds, and asset budget checks for each package.
+  - Failing package checks block CI.
+  - Report identifies failing package and rule.
+- Points: `5`
+
+## Epic E4.2 Balance and mechanics operations
+### S4.6 Balance patch profile and ruleset versioning
+- Story: As a gameplay engineer, I can ship balance changes safely with version tracking.
+- Acceptance criteria:
+  - Balance values are read from versioned patch profiles.
+  - Match and replay metadata record ruleset version.
+  - Older replays fail gracefully when incompatible with active ruleset.
+- Points: `5`
+
+### S4.7 Mechanics tuning workflow and regression suites
+- Story: As a gameplay engineer, I can tune mechanics with confidence.
+- Acceptance criteria:
+  - Core mechanic constants are isolated in data/config modules.
+  - Regression tests cover key mechanics interactions and edge cases.
+  - CI compares baseline snapshots to detect unintended behavior drift.
+- Points: `5`
+
+### S4.8 Matchup telemetry and balancing reports
+- Story: As a designer, I can review matchup outcomes and outliers.
+- Acceptance criteria:
+  - Telemetry aggregates win rate, round length, and action frequency by matchup and mode.
+  - Weekly report highlights statistically significant deltas.
+  - Report links to candidate balance patch notes.
+- Points: `3`
+
+## Epic E4.3 Visual content and menu theming
+### S4.9 Visual content package format
+- Story: As a content creator, I can ship fighter and menu visuals via content packages.
+- Acceptance criteria:
+  - Visual package schema covers models/sprites, portraits, VFX overrides, and UI art.
+  - Loader supports fallback assets when entries are missing.
+  - Build checks validate dimensions, formats, and memory budgets.
+- Points: `5`
+
+### S4.10 Menu theme and layout profiles
+- Story: As a UI designer, I can theme menus without editing gameplay code.
+- Acceptance criteria:
+  - Menu style tokens and layout presets are data-driven.
+  - Theme profile can be swapped per environment or event.
+  - Keyboard, mouse, and controller navigation remains fully functional across themes.
+- Points: `3`
+
+## Epic E4.4 Cutscene and dialogue systems
+### S4.11 Cutscene timeline player for image and video
+- Story: As a narrative designer, I can author cutscenes with image/video/audio timelines.
+- Acceptance criteria:
+  - Timeline format supports stills, videos, transitions, subtitles, and skip controls.
+  - Runtime player handles preloading and fallback when media fails.
+  - Cutscene playback hooks into existing menu/match flow state.
+- Points: `5`
+
+### S4.12 SFC dialogue graph runtime
+- Story: As a writer, I can script branching dialogue sequences with conditions.
+- Acceptance criteria:
+  - Dialogue graph supports nodes, choices, conditions, and side effects.
+  - UI supports keyboard, mouse, and controller navigation.
+  - Dialogue content supports localization keys and subtitle output.
+- Points: `5`
+
+## Epic E4.5 Music and score pipeline
+### S4.13 Music cue graph and adaptive sequencing expansion
+- Story: As an audio designer, I can author music behavior for gameplay, menus, and cutscenes.
+- Acceptance criteria:
+  - Music cue graph supports state, intensity, and event-driven transitions.
+  - Audio routing applies ducking and accessibility modes consistently.
+  - Authoring format integrates with existing audio bus/event architecture.
+- Points: `3`
+
 ## Suggested first 2 sprints
 - Sprint 1:
   - `S1.1`, `S1.4`, `S1.7`, `S1.8`
@@ -589,6 +705,18 @@
 
 ## Suggested sprint 12
 - `S2.31`, `S2.32`, `S2.9`, `S2.17`
+
+## Suggested sprint 13 (priority content foundation)
+- `S4.1`, `S4.2`
+
+## Suggested sprint 14
+- `S4.3`, `S4.4`, `S4.5`
+
+## Suggested sprint 15
+- `S4.6`, `S4.7`, `S4.8`
+
+## Suggested sprint 16
+- `S4.9`, `S4.10`, `S4.11`, `S4.12`, `S4.13`
 
 ## Immediate operator action
 - Action `A-NEON-1`: initialise a Neon `dev` database and switch `DATABASE_URL` in CI and deploy envs.

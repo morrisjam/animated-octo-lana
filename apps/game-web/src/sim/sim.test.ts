@@ -10,6 +10,7 @@ import {
   nextDeterministicRandom,
   restoreStateFromSnapshot,
   serialiseState,
+  STATE_SNAPSHOT_VERSION,
   step,
 } from './sim';
 import { CHAIN_WINDOW_SECONDS } from './constants';
@@ -337,5 +338,33 @@ describe('state snapshot and restore', () => {
     const serialised = serialiseState(state);
     const roundTrip = deserialiseState(serialised);
     expect(computeStateChecksum(roundTrip)).toBe(computeStateChecksum(state));
+  });
+
+  test('deserialise accepts legacy direct state payloads for compatibility', () => {
+    const state = createInitialState({ seed: 2025 });
+    for (let frame = 0; frame < 30; frame += 1) {
+      const input = scriptedInputForFrame(frame);
+      step(state, input, FIXED_DT);
+      nextDeterministicRandom(state);
+    }
+    const legacyPayload = JSON.stringify(createStateSnapshot(state));
+    const restored = deserialiseState(legacyPayload);
+    expect(computeStateChecksum(restored)).toBe(computeStateChecksum(state));
+  });
+
+  test('deserialise rejects unsupported snapshot envelope versions', () => {
+    const state = createInitialState({ seed: 777 });
+    const payload = JSON.stringify({
+      version: STATE_SNAPSHOT_VERSION + 1,
+      state: createStateSnapshot(state),
+    });
+    expect(() => deserialiseState(payload)).toThrow(`Expected ${STATE_SNAPSHOT_VERSION}`);
+  });
+
+  test('deserialise rejects malformed snapshots with clear error', () => {
+    expect(() => deserialiseState('{bad-json')).toThrow('not valid JSON');
+    expect(() => deserialiseState(JSON.stringify({ version: STATE_SNAPSHOT_VERSION, state: {} }))).toThrow(
+      'Invalid state snapshot',
+    );
   });
 });

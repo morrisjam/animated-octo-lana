@@ -270,6 +270,70 @@ function cloneProjectile(projectile: ProjectileState): ProjectileState {
   };
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function assertSerializableSnapshotValue(value: unknown, path: string): void {
+  if (value === undefined) {
+    throw new Error(`Invalid state snapshot: ${path} is undefined.`);
+  }
+  if (value === null) {
+    return;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Invalid state snapshot: ${path} must be a finite number.`);
+    }
+    return;
+  }
+  if (typeof value === 'boolean' || typeof value === 'string') {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      assertSerializableSnapshotValue(value[index], `${path}[${index}]`);
+    }
+    return;
+  }
+  if (isObjectRecord(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      assertSerializableSnapshotValue(child, `${path}.${key}`);
+    }
+    return;
+  }
+
+  throw new Error(`Invalid state snapshot: ${path} has unsupported value type.`);
+}
+
+function assertSnapshotRootShape(snapshot: unknown): asserts snapshot is GameState {
+  if (!isObjectRecord(snapshot)) {
+    throw new Error('Invalid state snapshot: expected object payload.');
+  }
+  if (!isObjectRecord(snapshot.loadout)) {
+    throw new Error('Invalid state snapshot: loadout is required.');
+  }
+  if (!isObjectRecord(snapshot.players)) {
+    throw new Error('Invalid state snapshot: players is required.');
+  }
+  if (!isObjectRecord(snapshot.players.P1) || !isObjectRecord(snapshot.players.P2)) {
+    throw new Error('Invalid state snapshot: players.P1 and players.P2 are required.');
+  }
+  if (!Array.isArray(snapshot.projectiles)) {
+    throw new Error('Invalid state snapshot: projectiles must be an array.');
+  }
+  if (!isObjectRecord(snapshot.tuning)) {
+    throw new Error('Invalid state snapshot: tuning is required.');
+  }
+}
+
+export const STATE_SNAPSHOT_VERSION = 1;
+
+interface GameStateSnapshotEnvelope {
+  version: number;
+  state: GameState;
+}
+
 export function createStateSnapshot(state: GameState): GameState {
   return {
     loadout: {
@@ -289,16 +353,47 @@ export function createStateSnapshot(state: GameState): GameState {
 }
 
 export function restoreStateFromSnapshot(snapshot: GameState): GameState {
-  return createStateSnapshot(snapshot);
+  assertSnapshotRootShape(snapshot);
+  let cloned: GameState;
+  try {
+    cloned = createStateSnapshot(snapshot);
+  } catch {
+    throw new Error('Invalid state snapshot: failed to clone payload.');
+  }
+  assertSerializableSnapshotValue(cloned, 'snapshot');
+  return cloned;
 }
 
 export function serialiseState(state: GameState): string {
-  return JSON.stringify(createStateSnapshot(state));
+  const snapshot = createStateSnapshot(state);
+  assertSerializableSnapshotValue(snapshot, 'snapshot');
+  const payload: GameStateSnapshotEnvelope = {
+    version: STATE_SNAPSHOT_VERSION,
+    state: snapshot,
+  };
+  return JSON.stringify(payload);
 }
 
 export function deserialiseState(serialised: string): GameState {
-  const parsed = JSON.parse(serialised) as GameState;
-  return restoreStateFromSnapshot(parsed);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialised) as unknown;
+  } catch {
+    throw new Error('Invalid state snapshot: payload is not valid JSON.');
+  }
+
+  if (isObjectRecord(parsed) && 'version' in parsed && 'state' in parsed) {
+    const version = Number(parsed.version);
+    if (!Number.isFinite(version) || version !== STATE_SNAPSHOT_VERSION) {
+      throw new Error(
+        `Unsupported state snapshot version: ${String(parsed.version)}. Expected ${STATE_SNAPSHOT_VERSION}.`,
+      );
+    }
+    return restoreStateFromSnapshot(parsed.state as GameState);
+  }
+
+  // Legacy compatibility for direct GameState JSON payloads.
+  return restoreStateFromSnapshot(parsed as GameState);
 }
 
 function resolveLaunchConnection(

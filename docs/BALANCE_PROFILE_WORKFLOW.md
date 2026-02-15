@@ -39,3 +39,6 @@ Notes:
 
 ## Report output
 - `apps/game-web/build-artifacts/balance-profile-validation-report.json`
+
+## Related release-note workflow
+- Use `docs/BALANCE_PATCH_NOTES_WORKFLOW.md` to generate field-level patch note diffs between profiles.

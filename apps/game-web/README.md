@@ -70,6 +70,30 @@ Runtime profile override:
 VITE_BALANCE_PROFILE_ID=mobility_focus_v1
 ```
 
+## Balance patch notes generator
+
+From repo root:
+
+```bash
+npm run balance:patch-notes
+```
+
+From this workspace:
+
+```bash
+npm run balance:patch-notes
+```
+
+Optional:
+
+```bash
+npm run balance:patch-notes -- --base default --profiles mobility_focus_v1 --include-unchanged
+```
+
+Outputs:
+- `build-artifacts/balance-patch-notes.md`
+- `build-artifacts/balance-patch-notes-report.json`
+
 ## Training telemetry export
 
 - In `Training` mode, open pause menu -> `Debug Tuning`.

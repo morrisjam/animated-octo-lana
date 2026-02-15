@@ -44,7 +44,7 @@ Each `CharacterDefinition` now includes:
   - special behaviour, timing, and size from character `moves.special`
   - boost and super boost movement/fuel values from character `moves.boost` and `moves.superBoost`
 - Default special is a single projectile placeholder, so current gameplay still works while allowing future non-projectile specials.
-- HUD training frame panel reads launch frame data per selected character.
+- HUD training frame panel reads launch/dunk/parry/break/special frame data per selected character and supports keyboard/controller toggle in training mode.
 - Renderer reads special projectile `visualId` from snapshot so projectile art can differ by character.
 
 ## Extension points

@@ -1,5 +1,5 @@
-import { CHARACTER_BY_ID } from '../sim/characters';
 import type { RenderSnapshot } from '../sim/types';
+import { buildTrainingFrameDataModel } from './trainingFrameData';
 
 interface HudElements {
   p1Fuel: HTMLDivElement;
@@ -69,10 +69,32 @@ export function createHud(): HudController {
   };
   elements.frameData.hidden = true;
   elements.rollbackDiagnostics.hidden = true;
+  let trainingFrameDataVisible = false;
+  let frameDataCharacterSignature = '';
+
+  function renderTrainingFrameData(snapshot: RenderSnapshot): void {
+    const signature = `${snapshot.players.P1.characterId}|${snapshot.players.P2.characterId}`;
+    if (signature === frameDataCharacterSignature) {
+      return;
+    }
+
+    const model = buildTrainingFrameDataModel(snapshot.players.P1.characterId, snapshot.players.P2.characterId);
+    const rowsHtml = model.rows.map((row) => `<div class="row">${row}</div>`).join('');
+    elements.frameData.innerHTML = `
+      <div class="title">${model.title}</div>
+      <div class="row hint">${model.hint}</div>
+      ${rowsHtml}
+    `;
+    frameDataCharacterSignature = signature;
+  }
 
   return {
     setTrainingFrameDataVisible(visible: boolean): void {
+      trainingFrameDataVisible = visible;
       elements.frameData.hidden = !visible;
+      if (!visible) {
+        frameDataCharacterSignature = '';
+      }
     },
     setRollbackDiagnosticsVisible(visible: boolean): void {
       elements.rollbackDiagnostics.hidden = !visible;
@@ -96,8 +118,6 @@ export function createHud(): HudController {
     update(snapshot: RenderSnapshot): void {
       const p1 = snapshot.players.P1;
       const p2 = snapshot.players.P2;
-      const p1MoveData = CHARACTER_BY_ID[p1.characterId].moves.launch;
-      const p2MoveData = CHARACTER_BY_ID[p2.characterId].moves.launch;
 
       elements.p1Fuel.style.width = `${toFuelPercent(p1.fuel, p1.maxFuel)}%`;
       elements.p2Fuel.style.width = `${toFuelPercent(p2.fuel, p2.maxFuel)}%`;
@@ -110,12 +130,9 @@ export function createHud(): HudController {
       } else {
         elements.status.classList.remove('win');
       }
-
-      elements.frameData.innerHTML = `
-        <div class="title">Training Frame Data</div>
-        <div class="row">P1 ${CHARACTER_BY_ID[p1.characterId].displayName} launch: ${p1MoveData.startupFrames}f startup, ${p1MoveData.activeFrames}f active, ${p1MoveData.recoveryOnWhiffFrames}f whiff recover</div>
-        <div class="row">P2 ${CHARACTER_BY_ID[p2.characterId].displayName} launch: ${p2MoveData.startupFrames}f startup, ${p2MoveData.activeFrames}f active, ${p2MoveData.recoveryOnWhiffFrames}f whiff recover</div>
-      `;
+      if (trainingFrameDataVisible) {
+        renderTrainingFrameData(snapshot);
+      }
     },
   };
 }

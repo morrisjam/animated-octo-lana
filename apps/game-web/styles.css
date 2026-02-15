@@ -124,6 +124,11 @@ html, body {
   margin-top: 4px;
 }
 
+#frameData .row.hint {
+  color: #9fb7eb;
+  margin-bottom: 2px;
+}
+
 #rollbackDiagnostics {
   align-self: flex-end;
   margin-top: 8px;

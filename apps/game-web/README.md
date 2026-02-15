@@ -104,6 +104,12 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - `src/input`: keyboard/gamepad input mapping.
 - `src/platform`: platform adapters.
 
+## Training frame-data overlay
+
+- Available only during training mode gameplay.
+- Toggle with `F1` on keyboard or `View/Back` on controller.
+- Overlay rows show startup/active/recovery timing for launch, dunk, parry, break, and special for both players.
+
 ## Replay scripts
 
 From repo root:

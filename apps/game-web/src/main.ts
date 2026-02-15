@@ -826,6 +826,9 @@ let accumulator = 0;
 let lastTimeSeconds = performance.now() / 1000;
 let pauseButtonWasDown = false;
 let pauseToggleLockUntil = 0;
+let frameDataToggleButtonWasDown = false;
+let frameDataToggleLockUntil = 0;
+let trainingFrameDataVisible = selectedMode === 'training';
 let sessionAccountId: string | null = null;
 let replayReviewData: ReplayReviewData | null = null;
 let replayReviewSourceLabel = '';
@@ -839,6 +842,23 @@ let playerRankedSession: MatchSessionView | null = null;
 let playerRoom: RoomView | null = null;
 let playerReplayItems: ReplaySearchItemView[] = [];
 let playerRankedSnapshot: RankedProgressionView | null = null;
+
+function syncTrainingFrameDataVisibility(): void {
+  const shouldShow = selectedMode === 'training' && appPhase === 'playing' && trainingFrameDataVisible;
+  hud.setTrainingFrameDataVisible(shouldShow);
+}
+
+function setTrainingFrameDataVisibility(visible: boolean): void {
+  trainingFrameDataVisible = visible;
+  syncTrainingFrameDataVisibility();
+}
+
+function toggleTrainingFrameDataVisibility(): void {
+  if (selectedMode !== 'training' || appPhase !== 'playing') {
+    return;
+  }
+  setTrainingFrameDataVisibility(!trainingFrameDataVisible);
+}
 
 function formatAccountSummary(session: PlatformAuthSession): string {
   if (!session.isAuthenticated || !session.accountId) {
@@ -1078,6 +1098,7 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
   roundTransitionRemaining = 0;
   resetRoundState();
   appPhase = 'playing';
+  setTrainingFrameDataVisibility(selectedMode === 'training');
   persistSettings();
   if (sessionAccountId) {
     void platform.profile.saveProfile(sessionAccountId, {
@@ -1093,7 +1114,7 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
   startMenu.hideHome();
   startMenu.hideRoundBanner();
   hudRoot.style.visibility = 'visible';
-  hud.setTrainingFrameDataVisible(selectedMode === 'training');
+  syncTrainingFrameDataVisibility();
   accumulator = 0;
 }
 
@@ -1106,7 +1127,7 @@ function returnToHome(): void {
   startMenu.showHome();
   replayViewer.hide();
   hudRoot.style.visibility = 'hidden';
-  hud.setTrainingFrameDataVisible(false);
+  syncTrainingFrameDataVisibility();
   accumulator = 0;
 }
 
@@ -1131,7 +1152,7 @@ function openOnlineDevMenu(section?: OnlineDevMenuTarget): void {
   startMenu.hideRoundBanner();
   replayViewer.hide();
   hudRoot.style.visibility = 'hidden';
-  hud.setTrainingFrameDataVisible(false);
+  syncTrainingFrameDataVisibility();
   onlineDevMenu.show(sectionId);
 }
 
@@ -1200,7 +1221,7 @@ function restartTrainingRound(): void {
   startMenu.hideRoundBanner();
   startMenu.hideHome();
   hudRoot.style.visibility = 'visible';
-  hud.setTrainingFrameDataVisible(true);
+  syncTrainingFrameDataVisibility();
   accumulator = 0;
 }
 
@@ -1228,7 +1249,7 @@ function beginReplayReviewFromPayload(payloadRaw: unknown, sourceLabel: string):
   startMenu.hideHome();
   onlineDevMenu?.hide();
   hudRoot.style.visibility = 'visible';
-  hud.setTrainingFrameDataVisible(false);
+  syncTrainingFrameDataVisibility();
   hud.setRollbackDiagnosticsVisible(false);
   hud.updateRollbackDiagnostics(null);
   replayViewer.show(replayReviewData, replayReviewSourceLabel);
@@ -1388,6 +1409,20 @@ function isPauseButtonDown(): boolean {
   return false;
 }
 
+function isFrameDataToggleButtonDown(): boolean {
+  const gamepads = navigator.getGamepads?.() ?? [];
+  for (const gamepad of gamepads) {
+    if (!gamepad) {
+      continue;
+    }
+    const viewButton = gamepad.buttons[8];
+    if (viewButton && (viewButton.pressed || viewButton.value > 0.35)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function onRoundWin(winner: PlayerId): void {
   if (selectedMode === 'training') {
     restartTrainingRound();
@@ -1448,6 +1483,12 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
+  if (selectedMode === 'training' && appPhase === 'playing' && key === 'f1') {
+    event.preventDefault();
+    toggleTrainingFrameDataVisibility();
+    return;
+  }
+
   if (key === 'escape') {
     if (appPhase !== 'playing' && appPhase !== 'round_transition') {
       return;
@@ -1475,6 +1516,19 @@ function tick(nowMs: number): void {
     pauseToggleLockUntil = nowSeconds + 0.2;
   }
   pauseButtonWasDown = pauseDown;
+
+  const frameDataToggleDown = isFrameDataToggleButtonDown();
+  if (
+    frameDataToggleDown
+    && !frameDataToggleButtonWasDown
+    && nowSeconds >= frameDataToggleLockUntil
+    && selectedMode === 'training'
+    && appPhase === 'playing'
+  ) {
+    toggleTrainingFrameDataVisibility();
+    frameDataToggleLockUntil = nowSeconds + 0.2;
+  }
+  frameDataToggleButtonWasDown = frameDataToggleDown;
 
   if (!pauseMenu.isPaused() && appPhase === 'playing') {
     accumulator = Math.min(accumulator + elapsedSeconds, maxAccumulatedTime);
@@ -1568,7 +1622,7 @@ function tick(nowMs: number): void {
 }
 
 hudRoot.style.visibility = 'hidden';
-hud.setTrainingFrameDataVisible(false);
+syncTrainingFrameDataVisibility();
 void bootstrapPlatformProfile();
 void platform.presence.setStatus('home');
 startMenu.showHome();

@@ -15,6 +15,8 @@ import { createInitialState, getRenderSnapshot, step } from './sim/sim';
 import { sanitiseTuning } from './sim/tuning';
 import type { PlayerId, PlayersById } from './sim/types';
 import { createHud, type RollbackDiagnosticsView } from './view/hud';
+import { DEFAULT_ASSET_MANIFEST } from './view/assets/defaultManifest';
+import { preloadAssetManifest } from './view/assets/loader';
 import { createPauseMenu } from './view/pauseMenu';
 import { createOnlineDevMenu, type OnlineDiagnosticsUpdate, type OnlineDevSectionId } from './view/onlineDevMenu';
 import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay';
@@ -818,6 +820,15 @@ const startMenu = createStartMenu({
   },
 });
 startMenu.setEntitlementGate(true, null);
+void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
+  onProgress: (progress) => {
+    if (runtimeConfig.features.debugToolsEnabled && progress.loaded === progress.total) {
+      console.info(`[assets] preloaded ${progress.loaded}/${progress.total} manifest entries`);
+    }
+  },
+}).catch((error) => {
+  console.error('[assets] preload failed', error);
+});
 
 const fixedDt = 1 / 60;
 const maxAccumulatedTime = 0.25;

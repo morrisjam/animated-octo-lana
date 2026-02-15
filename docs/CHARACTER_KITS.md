@@ -49,7 +49,7 @@ Each `CharacterDefinition` now includes:
 
 ## Extension points
 1. Model and animation loading:
-   - use `character.visuals.modelId` and `character.visuals.animationSetId` in view asset loaders.
+   - use `character.visuals.modelId` and `character.visuals.animationSetId` with manifest references from `src/view/assets`.
 2. Character SFX and voice:
    - route action events to `character.audio.sfxProfileId` and `character.audio.voiceProfileId`.
 3. Special moves:

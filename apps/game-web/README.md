@@ -110,6 +110,16 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Toggle with `F1` on keyboard or `View/Back` on controller.
 - Overlay rows show startup/active/recovery timing for launch, dunk, parry, break, and special for both players.
 
+## Asset manifest loader
+
+- Manifest schema and default manifest:
+  - `src/view/assets/types.ts`
+  - `src/view/assets/defaultManifest.ts`
+- Async preloader:
+  - `src/view/assets/loader.ts`
+- Startup preload call:
+  - `src/main.ts` preloads `DEFAULT_ASSET_MANIFEST` and reports progress in debug logs.
+
 ## Replay scripts
 
 From repo root:

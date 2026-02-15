@@ -7,7 +7,7 @@
 Each arcade run stores:
 
 - player character id
-- selected AI difficulty
+- recorded AI difficulty (effective highest encountered stage difficulty for the run)
 - outcome (`completed` or `failed`)
 - completion time (seconds)
 - stage clear totals
@@ -30,3 +30,4 @@ Implementation:
 - Runs are always appended to local history storage first.
 - When account/profile services are available, local history is merged with profile history and synced back.
 - Merge deduplicates by run id and keeps newest-first ordering.
+- History sync updates only `arcadeHistory` in profile settings to avoid clobbering unrelated fields.

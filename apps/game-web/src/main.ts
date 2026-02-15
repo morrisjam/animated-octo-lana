@@ -1218,7 +1218,7 @@ function applyArcadeHistoryView(): void {
   startMenu.setArcadeHistoryView(view.headline, view.detail);
 }
 
-function buildProfileSettingsPayload(
+function buildFullProfileSettingsPayload(
   baseSettings: Record<string, unknown> | null | undefined,
   history: ArcadeRunHistory = arcadeHistory,
 ): Record<string, unknown> {
@@ -1229,6 +1229,16 @@ function buildProfileSettingsPayload(
     aiDifficulty: selectedAiDifficulty,
     arcade: selectedArcadeSettings,
     audio: audioSettings,
+    arcadeHistory: history,
+  };
+}
+
+function buildHistorySyncProfileSettingsPayload(
+  baseSettings: Record<string, unknown> | null | undefined,
+  history: ArcadeRunHistory,
+): Record<string, unknown> {
+  return {
+    ...(baseSettings ?? {}),
     arcadeHistory: history,
   };
 }
@@ -1283,7 +1293,7 @@ async function syncArcadeHistoryWithProfile(
   }
 
   const savedProfile = await platform.profile.saveProfile(accountId, {
-    settings: buildProfileSettingsPayload(remoteSettings, mergedHistory),
+    settings: buildHistorySyncProfileSettingsPayload(remoteSettings, mergedHistory),
   });
   const savedSettings = asRecord(savedProfile.settings) ?? {};
   profileSettingsCache = savedSettings;
@@ -1302,13 +1312,16 @@ function recordArcadeRunSummary(outcome: 'completed' | 'failed', summary: {
   retriesUsed: number;
   durationSeconds: number;
 }): void {
+  const recordedDifficulty = arcadeRun
+    ? resolveRecordedArcadeDifficulty(arcadeRun)
+    : selectedAiDifficulty;
   const completedAt = new Date().toISOString();
-  const runId = `${completedAt}:${selectedLoadout.P1}:${selectedAiDifficulty}:${summary.durationSeconds.toFixed(3)}:${outcome}`;
+  const runId = `${completedAt}:${selectedLoadout.P1}:${recordedDifficulty}:${summary.durationSeconds.toFixed(3)}:${outcome}`;
   const entry: ArcadeRunHistoryEntry = {
     id: runId,
     completedAt,
     playerCharacterId: selectedLoadout.P1,
-    aiDifficulty: selectedAiDifficulty,
+    aiDifficulty: recordedDifficulty,
     outcome,
     completionSeconds: Math.max(0, summary.durationSeconds),
     stagesCleared: summary.stagesCleared,
@@ -1488,6 +1501,11 @@ function getAiDifficultyRank(value: AiDifficultyId): number {
   return index >= 0 ? index : 0;
 }
 
+function aiDifficultyByRank(rank: number): AiDifficultyId {
+  const safeRank = Math.max(0, Math.min(AI_DIFFICULTY_ORDER.length - 1, Math.floor(rank)));
+  return AI_DIFFICULTY_ORDER[safeRank] ?? DEFAULT_AI_DIFFICULTY;
+}
+
 function resolveAiDifficultyForCurrentMatch(): AiDifficultyId {
   if (selectedMode !== 'arcade' || !arcadeRun) {
     return selectedAiDifficulty;
@@ -1507,6 +1525,17 @@ function resolveLoadoutForCurrentMatch(): PlayersById<CharacterId> {
     };
   }
   return selectedLoadout;
+}
+
+function resolveRecordedArcadeDifficulty(run: ArcadeRunState): AiDifficultyId {
+  let maxRank = getAiDifficultyRank(selectedAiDifficulty);
+  for (const record of run.records) {
+    const rank = getAiDifficultyRank(record.aiDifficulty);
+    if (rank > maxRank) {
+      maxRank = rank;
+    }
+  }
+  return aiDifficultyByRank(maxRank);
 }
 
 function resetRoundState(): void {
@@ -1596,7 +1625,7 @@ function beginMode(
   persistSettings();
   if (sessionAccountId) {
     void platform.profile.saveProfile(sessionAccountId, {
-      settings: buildProfileSettingsPayload(profileSettingsCache, arcadeHistory),
+      settings: buildFullProfileSettingsPayload(profileSettingsCache, arcadeHistory),
     }).then((savedProfile) => {
       profileSettingsCache = asRecord(savedProfile.settings) ?? profileSettingsCache;
     }).catch((error) => {

@@ -11,11 +11,14 @@ describe('arcade run flow', () => {
     let run = createArcadeRun({ startedAtMs: 1000 });
 
     for (let stageIndex = 0; stageIndex < run.stages.length - 1; stageIndex += 1) {
+      const expectedDifficulty = run.stages[stageIndex].aiDifficulty;
       const resolution = resolveArcadeMatch(run, 'P1', 2, 0, 1500 + stageIndex * 1000);
       expect(resolution.type).toBe('advance_stage');
       if (resolution.type === 'advance_stage') {
         run = resolution.state;
         expect(run.stageIndex).toBe(stageIndex + 1);
+        const record = run.records[run.records.length - 1];
+        expect(record?.aiDifficulty).toBe(expectedDifficulty);
       }
     }
 

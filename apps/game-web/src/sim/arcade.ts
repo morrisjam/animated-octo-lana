@@ -20,6 +20,7 @@ export interface ArcadeMatchRecord {
   stageId: string;
   stageLabel: string;
   opponentCharacterId: CharacterId;
+  aiDifficulty: AiDifficultyId;
   finalEncounter: boolean;
   winner: 'P1' | 'P2';
   p1Wins: number;
@@ -185,6 +186,7 @@ export function resolveArcadeMatch(state: ArcadeRunState, winner: 'P1' | 'P2', p
     stageId: stage.id,
     stageLabel: stage.label,
     opponentCharacterId: stage.opponentCharacterId,
+    aiDifficulty: stage.aiDifficulty,
     finalEncounter: Boolean(stage.finalEncounter),
     winner,
     p1Wins,

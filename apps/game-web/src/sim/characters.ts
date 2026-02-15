@@ -30,12 +30,15 @@ export interface CharacterDefinition {
 }
 
 export interface CharacterVisualProfile {
+  presentation: CharacterVisualPresentation;
   modelId: string;
   animationSetId: string;
   vfxProfileId: string;
   projectileVisualId: string;
   hudPortraitId: string;
 }
+
+export type CharacterVisualPresentation = '3d' | 'sprite' | 'hybrid';
 
 export interface CharacterAudioProfile {
   sfxProfileId: string;
@@ -65,7 +68,14 @@ function baseStats(): CharacterStats {
 }
 
 function baseVisuals(id: CharacterId): CharacterVisualProfile {
+  const presentationByCharacterId: Record<CharacterId, CharacterVisualPresentation> = {
+    vanguard: '3d',
+    duelist: 'sprite',
+    ace: 'hybrid',
+    warden: '3d',
+  };
   return {
+    presentation: presentationByCharacterId[id],
     modelId: `character_${id}_model`,
     animationSetId: `character_${id}_animset`,
     vfxProfileId: `character_${id}_vfx`,

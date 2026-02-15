@@ -2,12 +2,37 @@ import * as THREE from 'three';
 import type { PlayerId, RenderSnapshot } from '../sim/types';
 import type { SceneContext } from './scene';
 import { ARENA_RADIUS, DUNK_RECOVERY_ARC_DEPTH, DUNK_RECOVERY_MIN_SCALE } from '../sim/constants';
+import {
+  createCharacterVisualHandle,
+  disposeCharacterVisualNode,
+  updateCharacterVisualHandle,
+} from './characterVisual';
 
 const LIVE_PROJECTILE_IDS = new Set<number>();
+
+function ensurePlayerVisual(
+  context: SceneContext,
+  playerId: PlayerId,
+  characterId: RenderSnapshot['players']['P1']['characterId'],
+): void {
+  const current = context.playerVisuals[playerId];
+  if (current.characterId === characterId) {
+    return;
+  }
+
+  context.scene.remove(current.node);
+  disposeCharacterVisualNode(current.node);
+  const next = createCharacterVisualHandle(characterId, playerId);
+  context.playerVisuals[playerId] = next;
+  context.playerMeshes[playerId] = next.node;
+  context.scene.add(next.node);
+}
 
 function updatePlayerMeshes(context: SceneContext, snapshot: RenderSnapshot): void {
   const p1 = snapshot.players.P1;
   const p2 = snapshot.players.P2;
+  ensurePlayerVisual(context, 'P1', p1.characterId);
+  ensurePlayerVisual(context, 'P2', p2.characterId);
   const p1Arc = p1.recovering > 0 ? Math.sin(p1.recoveryProgress * Math.PI) : 0;
   const p2Arc = p2.recovering > 0 ? Math.sin(p2.recoveryProgress * Math.PI) : 0;
   const p1Z = -p1Arc * DUNK_RECOVERY_ARC_DEPTH;
@@ -18,14 +43,12 @@ function updatePlayerMeshes(context: SceneContext, snapshot: RenderSnapshot): vo
   const p1Mesh = context.playerMeshes.P1;
   p1Mesh.position.set(p1.pos.x, p1.pos.y, p1Z);
   p1Mesh.scale.setScalar(p1Scale);
-  p1Mesh.lookAt(p2.pos.x, p2.pos.y, 0);
-  p1Mesh.rotation.x = Math.PI / 2;
+  updateCharacterVisualHandle(context.playerVisuals.P1, p1, p2, snapshot.gameTime);
 
   const p2Mesh = context.playerMeshes.P2;
   p2Mesh.position.set(p2.pos.x, p2.pos.y, p2Z);
   p2Mesh.scale.setScalar(p2Scale);
-  p2Mesh.lookAt(p1.pos.x, p1.pos.y, 0);
-  p2Mesh.rotation.x = Math.PI / 2;
+  updateCharacterVisualHandle(context.playerVisuals.P2, p2, p1, snapshot.gameTime);
 }
 
 function setIndicatorState(mesh: THREE.Mesh, x: number, y: number, opacity: number, scale: number): void {
@@ -251,13 +274,19 @@ export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): vo
 }
 
 export function cleanupRender(context: SceneContext): void {
+  const playerIds: PlayerId[] = ['P1', 'P2'];
+  for (const playerId of playerIds) {
+    const visual = context.playerVisuals[playerId];
+    context.scene.remove(visual.node);
+    disposeCharacterVisualNode(visual.node);
+  }
+
   for (const mesh of context.projectileMeshes.values()) {
     context.scene.remove(mesh);
     disposeProjectileMesh(mesh);
   }
   context.projectileMeshes.clear();
 
-  const playerIds: PlayerId[] = ['P1', 'P2'];
   for (const playerId of playerIds) {
     const indicators = context.playerIndicators[playerId];
     const meshes = [indicators.parry, indicators.launch, indicators.special, indicators.break, indicators.dunk];

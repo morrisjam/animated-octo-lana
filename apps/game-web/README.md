@@ -120,6 +120,12 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Startup preload call:
   - `src/main.ts` preloads `DEFAULT_ASSET_MANIFEST` and reports progress in debug logs.
 
+## Character visual presentation adapters
+
+- Character profile data includes a presentation mode: `3d`, `sprite`, or `hybrid`.
+- Adapter interface and implementations live in `src/view/characterVisual.ts`.
+- Scene/render pipeline (`src/view/scene.ts`, `src/view/render.ts`) uses adapter handles so character visuals can swap without simulation code changes.
+
 ## Replay scripts
 
 From repo root:

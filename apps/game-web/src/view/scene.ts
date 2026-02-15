@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { PlayersById } from '../sim/types';
 import { ARENA_RADIUS } from '../sim/constants';
+import { DEFAULT_CHARACTER_LOADOUT } from '../sim/characters';
+import { createCharacterVisualHandle, type CharacterVisualHandle } from './characterVisual';
 
 const MAX_RENDER_PIXEL_RATIO = 1.25;
 
@@ -22,51 +24,14 @@ export interface SceneContext {
   launchCameraActive: boolean;
   gravityWell: THREE.Mesh;
   ring: THREE.Mesh;
-  playerMeshes: PlayersById<THREE.Group>;
+  playerVisuals: PlayersById<CharacterVisualHandle>;
+  playerMeshes: PlayersById<THREE.Object3D>;
   playerIndicators: PlayersById<PlayerIndicatorMeshes>;
   projectileMeshes: Map<number, THREE.Mesh>;
 }
 
 function getClampedPixelRatio(): number {
   return Math.min(window.devicePixelRatio || 1, MAX_RENDER_PIXEL_RATIO);
-}
-
-function makeMech(color: string, wingColor: string): THREE.Group {
-  const mech = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(1.4, 2.7, 8, 14),
-    new THREE.MeshStandardMaterial({ color, metalness: 0.35, roughness: 0.55 }),
-  );
-  body.rotation.z = Math.PI / 2;
-  mech.add(body);
-
-  const core = new THREE.Mesh(
-    new THREE.SphereGeometry(0.45, 16, 16),
-    new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: color, emissiveIntensity: 1.6 }),
-  );
-  core.position.z = 1;
-  mech.add(core);
-
-  const wingGeo = new THREE.ConeGeometry(1.2, 3.4, 3);
-  const wingMat = new THREE.MeshStandardMaterial({
-    color: wingColor,
-    transparent: true,
-    opacity: 0.6,
-    emissive: wingColor,
-    emissiveIntensity: 0.25,
-  });
-
-  const leftWing = new THREE.Mesh(wingGeo, wingMat);
-  leftWing.position.set(-0.8, 0, -0.2);
-  leftWing.rotation.set(Math.PI / 2, 0, Math.PI * 0.2);
-  mech.add(leftWing);
-
-  const rightWing = leftWing.clone();
-  rightWing.position.x *= -1;
-  rightWing.rotation.z *= -1;
-  mech.add(rightWing);
-
-  return mech;
 }
 
 function addArena(scene: THREE.Scene): { gravityWell: THREE.Mesh; ring: THREE.Mesh } {
@@ -118,13 +83,22 @@ function addStars(scene: THREE.Scene): void {
   scene.add(stars);
 }
 
-function createPlayerMeshes(scene: THREE.Scene): PlayersById<THREE.Group> {
-  const p1Mesh = makeMech('#58b6ff', '#7db7ff');
-  const p2Mesh = makeMech('#ff74b8', '#ff9fd0');
-  scene.add(p1Mesh, p2Mesh);
+function createPlayerVisuals(scene: THREE.Scene): {
+  playerVisuals: PlayersById<CharacterVisualHandle>;
+  playerMeshes: PlayersById<THREE.Object3D>;
+} {
+  const p1Visual = createCharacterVisualHandle(DEFAULT_CHARACTER_LOADOUT.P1, 'P1');
+  const p2Visual = createCharacterVisualHandle(DEFAULT_CHARACTER_LOADOUT.P2, 'P2');
+  scene.add(p1Visual.node, p2Visual.node);
   return {
-    P1: p1Mesh,
-    P2: p2Mesh,
+    playerVisuals: {
+      P1: p1Visual,
+      P2: p2Visual,
+    },
+    playerMeshes: {
+      P1: p1Visual.node,
+      P2: p2Visual.node,
+    },
   };
 }
 
@@ -177,7 +151,7 @@ export function createScene(canvas: HTMLCanvasElement): SceneContext {
 
   const { gravityWell, ring } = addArena(scene);
   addStars(scene);
-  const playerMeshes = createPlayerMeshes(scene);
+  const { playerVisuals, playerMeshes } = createPlayerVisuals(scene);
   const playerIndicators = createPlayerIndicators(scene);
 
   return {
@@ -193,6 +167,7 @@ export function createScene(canvas: HTMLCanvasElement): SceneContext {
     launchCameraActive: false,
     gravityWell,
     ring,
+    playerVisuals,
     playerMeshes,
     playerIndicators,
     projectileMeshes: new Map<number, THREE.Mesh>(),

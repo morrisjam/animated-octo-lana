@@ -3,6 +3,7 @@
 ## Goal
 Each character can own custom:
 - model and animation set
+- visual presentation mode (`3d`, `sprite`, `hybrid`)
 - VFX profile
 - SFX and voice profile
 - frame data
@@ -18,6 +19,7 @@ without changing core simulation flow.
 Each `CharacterDefinition` now includes:
 - `stats`: gameplay multipliers (including fuel capacity and fuel multipliers)
 - `visuals`: model and VFX identifiers
+  - `presentation`: `3d`, `sprite`, or `hybrid`
 - `audio`: SFX, voice, and theme identifiers
 - `moves`:
   - `launch`: startup, active, hit and whiff recovery frames
@@ -45,6 +47,7 @@ Each `CharacterDefinition` now includes:
   - boost and super boost movement/fuel values from character `moves.boost` and `moves.superBoost`
 - Default special is a single projectile placeholder, so current gameplay still works while allowing future non-projectile specials.
 - HUD training frame panel reads launch/dunk/parry/break/special frame data per selected character and supports keyboard/controller toggle in training mode.
+- Renderer reads visual presentation profile through adapter interface so 3D, sprite, and hybrid fighters can coexist.
 - Renderer reads special projectile `visualId` from snapshot so projectile art can differ by character.
 
 ## Extension points

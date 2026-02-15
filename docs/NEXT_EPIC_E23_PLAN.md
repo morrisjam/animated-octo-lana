@@ -52,4 +52,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S1.11` (Move frame-data registry) is complete.
 - `S1.12` (Frame data visualiser overlay) is complete.
 - `S1.13` (Asset manifest and loader abstraction) is complete.
-- Next recommended slice: `S1.14` Character visual profile abstraction.
+- `S1.14` (Character visual profile abstraction) is complete.
+- Next recommended slice: `S1.15` VFX event binding and tuning presets.

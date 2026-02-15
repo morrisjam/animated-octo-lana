@@ -46,4 +46,5 @@ Status: complete (`S2.7`, `S2.8`, `S2.9`, `S2.17`, `S2.18`, `S2.19`, `S2.20` com
 - `S2.28` (Steam identity link and account merge policy) is complete.
 - `S1.4` (deterministic RNG policy) is complete.
 - `S1.5` (full state serialise and restore) is complete.
-- Next recommended slice: `S1.6` checksum replay runner hardening and divergence report polish.
+- `S1.6` (checksum replay runner) is complete.
+- Next recommended slice: `S1.9` Steam sign-in path integration hardening.

@@ -153,6 +153,22 @@ html, body {
   margin-top: 4px;
 }
 
+.voice-subtitle {
+  position: fixed;
+  left: 50%;
+  bottom: 14%;
+  transform: translateX(-50%);
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(6, 12, 30, 0.86);
+  border: 1px solid rgba(167, 195, 255, 0.28);
+  color: #e7f0ff;
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
 .start-menu {
   position: fixed;
   inset: 0;

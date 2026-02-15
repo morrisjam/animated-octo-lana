@@ -1,9 +1,12 @@
 import { createDefaultTuning, sanitiseTuning } from '../sim/tuning';
 import type { GameTuning } from '../sim/types';
+import type { AudioSettings, DynamicRangeMode } from './audio/settings';
 
 interface PauseMenuOptions {
   getTuning(): GameTuning;
   setTuning(tuning: GameTuning): void;
+  getAudioSettings(): AudioSettings;
+  setAudioSettings(settings: AudioSettings): void;
   enableDebugTab?: boolean;
   onRestartTraining?(): void;
 }
@@ -14,6 +17,11 @@ interface TuningField {
   step: number;
   min: number;
   max: number;
+}
+
+interface AudioVolumeField {
+  key: keyof Pick<AudioSettings, 'masterVolume' | 'musicVolume' | 'sfxVolume' | 'voiceVolume'>;
+  label: string;
 }
 
 const TUNING_FIELDS: TuningField[] = [
@@ -36,7 +44,14 @@ const TUNING_FIELDS: TuningField[] = [
   { key: 'dunkRecoveryMoveSpeed', label: 'Dunk Recovery Move Speed', step: 0.5, min: 1, max: 300 },
 ];
 
-type PauseTabId = 'pause' | 'bindings' | 'debug';
+const AUDIO_VOLUME_FIELDS: AudioVolumeField[] = [
+  { key: 'masterVolume', label: 'Master Volume' },
+  { key: 'musicVolume', label: 'Music Volume' },
+  { key: 'sfxVolume', label: 'SFX Volume' },
+  { key: 'voiceVolume', label: 'Voice Volume' },
+];
+
+type PauseTabId = 'pause' | 'audio' | 'bindings' | 'debug';
 
 export class PauseMenu {
   private readonly root: HTMLDivElement;
@@ -46,6 +61,12 @@ export class PauseMenu {
   private readonly restartTrainingButton!: HTMLButtonElement;
   private readonly tabPanels: Record<PauseTabId, HTMLDivElement>;
   private readonly fieldInputs = new Map<keyof GameTuning, HTMLInputElement>();
+  private readonly audioVolumeInputs = new Map<AudioVolumeField['key'], HTMLInputElement>();
+  private readonly audioToggleInputs!: {
+    voiceDuckingEnabled: HTMLInputElement;
+    subtitlesEnabled: HTMLInputElement;
+    dynamicRangeMode: HTMLSelectElement;
+  };
   private paused = false;
   private canRestartTraining = false;
   private activeTab: PauseTabId = 'pause';
@@ -70,24 +91,28 @@ export class PauseMenu {
     panel.appendChild(tabs);
 
     const pausePanel = this.createPauseTab();
+    const audioPanel = this.createAudioTab();
     const bindingsPanel = this.createBindingsTab();
     const debugPanel = this.createDebugTab();
     this.tabPanels = {
       pause: pausePanel,
+      audio: audioPanel,
       bindings: bindingsPanel,
       debug: debugPanel,
     };
-    panel.append(pausePanel, bindingsPanel, debugPanel);
+    panel.append(pausePanel, audioPanel, bindingsPanel, debugPanel);
 
     const pauseButton = this.createTabButton('Pause', 'pause');
+    const audioButton = this.createTabButton('Audio', 'audio');
     const bindingsButton = this.createTabButton('Controller Bindings', 'bindings');
     const debugButton = this.createTabButton('Debug Tuning', 'debug');
     if (!this.debugTabEnabled) {
       debugButton.hidden = true;
     }
-    tabs.append(pauseButton, bindingsButton, debugButton);
+    tabs.append(pauseButton, audioButton, bindingsButton, debugButton);
     this.tabButtons = {
       pause: pauseButton,
+      audio: audioButton,
       bindings: bindingsButton,
       debug: debugButton,
     };
@@ -95,6 +120,7 @@ export class PauseMenu {
     document.body.appendChild(this.root);
     this.setActiveTab('pause');
     this.syncInputsFromTuning();
+    this.syncInputsFromAudioSettings();
   }
 
   isPaused(): boolean {
@@ -111,6 +137,7 @@ export class PauseMenu {
     if (paused) {
       this.setActiveTab('pause');
       this.syncInputsFromTuning();
+      this.syncInputsFromAudioSettings();
       if (this.copyStatus) {
         this.copyStatus.textContent = '';
       }
@@ -137,10 +164,12 @@ export class PauseMenu {
     }
     this.activeTab = tabId;
     this.tabPanels.pause.hidden = tabId !== 'pause';
+    this.tabPanels.audio.hidden = tabId !== 'audio';
     this.tabPanels.bindings.hidden = tabId !== 'bindings';
     this.tabPanels.debug.hidden = tabId !== 'debug' || !this.debugTabEnabled;
 
     this.tabButtons.pause.classList.toggle('active', tabId === 'pause');
+    this.tabButtons.audio.classList.toggle('active', tabId === 'audio');
     this.tabButtons.bindings.classList.toggle('active', tabId === 'bindings');
     this.tabButtons.debug.classList.toggle('active', tabId === 'debug' && this.debugTabEnabled);
   }
@@ -182,7 +211,84 @@ export class PauseMenu {
     });
     this.restartTrainingButton = restartTraining;
 
-    tab.append(resume, restartTraining, toBindings, toDebug);
+    tab.append(resume, restartTraining, toAudio, toBindings, toDebug);
+    return tab;
+  }
+
+  private createAudioTab(): HTMLDivElement {
+    const tab = document.createElement('div');
+    tab.className = 'pause-tab-panel';
+
+    const title = document.createElement('h3');
+    title.textContent = 'Audio And Accessibility';
+    tab.appendChild(title);
+
+    const volumeGrid = document.createElement('div');
+    volumeGrid.className = 'tuning-grid';
+    tab.appendChild(volumeGrid);
+
+    for (const field of AUDIO_VOLUME_FIELDS) {
+      const row = document.createElement('label');
+      row.className = 'tuning-row';
+      const text = document.createElement('span');
+      text.textContent = field.label;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = '0';
+      input.max = '100';
+      input.step = '1';
+      input.addEventListener('input', () => {
+        const ratio = Number(input.value) / 100;
+        this.updateAudioSetting(field.key, ratio);
+      });
+      row.append(text, input);
+      volumeGrid.appendChild(row);
+      this.audioVolumeInputs.set(field.key, input);
+    }
+
+    const dynamicRangeRow = document.createElement('label');
+    dynamicRangeRow.className = 'tuning-row';
+    const dynamicRangeText = document.createElement('span');
+    dynamicRangeText.textContent = 'Dynamic Range';
+    const dynamicRangeSelect = document.createElement('select');
+    const optionWide = document.createElement('option');
+    optionWide.value = 'wide';
+    optionWide.textContent = 'Wide';
+    const optionReduced = document.createElement('option');
+    optionReduced.value = 'reduced';
+    optionReduced.textContent = 'Reduced';
+    dynamicRangeSelect.append(optionWide, optionReduced);
+    dynamicRangeSelect.addEventListener('change', () => {
+      this.updateAudioSetting('dynamicRangeMode', dynamicRangeSelect.value as DynamicRangeMode);
+    });
+    dynamicRangeRow.append(dynamicRangeText, dynamicRangeSelect);
+    tab.appendChild(dynamicRangeRow);
+
+    const duckingRow = document.createElement('label');
+    duckingRow.className = 'binding-row';
+    const duckingToggle = document.createElement('input');
+    duckingToggle.type = 'checkbox';
+    duckingToggle.addEventListener('change', () => {
+      this.updateAudioSetting('voiceDuckingEnabled', duckingToggle.checked);
+    });
+    duckingRow.append(duckingToggle, document.createTextNode(' Voice ducking during callouts'));
+    tab.appendChild(duckingRow);
+
+    const subtitlesRow = document.createElement('label');
+    subtitlesRow.className = 'binding-row';
+    const subtitlesToggle = document.createElement('input');
+    subtitlesToggle.type = 'checkbox';
+    subtitlesToggle.addEventListener('change', () => {
+      this.updateAudioSetting('subtitlesEnabled', subtitlesToggle.checked);
+    });
+    subtitlesRow.append(subtitlesToggle, document.createTextNode(' Voice subtitles'));
+    tab.appendChild(subtitlesRow);
+
+    this.audioToggleInputs = {
+      voiceDuckingEnabled: duckingToggle,
+      subtitlesEnabled: subtitlesToggle,
+      dynamicRangeMode: dynamicRangeSelect,
+    };
     return tab;
   }
 
@@ -301,6 +407,30 @@ export class PauseMenu {
     }
   }
 
+  private updateAudioSetting(key: keyof AudioSettings, value: AudioSettings[keyof AudioSettings]): void {
+    const current = this.options.getAudioSettings();
+    const next = {
+      ...current,
+      [key]: value,
+    } as AudioSettings;
+    this.options.setAudioSettings(next);
+    this.syncInputsFromAudioSettings();
+  }
+
+  private syncInputsFromAudioSettings(): void {
+    const settings = this.options.getAudioSettings();
+    for (const field of AUDIO_VOLUME_FIELDS) {
+      const input = this.audioVolumeInputs.get(field.key);
+      if (!input) {
+        continue;
+      }
+      input.value = String(Math.round(settings[field.key] * 100));
+    }
+    this.audioToggleInputs.voiceDuckingEnabled.checked = settings.voiceDuckingEnabled;
+    this.audioToggleInputs.subtitlesEnabled.checked = settings.subtitlesEnabled;
+    this.audioToggleInputs.dynamicRangeMode.value = settings.dynamicRangeMode;
+  }
+
   private async copyTuningToClipboard(): Promise<void> {
     const tuning = this.options.getTuning();
     const payload = JSON.stringify(tuning, null, 2);
@@ -330,3 +460,8 @@ export class PauseMenu {
 export function createPauseMenu(options: PauseMenuOptions): PauseMenu {
   return new PauseMenu(options);
 }
+    const toAudio = document.createElement('button');
+    toAudio.type = 'button';
+    toAudio.className = 'pause-action';
+    toAudio.textContent = 'Audio Settings';
+    toAudio.addEventListener('click', () => this.setActiveTab('audio'));

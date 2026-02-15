@@ -2,6 +2,7 @@ import type { RenderSnapshot } from '../sim/types';
 import { buildTrainingFrameDataModel } from './trainingFrameData';
 
 interface HudElements {
+  root: HTMLDivElement;
   p1Fuel: HTMLDivElement;
   p2Fuel: HTMLDivElement;
   p1Breaks: HTMLDivElement;
@@ -9,6 +10,7 @@ interface HudElements {
   status: HTMLDivElement;
   frameData: HTMLDivElement;
   rollbackDiagnostics: HTMLDivElement;
+  voiceSubtitle: HTMLDivElement;
 }
 
 export interface RollbackDiagnosticsView {
@@ -37,6 +39,8 @@ export interface HudController {
   update(snapshot: RenderSnapshot): void;
   setTrainingFrameDataVisible(visible: boolean): void;
   setRollbackDiagnosticsVisible(visible: boolean): void;
+  setVoiceSubtitlesEnabled(enabled: boolean): void;
+  showVoiceSubtitle(text: string): void;
   updateRollbackDiagnostics(
     diagnostics: RollbackDiagnosticsView | null,
     memoryDiagnostics?: RuntimeMemoryDiagnosticsView | null,
@@ -72,7 +76,13 @@ function getRequiredElement<T extends Element>(selector: string): T {
 }
 
 export function createHud(): HudController {
+  const root = getRequiredElement<HTMLDivElement>('#hud');
+  const voiceSubtitle = document.createElement('div');
+  voiceSubtitle.className = 'voice-subtitle';
+  voiceSubtitle.hidden = true;
+  root.appendChild(voiceSubtitle);
   const elements: HudElements = {
+    root,
     p1Fuel: getRequiredElement<HTMLDivElement>('#p1Fuel'),
     p2Fuel: getRequiredElement<HTMLDivElement>('#p2Fuel'),
     p1Breaks: getRequiredElement<HTMLDivElement>('#p1Breaks'),
@@ -80,10 +90,13 @@ export function createHud(): HudController {
     status: getRequiredElement<HTMLDivElement>('#status'),
     frameData: getRequiredElement<HTMLDivElement>('#frameData'),
     rollbackDiagnostics: getRequiredElement<HTMLDivElement>('#rollbackDiagnostics'),
+    voiceSubtitle,
   };
   elements.frameData.hidden = true;
   elements.rollbackDiagnostics.hidden = true;
   let trainingFrameDataVisible = false;
+  let voiceSubtitlesEnabled = true;
+  let subtitleHideAtSeconds = 0;
   let frameDataCharacterSignature = '';
 
   function renderTrainingFrameData(snapshot: RenderSnapshot): void {
@@ -112,6 +125,20 @@ export function createHud(): HudController {
     },
     setRollbackDiagnosticsVisible(visible: boolean): void {
       elements.rollbackDiagnostics.hidden = !visible;
+    },
+    setVoiceSubtitlesEnabled(enabled: boolean): void {
+      voiceSubtitlesEnabled = enabled;
+      if (!enabled) {
+        elements.voiceSubtitle.hidden = true;
+      }
+    },
+    showVoiceSubtitle(text: string): void {
+      if (!voiceSubtitlesEnabled || text.trim().length === 0) {
+        return;
+      }
+      elements.voiceSubtitle.textContent = text;
+      elements.voiceSubtitle.hidden = false;
+      subtitleHideAtSeconds = performance.now() / 1000 + 2.4;
     },
     updateRollbackDiagnostics(
       diagnostics: RollbackDiagnosticsView | null,
@@ -166,6 +193,9 @@ export function createHud(): HudController {
       }
       if (trainingFrameDataVisible) {
         renderTrainingFrameData(snapshot);
+      }
+      if (!elements.voiceSubtitle.hidden && performance.now() / 1000 >= subtitleHideAtSeconds) {
+        elements.voiceSubtitle.hidden = true;
       }
     },
   };

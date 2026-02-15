@@ -33,6 +33,11 @@ import type { CombatVfxEvent } from './view/vfx/types';
 import { createMusicStateController, type MusicState } from './view/audio/musicState';
 import { createVoiceCalloutSystem } from './view/audio/voiceLines';
 import {
+  DEFAULT_AUDIO_SETTINGS,
+  sanitiseAudioSettings,
+  type AudioSettings,
+} from './view/audio/settings';
+import {
   createStartMenu,
   type GameMode,
   type OnlineDevMenuTarget,
@@ -51,10 +56,12 @@ interface StoredSettings {
     P1?: string;
     P2?: string;
   };
+  audio?: unknown;
 }
 interface LoadedSettings {
   mode: GameMode;
   loadout: PlayersById<CharacterId>;
+  audio: AudioSettings;
 }
 
 const SETTINGS_STORAGE_KEY = 'gravity_well.settings.v1';
@@ -106,9 +113,14 @@ if (!matchInfo || !hudRoot) {
 const audioSystem = createAudioSystem({
   missingEventPolicy: runtimeConfig.features.debugToolsEnabled ? 'throw' : 'warn',
 });
+let audioSettings: AudioSettings = DEFAULT_AUDIO_SETTINGS;
+let voiceDuckingUntilSeconds = 0;
 const voiceCalloutSystem = createVoiceCalloutSystem({
   locale: typeof navigator?.language === 'string' ? navigator.language : 'en-US',
   emitAudioEvent: (event) => {
+    if (event.type === 'voice.callout' && audioSettings.voiceDuckingEnabled) {
+      voiceDuckingUntilSeconds = performance.now() / 1000 + 0.55;
+    }
     audioSystem.emit(event);
   },
 });
@@ -133,12 +145,15 @@ const sceneContext = createScene(canvas, {
           ? 'dunk_hit'
           : null;
     if (calloutEvent) {
-      voiceCalloutSystem.trigger({
+      const callout = voiceCalloutSystem.trigger({
         playerId: event.playerId,
         characterId: event.characterId,
         event: calloutEvent,
         timeSeconds: performance.now() / 1000,
       });
+      if (callout && audioSettings.subtitlesEnabled) {
+        hud.showVoiceSubtitle(callout.text);
+      }
     }
   },
 });
@@ -149,6 +164,11 @@ const input = createCombinedInput([
 ]);
 const enabledModes = getEnabledModes();
 const loadedSettings = loadSettings();
+audioSettings = loadedSettings.audio;
+audioSystem.setBusVolume('master', audioSettings.masterVolume);
+audioSystem.setBusVolume('music', audioSettings.musicVolume);
+audioSystem.setBusVolume('sfx', audioSettings.sfxVolume);
+audioSystem.setBusVolume('voice', audioSettings.voiceVolume);
 let selectedLoadout: PlayersById<CharacterId> = loadedSettings.loadout;
 const seedParam = new URLSearchParams(window.location.search).get('seed');
 const forcedSeed = seedParam !== null ? Number(seedParam) : undefined;
@@ -306,12 +326,19 @@ const pauseMenu = createPauseMenu({
   setTuning: (tuning) => {
     state.tuning = sanitiseTuning(tuning);
   },
+  getAudioSettings: () => audioSettings,
+  setAudioSettings: (settings) => {
+    audioSettings = sanitiseAudioSettings(settings);
+    hud.setVoiceSubtitlesEnabled(audioSettings.subtitlesEnabled);
+    persistSettings();
+  },
   enableDebugTab: runtimeConfig.features.debugToolsEnabled,
   onRestartTraining: () => {
     restartTrainingRound();
   },
 });
 pauseMenu.setCanRestartTraining(selectedMode === 'training');
+hud.setVoiceSubtitlesEnabled(audioSettings.subtitlesEnabled);
 const replayViewer = createReplayViewer({
   onTogglePause: () => {
     replayPaused = !replayPaused;
@@ -1013,6 +1040,7 @@ function loadSettings(): LoadedSettings {
       P1: DEFAULT_CHARACTER_LOADOUT.P1,
       P2: DEFAULT_CHARACTER_LOADOUT.P2,
     },
+    audio: DEFAULT_AUDIO_SETTINGS,
   };
 
   const persisted = platform.persistence.readJson<StoredSettings>(SETTINGS_STORAGE_KEY);
@@ -1027,6 +1055,7 @@ function loadSettings(): LoadedSettings {
   const parsedP2 = parsed.loadout?.P2;
   const p1 = isCharacterId(parsedP1) ? parsedP1 : DEFAULT_CHARACTER_LOADOUT.P1;
   const p2 = isCharacterId(parsedP2) ? parsedP2 : DEFAULT_CHARACTER_LOADOUT.P2;
+  const audio = sanitiseAudioSettings(parsed.audio);
 
   return {
     mode,
@@ -1034,6 +1063,7 @@ function loadSettings(): LoadedSettings {
       P1: p1,
       P2: p2,
     },
+    audio,
   };
 }
 
@@ -1044,6 +1074,7 @@ function persistSettings(): void {
       P1: selectedLoadout.P1,
       P2: selectedLoadout.P2,
     },
+    audio: audioSettings,
   };
   const result = platform.persistence.writeJson(SETTINGS_STORAGE_KEY, payload);
   if (!result.ok && runtimeConfig.features.debugToolsEnabled) {
@@ -1187,12 +1218,15 @@ function resetRoundState(): void {
   const showDebugDiagnostics = runtimeConfig.features.debugToolsEnabled;
   hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
   hud.updateRollbackDiagnostics(showDebugDiagnostics && rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null);
-  voiceCalloutSystem.trigger({
+  const roundStartCallout = voiceCalloutSystem.trigger({
     playerId: 'P1',
     characterId: state.players.P1.characterId,
     event: 'round_start',
     timeSeconds: performance.now() / 1000,
   });
+  if (roundStartCallout && audioSettings.subtitlesEnabled) {
+    hud.showVoiceSubtitle(roundStartCallout.text);
+  }
 }
 
 function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
@@ -1219,6 +1253,7 @@ function beginMode(mode: GameMode, loadout?: PlayersById<CharacterId>): void {
       settings: {
         mode: selectedMode,
         loadout: selectedLoadout,
+        audio: audioSettings,
       },
     });
   }
@@ -1511,6 +1546,28 @@ function resolveAdaptiveMusicState(phase: AppPhase, snapshot: RenderSnapshot): M
   return 'neutral';
 }
 
+function getDynamicRangeMixMultipliers(mode: AudioSettings['dynamicRangeMode']): {
+  master: number;
+  music: number;
+  sfx: number;
+  voice: number;
+} {
+  if (mode === 'reduced') {
+    return {
+      master: 0.95,
+      music: 0.82,
+      sfx: 0.76,
+      voice: 1,
+    };
+  }
+  return {
+    master: 1,
+    music: 1,
+    sfx: 1,
+    voice: 1,
+  };
+}
+
 function updateOnlineDiagnosticsOverlay(): void {
   if (!diagnosticsOverlay) {
     return;
@@ -1587,12 +1644,15 @@ function onRoundWin(winner: PlayerId): void {
   if (p1RoundWins >= 2 || p2RoundWins >= 2) {
     persistRollbackDiagnostics('match_over');
     appPhase = 'match_over';
-    voiceCalloutSystem.trigger({
+    const matchWinCallout = voiceCalloutSystem.trigger({
       playerId: winner,
       characterId: state.players[winner].characterId,
       event: 'match_win',
       timeSeconds: performance.now() / 1000,
     });
+    if (matchWinCallout && audioSettings.subtitlesEnabled) {
+      hud.showVoiceSubtitle(matchWinCallout.text);
+    }
     void platform.presence.setStatus('match_over');
     startMenu.showMatchOver(winner, p1RoundWins, p2RoundWins);
     hudRoot.style.visibility = 'hidden';
@@ -1760,7 +1820,14 @@ function tick(nowMs: number): void {
   const musicClockSeconds = usesSimulationClock ? snapshot.gameTime : nowSeconds;
   const nextMusicState = resolveAdaptiveMusicState(appPhase, snapshot);
   musicStateController.setState(nextMusicState, musicClockSeconds);
-  audioSystem.setBusVolume('music', musicStateController.tick(musicClockSeconds));
+  const dynamicRange = getDynamicRangeMixMultipliers(audioSettings.dynamicRangeMode);
+  const duckingActive = audioSettings.voiceDuckingEnabled && nowSeconds < voiceDuckingUntilSeconds;
+  const duckingFactor = duckingActive ? 0.58 : 1;
+  const musicStateGain = musicStateController.tick(musicClockSeconds);
+  audioSystem.setBusVolume('master', audioSettings.masterVolume * dynamicRange.master);
+  audioSystem.setBusVolume('music', audioSettings.musicVolume * dynamicRange.music * musicStateGain * duckingFactor);
+  audioSystem.setBusVolume('sfx', audioSettings.sfxVolume * dynamicRange.sfx * duckingFactor);
+  audioSystem.setBusVolume('voice', audioSettings.voiceVolume * dynamicRange.voice);
 
   renderFrame(sceneContext, snapshot);
   const memoryDiagnostics = runtimeConfig.features.debugToolsEnabled

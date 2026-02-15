@@ -150,6 +150,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Missing route diagnostics are explicit; debug mode uses strict fail behavior.
 - Adaptive music state controller (`src/view/audio/musicState.ts`) switches `menu`, `neutral`, `launch`, and `end` states with configurable fades.
 - Voice callout system (`src/view/audio/voiceLines.ts`) provides locale fallback, priority, cooldown, and anti-spam line selection per character voice profile.
+- Pause menu audio tab exposes persistent master/music/SFX/voice sliders, voice ducking toggle, dynamic range mode, and subtitle toggle.
 
 ## Replay scripts
 

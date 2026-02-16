@@ -82,7 +82,7 @@ jobs:
           echo "backup_dir=${OUT_DIR}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload backup artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ops-backup-${{ github.run_id }}
           path: ${{ steps.backup.outputs.backup_dir }}

@@ -61,7 +61,7 @@ jobs:
           tar -czf steam-artifacts/gravity-well-steam-${{ github.sha }}.tar.gz -C apps/game-web/steam-artifact .
 
       - name: Upload Steam artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: steam-package-${{ github.sha }}
           path: steam-artifacts/gravity-well-steam-${{ github.sha }}.tar.gz

@@ -176,8 +176,13 @@ describe('dunk move rules', () => {
 });
 
 describe('special move rules', () => {
-  test('default special still spawns a projectile placeholder', () => {
-    const state = createInitialState();
+  test('projectile special still spawns a projectile placeholder for projectile archetypes', () => {
+    const state = createInitialState({
+      loadout: {
+        P1: 'ace',
+        P2: 'duelist',
+      },
+    });
     state.players.P1.pos = { x: 0, y: 0 };
     state.players.P2.pos = { x: 30, y: 0 };
 
@@ -189,8 +194,13 @@ describe('special move rules', () => {
     expect(state.players.P1.specialFlash).toBeGreaterThan(0);
   });
 
-  test('special respects cooldown and cannot be spammed instantly', () => {
-    const state = createInitialState();
+  test('projectile special respects cooldown and cannot be spammed instantly', () => {
+    const state = createInitialState({
+      loadout: {
+        P1: 'ace',
+        P2: 'duelist',
+      },
+    });
     state.players.P1.pos = { x: 0, y: 0 };
     state.players.P2.pos = { x: 30, y: 0 };
 
@@ -202,6 +212,53 @@ describe('special move rules', () => {
     expect(state.projectiles.length).toBe(1);
   });
 
+  test('vanguard special grants a guard window instead of spawning a projectile', () => {
+    const state = createInitialState({
+      loadout: {
+        P1: 'vanguard',
+        P2: 'duelist',
+      },
+    });
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 20, y: 0 };
+
+    const input = neutralInput();
+    input.p1.special = true;
+    step(state, input, FIXED_DT);
+    runSteps(
+      state,
+      neutralInput(),
+      CHARACTER_BY_ID.vanguard.moves.special.timing.startupFrames + CHARACTER_BY_ID.vanguard.moves.special.timing.activeFrames + 1,
+    );
+
+    expect(state.players.P1.parry).toBeGreaterThan(0);
+    expect(state.projectiles.length).toBe(0);
+  });
+
+  test('duelist special resolves as a forward dash and does not spawn a projectile', () => {
+    const state = createInitialState({
+      loadout: {
+        P1: 'duelist',
+        P2: 'vanguard',
+      },
+    });
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 20, y: 0 };
+
+    const input = neutralInput();
+    input.p1.special = true;
+    step(state, input, FIXED_DT);
+    runSteps(
+      state,
+      neutralInput(),
+      CHARACTER_BY_ID.duelist.moves.special.timing.startupFrames + 2,
+    );
+
+    expect(state.players.P1.pos.x).toBeGreaterThan(0.5);
+    expect(Math.abs(state.players.P1.pos.y)).toBeLessThan(0.001);
+    expect(state.projectiles.length).toBe(0);
+  });
+
   test('special behavior dispatch is keyed by behaviorId, not kind', () => {
     const originalSpecial = CHARACTER_BY_ID.vanguard.moves.special;
     CHARACTER_BY_ID.vanguard.moves.special = {
@@ -209,6 +266,7 @@ describe('special move rules', () => {
       behaviorId: 'special.projectile.v1',
       kind: 'block',
       block: { guardFrames: 30 },
+      projectile: CHARACTER_BY_ID.ace.moves.special.projectile,
     };
 
     try {
@@ -219,6 +277,11 @@ describe('special move rules', () => {
       const input = neutralInput();
       input.p1.special = true;
       step(state, input, FIXED_DT);
+      runSteps(
+        state,
+        neutralInput(),
+        CHARACTER_BY_ID.vanguard.moves.special.timing.startupFrames + 2,
+      );
 
       expect(state.projectiles.length).toBe(1);
       expect(state.players.P1.parry).toBe(0);
@@ -253,9 +316,13 @@ describe('super boost commit tracking', () => {
     runSteps(noCommitState, noCommitInput, settleSteps);
     runSteps(commitState, noCommitInput, settleSteps);
 
+    const superFuelScale = CHARACTER_BY_ID.vanguard.stats.superFuelMultiplier;
+    const expectedPenaltyGap = CHARACTER_BY_ID.vanguard.moves.superBoost.nonCommitPenalty * superFuelScale;
+
     expect(noCommitState.players.P1.superBoost).toBe(0);
     expect(commitState.players.P1.superBoost).toBe(0);
-    expect(commitState.players.P1.fuel - noCommitState.players.P1.fuel).toBeGreaterThan(1.9);
+    expect(commitState.players.P1.fuel).toBeGreaterThan(noCommitState.players.P1.fuel);
+    expect(commitState.players.P1.fuel - noCommitState.players.P1.fuel).toBeGreaterThan(expectedPenaltyGap * 0.6);
   });
 });
 

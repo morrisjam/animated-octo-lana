@@ -9,6 +9,7 @@
     "migrations:compat": "tsx scripts/checkMigrationCompatibility.ts",
     "season:reset": "tsx scripts/rankedSeasonReset.ts",
     "slo:report": "tsx scripts/sloWeeklyReport.ts",
+    "smoke:ranked-online": "tsx scripts/rankedOnlineSmoke.ts",
     "deploy:health-gate": "tsx scripts/deploymentHealthGate.ts",
     "test": "node --test --import tsx src/**/*.test.ts"
   },

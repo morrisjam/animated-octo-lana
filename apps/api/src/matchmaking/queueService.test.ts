@@ -330,6 +330,52 @@ test('validateSessionToken rejects invalid token', () => {
   assert.equal(result.error.code, 'invalid_token');
 });
 
+test('validateSessionToken can allow resolved sessions and expired tokens for post-match flows', () => {
+  let nowMs = 1_000_000;
+  const queue = createMatchmakingQueueService({
+    sessionTtlSeconds: 2,
+    sessionTokenTtlSeconds: 1,
+    now: () => nowMs,
+  });
+  queue.join({
+    accountId: ACCOUNT_1,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  });
+  const matched = expectMatched(queue.join({
+    accountId: ACCOUNT_2,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  }));
+
+  nowMs += 3_000;
+  const strictResult = queue.validateSessionToken(
+    matched.matchStart.sessionId,
+    ACCOUNT_2,
+    matched.matchStart.sessionToken,
+  );
+  assert.equal(strictResult.ok, false);
+  if (strictResult.ok) {
+    throw new Error('Expected strict validation failure after session resolution.');
+  }
+  assert.equal(strictResult.error.code, 'session_resolved');
+
+  const relaxedResult = queue.validateSessionToken(
+    matched.matchStart.sessionId,
+    ACCOUNT_2,
+    matched.matchStart.sessionToken,
+    {
+      allowResolved: true,
+      allowExpiredToken: true,
+    },
+  );
+  assert.equal(relaxedResult.ok, true);
+  if (!relaxedResult.ok) {
+    throw new Error('Expected relaxed validation success for post-match flow.');
+  }
+  assert.equal(relaxedResult.value.status, 'resolved');
+});
+
 test('reconnect attempt fails when session token expires', () => {
   let nowMs = 1_000_000;
   const queue = createMatchmakingQueueService({

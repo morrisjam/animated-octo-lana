@@ -124,9 +124,152 @@ function makePlaceholderCharacter(
   };
 }
 
+function makeVanguardCharacter(): CharacterDefinition {
+  const visuals = baseVisuals('vanguard');
+  const moves = baseMoves(visuals.projectileVisualId);
+  moves.launch.startupFrames = 7;
+  moves.launch.recoveryOnHitFrames = 28;
+  moves.launch.recoveryOnWhiffFrames = 40;
+  moves.dunk.startupFrames = 31;
+  moves.dunk.recoveryOnWhiffFrames = 62;
+  moves.dunk.hitRange = 8.2;
+  moves.parry.activeFrames = 14;
+  moves.parry.recoveryFrames = 11;
+  moves.break.recoveryFrames = 18;
+  moves.break.velocityRetain = 0.18;
+  moves.movement.fuelPerSecond = 0.58;
+  moves.special = {
+    id: 'guard_bastion',
+    label: 'Guard Bastion',
+    behaviorId: 'special.block_guard.v1',
+    kind: 'block',
+    fuelCost: 7,
+    timing: {
+      startupFrames: 4,
+      activeFrames: 10,
+      recoveryFrames: 18,
+      cooldownFrames: 40,
+    },
+    size: {
+      range: 10,
+      radius: 1.5,
+      width: 2.4,
+      length: 2.4,
+    },
+    block: {
+      guardFrames: 20,
+    },
+  };
+  moves.boost.holdSpeedMultiplier = 0.95;
+  moves.boost.holdFuelPerSecond = 0.18;
+  moves.superBoost.holdSpeedMultiplier = 0.94;
+  moves.superBoost.startFuelCost = 6.5;
+  moves.superBoost.travelFuelPerDistance = 0.052;
+  moves.superBoost.nonCommitPenalty = 2.2;
+  return {
+    id: 'vanguard',
+    displayName: 'Vanguard',
+    blurb: 'Defensive anchor that absorbs pressure, resets spacing, and punishes overextension.',
+    mechanicsTag: 'defensive anchor',
+    stats: {
+      fuelCapacityMultiplier: 1.1,
+      moveAccelMultiplier: 0.92,
+      boostSpeedMultiplier: 0.95,
+      superBoostSpeedMultiplier: 0.96,
+      launchBasePowerMultiplier: 1.08,
+      launchChainBonusMultiplier: 1,
+      launchDurationTakenMultiplier: 0.92,
+      specialFuelCostMultiplier: 1.05,
+      superFuelMultiplier: 1.02,
+      dunkRecoveryFuelMultiplier: 1.1,
+    },
+    visuals,
+    audio: baseAudio('vanguard'),
+    moves,
+    specials: [
+      { id: 'guard_bastion', label: 'Guard Bastion', enabled: true },
+      { id: 'special_beta', label: 'Special Beta', enabled: false },
+    ],
+  };
+}
+
+function makeDuelistCharacter(): CharacterDefinition {
+  const visuals = baseVisuals('duelist');
+  const moves = baseMoves(visuals.projectileVisualId);
+  moves.launch.startupFrames = 5;
+  moves.launch.recoveryOnHitFrames = 26;
+  moves.launch.recoveryOnWhiffFrames = 38;
+  moves.dunk.startupFrames = 26;
+  moves.dunk.recoveryOnHitFrames = 22;
+  moves.dunk.recoveryOnWhiffFrames = 58;
+  moves.dunk.hitRange = 8.8;
+  moves.parry.activeFrames = 9;
+  moves.parry.recoveryFrames = 15;
+  moves.parry.counterStunFrames = 42;
+  moves.break.recoveryFrames = 28;
+  moves.break.velocityRetain = 0.36;
+  moves.movement.fuelPerSecond = 0.72;
+  moves.special = {
+    id: 'pressure_dash',
+    label: 'Pressure Dash',
+    behaviorId: 'special.movement_dash.v1',
+    kind: 'movement',
+    fuelCost: 6,
+    timing: {
+      startupFrames: 3,
+      activeFrames: 4,
+      recoveryFrames: 14,
+      cooldownFrames: 28,
+    },
+    size: {
+      range: 14,
+      radius: 1.2,
+      width: 1.4,
+      length: 6,
+    },
+    movement: {
+      dashSpeed: 62,
+    },
+  };
+  moves.boost.holdSpeedMultiplier = 1.18;
+  moves.boost.holdFuelPerSecond = 0.24;
+  moves.superBoost.holdSpeedMultiplier = 1.12;
+  moves.superBoost.steerLerpMultiplier = 1.2;
+  moves.superBoost.velocityBlendMultiplier = 1.12;
+  moves.superBoost.startFuelCost = 5.5;
+  moves.superBoost.travelFuelPerDistance = 0.046;
+  moves.superBoost.nonCommitPenalty = 2.8;
+  moves.superBoost.turnPenaltyGainMultiplier = 0.9;
+  return {
+    id: 'duelist',
+    displayName: 'Duelist',
+    blurb: 'Fast pressure fighter that turns one clean read into chase momentum.',
+    mechanicsTag: 'pressure chase',
+    stats: {
+      fuelCapacityMultiplier: 0.96,
+      moveAccelMultiplier: 1.14,
+      boostSpeedMultiplier: 1.14,
+      superBoostSpeedMultiplier: 1.1,
+      launchBasePowerMultiplier: 0.97,
+      launchChainBonusMultiplier: 1.14,
+      launchDurationTakenMultiplier: 1.08,
+      specialFuelCostMultiplier: 0.92,
+      superFuelMultiplier: 0.96,
+      dunkRecoveryFuelMultiplier: 0.9,
+    },
+    visuals,
+    audio: baseAudio('duelist'),
+    moves,
+    specials: [
+      { id: 'pressure_dash', label: 'Pressure Dash', enabled: true },
+      { id: 'special_beta', label: 'Special Beta', enabled: false },
+    ],
+  };
+}
+
 const CORE_CHARACTERS: CharacterDefinition[] = [
-  makePlaceholderCharacter('vanguard', 'Vanguard', 'future: defensive kit'),
-  makePlaceholderCharacter('duelist', 'Duelist', 'future: pressure kit'),
+  makeVanguardCharacter(),
+  makeDuelistCharacter(),
   makePlaceholderCharacter('ace', 'Ace', 'future: mobility kit'),
   makePlaceholderCharacter('warden', 'Warden', 'future: control kit'),
 ];

@@ -20,6 +20,14 @@ interface PlayerIndicatorMeshes {
   dunk: THREE.Mesh;
 }
 
+interface WormholeBackdrop {
+  group: THREE.Group;
+  core: THREE.Mesh;
+  rings: THREE.Mesh[];
+  spiralArms: THREE.Mesh[];
+  particles: THREE.Points;
+}
+
 export interface SceneContext {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -42,6 +50,7 @@ export interface SceneContext {
   stars: THREE.Points;
   stageBackgroundImage: THREE.Mesh;
   stageBackgroundModel: THREE.Mesh;
+  wormholeBackdrop: WormholeBackdrop;
   stageAtmosphereId: string;
 }
 
@@ -67,27 +76,33 @@ function addArena(scene: THREE.Scene): {
 
   const boundary = new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints(boundaryPoints),
-    new THREE.LineBasicMaterial({ color: '#4766a8' }),
+    new THREE.LineBasicMaterial({ color: '#4766a8', transparent: true, opacity: 0.26 }),
   );
+  boundary.position.z = 0.2;
   scene.add(boundary);
 
   const gravityWell = new THREE.Mesh(
-    new THREE.SphereGeometry(7, 32, 32),
+    new THREE.CylinderGeometry(ARENA_RADIUS * 1.02, 16, 220, 96, 1, true),
     new THREE.MeshStandardMaterial({
-      color: '#7f3fff',
+      color: '#27388e',
       emissive: '#5b1fcf',
       emissiveIntensity: 1.2,
       metalness: 0.2,
-      roughness: 0.6,
+      roughness: 0.62,
+      transparent: true,
+      opacity: 0.22,
+      side: THREE.DoubleSide,
     }),
   );
+  gravityWell.rotation.x = Math.PI / 2;
+  gravityWell.position.z = -108;
   scene.add(gravityWell);
 
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(12, 0.45, 20, 64),
-    new THREE.MeshBasicMaterial({ color: '#9f82ff', transparent: true, opacity: 0.5 }),
+    new THREE.TorusGeometry(ARENA_RADIUS * 1.005, 0.95, 24, 128),
+    new THREE.MeshBasicMaterial({ color: '#9f82ff', transparent: true, opacity: 0.26 }),
   );
-  ring.rotation.x = Math.PI / 2;
+  ring.position.z = 0.1;
   scene.add(ring);
 
   return { boundary, gravityWell, ring };
@@ -96,7 +111,7 @@ function addArena(scene: THREE.Scene): {
 function addStars(scene: THREE.Scene): THREE.Points {
   const stars = new THREE.Points(
     new THREE.BufferGeometry(),
-    new THREE.PointsMaterial({ color: '#99a8ff', size: 0.35 }),
+    new THREE.PointsMaterial({ color: '#99a8ff', size: 0.46, transparent: true, opacity: 0.9 }),
   );
   const points: number[] = [];
   for (let i = 0; i < 1500; i += 1) {
@@ -140,6 +155,126 @@ function addStageBackgroundModel(scene: THREE.Scene): THREE.Mesh {
   mesh.userData.modelId = null;
   scene.add(mesh);
   return mesh;
+}
+
+function createWormholeRing(index: number): THREE.Mesh {
+  const material = new THREE.MeshBasicMaterial({
+    color: index % 2 === 0 ? '#63d8ff' : '#af5cff',
+    transparent: true,
+    opacity: 0.08,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const radius = Math.max(16, ARENA_RADIUS * 0.9 - index * 5.4);
+  const mesh = new THREE.Mesh(
+    new THREE.TorusGeometry(radius, Math.max(0.22, 0.8 - index * 0.05), 18, 96),
+    material,
+  );
+  mesh.position.z = -18 - index * 14;
+  mesh.userData.baseScale = 1;
+  return mesh;
+}
+
+function createSpiralArm(index: number): THREE.Mesh {
+  const phase = (index / 4) * Math.PI * 2;
+  const points: THREE.Vector3[] = [];
+  for (let step = 0; step <= 18; step += 1) {
+    const t = step / 18;
+    const radius = THREE.MathUtils.lerp(ARENA_RADIUS * 0.82, 10, t);
+    const angle = phase + t * Math.PI * 4.8;
+    const wobble = 1 + Math.sin(t * Math.PI * 3 + index) * 0.08;
+    points.push(new THREE.Vector3(
+      Math.cos(angle) * radius * wobble,
+      Math.sin(angle) * radius * 0.84 * wobble,
+      -8 - t * 178,
+    ));
+  }
+  const geometry = new THREE.TubeGeometry(
+    new THREE.CatmullRomCurve3(points),
+    96,
+    1.8 - index * 0.16,
+    10,
+    false,
+  );
+  const material = new THREE.MeshBasicMaterial({
+    color: index % 2 === 0 ? '#8b6bff' : '#4fcfff',
+    transparent: true,
+    opacity: 0.12,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.baseRotation = phase * 0.15;
+  mesh.userData.rotationSpeed = 0.035 + index * 0.008;
+  return mesh;
+}
+
+function addWormholeBackdrop(scene: THREE.Scene): WormholeBackdrop {
+  const group = new THREE.Group();
+  group.position.set(0, 0, 0);
+  group.visible = false;
+
+  const core = new THREE.Mesh(
+    new THREE.RingGeometry(5, 11, 96),
+    new THREE.MeshBasicMaterial({
+      color: '#8e6bff',
+      transparent: true,
+      opacity: 0.08,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  core.position.z = -198;
+  group.add(core);
+
+  const rings: THREE.Mesh[] = [];
+  for (let i = 0; i < 10; i += 1) {
+    const ring = createWormholeRing(i);
+    rings.push(ring);
+    group.add(ring);
+  }
+
+  const spiralArms: THREE.Mesh[] = [];
+  for (let i = 0; i < 4; i += 1) {
+    const arm = createSpiralArm(i);
+    spiralArms.push(arm);
+    group.add(arm);
+  }
+
+  const particlePoints: number[] = [];
+  for (let i = 0; i < 420; i += 1) {
+    const radius = 12 + Math.random() * (ARENA_RADIUS * 0.82);
+    const angle = Math.random() * Math.PI * 2;
+    const depth = -18 - Math.random() * 180;
+    particlePoints.push(
+      Math.cos(angle) * radius,
+      Math.sin(angle) * radius,
+      depth,
+    );
+  }
+  const particles = new THREE.Points(
+    new THREE.BufferGeometry(),
+    new THREE.PointsMaterial({
+      color: '#67d4ff',
+      size: 0.72,
+      transparent: true,
+      opacity: 0.6,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  particles.geometry.setAttribute('position', new THREE.Float32BufferAttribute(particlePoints, 3));
+  group.add(particles);
+
+  scene.add(group);
+  return {
+    group,
+    core,
+    rings,
+    spiralArms,
+    particles,
+  };
 }
 
 function createPlayerVisuals(scene: THREE.Scene): {
@@ -212,6 +347,7 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
   const stars = addStars(scene);
   const stageBackgroundImage = addStageBackgroundImage(scene);
   const stageBackgroundModel = addStageBackgroundModel(scene);
+  const wormholeBackdrop = addWormholeBackdrop(scene);
   const { playerVisuals, playerMeshes } = createPlayerVisuals(scene);
   const playerIndicators = createPlayerIndicators(scene);
   const combatVfxRuntime = createCombatVfxRuntime(scene, {
@@ -243,6 +379,7 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
     stars,
     stageBackgroundImage,
     stageBackgroundModel,
+    wormholeBackdrop,
     stageAtmosphereId: DEFAULT_STAGE_ATMOSPHERE_ID,
   };
   applyStageAtmospherePreset(context, DEFAULT_STAGE_ATMOSPHERE_ID);
@@ -279,11 +416,13 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
 
   const boundaryMaterial = context.arenaBoundary.material as THREE.LineBasicMaterial;
   boundaryMaterial.color.set(tokens.ringColor);
+  boundaryMaterial.opacity = clampOpacity(tokens.ringOpacity) * 0.24;
 
   const gravityWellMaterial = context.gravityWell.material as THREE.MeshStandardMaterial;
   gravityWellMaterial.color.set(tokens.gravityWellColor);
   gravityWellMaterial.emissive.set(tokens.gravityWellEmissive);
-  gravityWellMaterial.emissiveIntensity = tokens.gravityWellEmissiveIntensity;
+  gravityWellMaterial.emissiveIntensity = tokens.gravityWellEmissiveIntensity * 0.42;
+  gravityWellMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * 0.26;
 
   const ringMaterial = context.ring.material as THREE.MeshBasicMaterial;
   ringMaterial.color.set(tokens.ringColor);
@@ -291,7 +430,8 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
 
   const starsMaterial = context.stars.material as THREE.PointsMaterial;
   starsMaterial.color.set(tokens.starsColor);
-  starsMaterial.size = tokens.starsSize;
+  starsMaterial.size = tokens.starsSize * 1.5;
+  starsMaterial.opacity = 0.92;
 
   const imageMaterial = context.stageBackgroundImage.material as THREE.MeshBasicMaterial;
   imageMaterial.color.set(tokens.backgroundImageTint);
@@ -304,6 +444,33 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   modelMaterial.opacity = clampOpacity(tokens.backgroundModelOpacity);
   context.stageBackgroundModel.visible = Boolean(tokens.backgroundModelId);
   context.stageBackgroundModel.userData.modelId = tokens.backgroundModelId ?? null;
+
+  const wormholeVisible = tokens.backgroundEffectId === 'wormhole_v1';
+  context.wormholeBackdrop.group.visible = wormholeVisible;
+  context.wormholeBackdrop.group.scale.setScalar(tokens.backgroundEffectScale);
+  context.wormholeBackdrop.group.userData.effectId = tokens.backgroundEffectId ?? null;
+  context.wormholeBackdrop.group.userData.effectOpacity = clampOpacity(tokens.backgroundEffectOpacity);
+  context.wormholeBackdrop.group.userData.effectSpeed = Math.max(0, tokens.backgroundEffectSpeed);
+
+  const coreMaterial = context.wormholeBackdrop.core.material as THREE.MeshBasicMaterial;
+  coreMaterial.color.set(tokens.backgroundEffectSecondaryTint);
+  coreMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * 0.24;
+
+  context.wormholeBackdrop.rings.forEach((ring, index) => {
+    const ringMaterial = ring.material as THREE.MeshBasicMaterial;
+    ringMaterial.color.set(index % 2 === 0 ? tokens.backgroundEffectTint : tokens.backgroundEffectSecondaryTint);
+    ringMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * (0.03 + index * 0.006);
+  });
+
+  context.wormholeBackdrop.spiralArms.forEach((arm, index) => {
+    const armMaterial = arm.material as THREE.MeshBasicMaterial;
+    armMaterial.color.set(index % 2 === 0 ? tokens.backgroundEffectSecondaryTint : tokens.backgroundEffectTint);
+    armMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * (0.11 - index * 0.012);
+  });
+
+  const particleMaterial = context.wormholeBackdrop.particles.material as THREE.PointsMaterial;
+  particleMaterial.color.set(tokens.backgroundEffectTint);
+  particleMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * 0.72;
 
   return preset.id;
 }

@@ -18,6 +18,7 @@ export interface QueuePlayerMetadata {
   displayName?: string | null;
   platform?: 'web' | 'steam' | null;
   buildVersion?: string | null;
+  selectedCharacterId?: string | null;
   rankedSnapshot?: {
     rating?: number | null;
     leagueTier?: string | null;
@@ -36,6 +37,7 @@ export interface MatchPlayerMetadata {
   accountId: string;
   displayName: string | null;
   queueTicketId: string;
+  selectedCharacterId: string | null;
   side: 'P1' | 'P2';
   preferredRegions: RegionId[];
   queuedAt: string;
@@ -103,6 +105,11 @@ export interface SessionReconnectRequest {
   accountId: string;
   sessionToken: string;
   reconnectAttemptId: string;
+}
+
+export interface SessionTokenValidationOptions {
+  allowResolved?: boolean;
+  allowExpiredToken?: boolean;
 }
 
 export type SessionActionErrorCode =
@@ -220,6 +227,7 @@ function buildMatchPlayerMetadata(
     accountId: ticket.accountId,
     displayName: ticket.playerMetadata.displayName ?? null,
     queueTicketId: ticket.ticketId,
+    selectedCharacterId: ticket.playerMetadata.selectedCharacterId ?? null,
     side,
     preferredRegions: [...ticket.regionPreferences],
     queuedAt: new Date(ticket.queuedAtMs).toISOString(),
@@ -399,7 +407,12 @@ export class MatchmakingQueueService {
     return { ok: true, value: this.toSessionView(session) };
   }
 
-  public validateSessionToken(sessionId: string, accountId: string, sessionToken: string): SessionActionResult<MatchSessionView> {
+  public validateSessionToken(
+    sessionId: string,
+    accountId: string,
+    sessionToken: string,
+    options: SessionTokenValidationOptions = {},
+  ): SessionActionResult<MatchSessionView> {
     const nowMs = this.now();
     this.cleanup(nowMs);
     const session = this.sessionsById.get(sessionId);
@@ -410,10 +423,10 @@ export class MatchmakingQueueService {
     if (!participant) {
       return this.error('forbidden', 'Session does not contain this account.');
     }
-    if (session.status !== 'active') {
+    if (session.status !== 'active' && !options.allowResolved) {
       return this.error('session_resolved', 'Session has already resolved.');
     }
-    if (nowMs > participant.sessionTokenExpiresAtMs) {
+    if (nowMs > participant.sessionTokenExpiresAtMs && !options.allowExpiredToken) {
       return this.error('token_expired', 'Session token has expired.');
     }
     if (participant.sessionToken !== sessionToken) {

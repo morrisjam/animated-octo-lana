@@ -13,7 +13,7 @@ import {
 } from '../sim/ai';
 import type { PlayerId, PlayersById } from '../sim/types';
 
-export type GameMode = 'endless' | 'best_of_3' | 'arcade' | 'training';
+export type GameMode = 'endless' | 'best_of_3' | 'arcade' | 'training' | 'cpu_vs_cpu';
 export type WebAuthMenuAction = 'signin' | 'signup' | 'signout';
 export type OnlineDevMenuTarget = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
 export interface ArcadeMenuSettings {
@@ -76,6 +76,7 @@ type StartScreen =
   | 'match_over';
 
 interface StartMenuOptions {
+  onlineMenuEnabled?: boolean;
   initialMode?: GameMode;
   initialLoadout?: PlayersById<CharacterId>;
   initialAiDifficulty?: AiDifficultyId;
@@ -126,8 +127,9 @@ const MODE_LABELS: Record<GameMode, string> = {
   best_of_3: 'Best of 3',
   arcade: 'Arcade Ladder',
   training: 'Training',
+  cpu_vs_cpu: 'AI vs AI',
 };
-const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'arcade', 'training'];
+const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'arcade', 'training', 'cpu_vs_cpu'];
 const ARCADE_CONTINUE_OPTIONS = [0, 1, 2, 3];
 const SETTINGS_THEME_ROW_INDEX = 3;
 const SETTINGS_STAGE_ATMOSPHERE_ROW_INDEX = 4;
@@ -180,7 +182,7 @@ function cycleCharacter(current: CharacterId, direction: 1 | -1): CharacterId {
 
 function sanitiseEnabledModes(rawModes: GameMode[] | undefined): GameMode[] {
   if (!rawModes || rawModes.length === 0) {
-    return ['endless', 'best_of_3', 'arcade'];
+    return ['endless', 'best_of_3', 'arcade', 'cpu_vs_cpu'];
   }
   const uniqueModes: GameMode[] = [];
   for (const mode of MODE_ORDER) {
@@ -391,7 +393,7 @@ export class StartMenu {
   private readonly signOutButton: HTMLButtonElement;
   private readonly titleContinueButton: HTMLButtonElement;
   private readonly continueButton: HTMLButtonElement;
-  private readonly mainOnlineButton: HTMLButtonElement;
+  private readonly mainOnlineButton: HTMLButtonElement | null;
   private readonly mainLocalButton: HTMLButtonElement;
   private readonly entitlementStatusLabel: HTMLDivElement;
   private readonly settingsSignOutButton: HTMLButtonElement;
@@ -444,6 +446,7 @@ export class StartMenu {
   private rafId = 0;
 
   private readonly enabledModes: GameMode[];
+  private readonly onlineMenuEnabled: boolean;
   private readonly menuThemeOptions: StartMenuThemeOption[];
   private readonly stageAtmosphereOptions: StartStageAtmosphereOption[];
   private currentMode: GameMode;
@@ -511,6 +514,7 @@ export class StartMenu {
 
   public constructor(private readonly options: StartMenuOptions) {
     this.enabledModes = sanitiseEnabledModes(options.enabledModes);
+    this.onlineMenuEnabled = options.onlineMenuEnabled !== false;
     this.menuThemeOptions = sanitiseMenuThemeOptions(options.availableMenuThemes);
     this.stageAtmosphereOptions = sanitiseStageAtmosphereOptions(options.availableStageAtmospheres);
     this.currentMenuThemeId = resolveInitialMenuThemeId(options.initialMenuThemeId, this.menuThemeOptions);
@@ -660,10 +664,12 @@ export class StartMenu {
     entitlementRow.appendChild(this.entitlementStatusLabel);
     this.mainPanel.appendChild(entitlementRow);
 
-    const mainOnlineRow = this.createActionRow('Online', () => {
-      this.setScreen('online');
-    });
-    this.mainOnlineButton = mainOnlineRow.button;
+    const mainOnlineRow = this.onlineMenuEnabled
+      ? this.createActionRow('Online', () => {
+        this.setScreen('online');
+      })
+      : null;
+    this.mainOnlineButton = mainOnlineRow?.button ?? null;
     const mainLocalRow = this.createActionRow('Local', () => {
       this.setScreen('local');
     });
@@ -681,22 +687,19 @@ export class StartMenu {
       this.setScreen('login');
     });
 
-    this.mainPanel.append(
-      mainOnlineRow.row,
+    const mainRows: HTMLDivElement[] = [];
+    if (mainOnlineRow) {
+      mainRows.push(mainOnlineRow.row);
+    }
+    mainRows.push(
       mainLocalRow.row,
       mainReplaysRow.row,
       mainRankingsRow.row,
       mainSettingsRow.row,
       mainBackRow.row,
     );
-    this.registerRows('main', [
-      mainOnlineRow.row,
-      mainLocalRow.row,
-      mainReplaysRow.row,
-      mainRankingsRow.row,
-      mainSettingsRow.row,
-      mainBackRow.row,
-    ]);
+    this.mainPanel.append(...mainRows);
+    this.registerRows('main', mainRows);
 
     const onlineRankedRow = this.createActionRow('Ranked', () => {
       this.setScreen('online_ranked');
@@ -1177,7 +1180,9 @@ export class StartMenu {
   }
 
   public setEntitlementGate(canAccessGameplay: boolean, message: string | null): void {
-    this.mainOnlineButton.disabled = !canAccessGameplay;
+    if (this.mainOnlineButton) {
+      this.mainOnlineButton.disabled = !canAccessGameplay;
+    }
     this.mainLocalButton.disabled = !canAccessGameplay;
     this.titleContinueButton.disabled = false;
     this.titleSubtitle.textContent = canAccessGameplay
@@ -1367,11 +1372,14 @@ export class StartMenu {
 
   private refreshLocalRows(): void {
     const arcadeModeSelected = this.currentMode === 'arcade';
+    const aiVsAiSelected = this.currentMode === 'cpu_vs_cpu';
     this.localModeButton.textContent = `Mode: ${MODE_LABELS[this.currentMode]}`;
     this.localModeOptionsLabel.textContent = this.enabledModes
       .map((mode) => mode === this.currentMode ? `[${MODE_LABELS[mode]}]` : MODE_LABELS[mode])
       .join('  |  ');
-    this.localDifficultyButton.textContent = `AI Difficulty: ${getAiDifficultyLabel(this.currentAiDifficulty)}`;
+    this.localDifficultyButton.textContent = aiVsAiSelected
+      ? `AI Difficulty: ${getAiDifficultyLabel(this.currentAiDifficulty)} (Both)`
+      : `AI Difficulty: ${getAiDifficultyLabel(this.currentAiDifficulty)}`;
     this.localDifficultyOptionsLabel.textContent = AI_DIFFICULTY_ORDER
       .map((difficulty) => (
         difficulty === this.currentAiDifficulty

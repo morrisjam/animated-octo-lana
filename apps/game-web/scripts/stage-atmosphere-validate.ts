@@ -106,6 +106,8 @@ function validate(): StageAtmosphereValidationReport {
       'starsColor',
       'backgroundImageTint',
       'backgroundModelTint',
+      'backgroundEffectTint',
+      'backgroundEffectSecondaryTint',
     ];
     for (const token of colorTokens) {
       if (typeof tokens[token] !== 'string' || (tokens[token] as string).trim().length === 0) {
@@ -131,6 +133,9 @@ function validate(): StageAtmosphereValidationReport {
     validateFiniteRange(issues, atmosphere.id, 'starsSize', tokens.starsSize, { min: 0, max: 2, minExclusive: true });
     validateFiniteRange(issues, atmosphere.id, 'backgroundImageOpacity', tokens.backgroundImageOpacity, { min: 0, max: 1 });
     validateFiniteRange(issues, atmosphere.id, 'backgroundModelOpacity', tokens.backgroundModelOpacity, { min: 0, max: 1 });
+    validateFiniteRange(issues, atmosphere.id, 'backgroundEffectOpacity', tokens.backgroundEffectOpacity, { min: 0, max: 1 });
+    validateFiniteRange(issues, atmosphere.id, 'backgroundEffectSpeed', tokens.backgroundEffectSpeed, { min: 0, max: 4 });
+    validateFiniteRange(issues, atmosphere.id, 'backgroundEffectScale', tokens.backgroundEffectScale, { min: 0.25, max: 4, minExclusive: true });
 
     if (tokens.backgroundImageTextureId !== null) {
       if (typeof tokens.backgroundImageTextureId !== 'string' || tokens.backgroundImageTextureId.trim().length === 0) {
@@ -156,6 +161,20 @@ function validate(): StageAtmosphereValidationReport {
         issues.push({
           atmosphereId: atmosphere.id,
           message: `tokens.backgroundModelId "${tokens.backgroundModelId}" missing from DEFAULT_ASSET_MANIFEST.models.`,
+        });
+      }
+    }
+
+    if (tokens.backgroundEffectId !== null) {
+      if (typeof tokens.backgroundEffectId !== 'string' || tokens.backgroundEffectId.trim().length === 0) {
+        issues.push({
+          atmosphereId: atmosphere.id,
+          message: 'tokens.backgroundEffectId must be null or a non-empty string.',
+        });
+      } else if (!['wormhole_v1'].includes(tokens.backgroundEffectId)) {
+        issues.push({
+          atmosphereId: atmosphere.id,
+          message: `tokens.backgroundEffectId "${tokens.backgroundEffectId}" is not a supported runtime effect.`,
         });
       }
     }

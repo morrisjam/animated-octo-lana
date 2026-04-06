@@ -127,6 +127,53 @@ html, body {
   margin-top: 8px;
 }
 
+.online-bootstrap-panel {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  z-index: 32;
+  width: min(420px, calc(100vw - 36px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--ui-panel-border);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+.online-bootstrap-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-hud-label-text);
+}
+
+.online-bootstrap-detail {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--ui-font-family);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ui-hud-meta-text);
+}
+
+.online-bootstrap-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.online-bootstrap-action {
+  border: 1px solid var(--ui-button-border);
+  background: var(--ui-button-bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+
 #frameData {
   align-self: flex-start;
   margin-top: 8px;
@@ -795,6 +842,59 @@ html, body {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.dev-open-menu-button {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 38;
+  pointer-events: auto;
+  border: 1px solid rgba(167, 195, 255, 0.28);
+  background: rgba(18, 28, 58, 0.92);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.dev-debug-panel {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 39;
+  pointer-events: auto;
+  min-width: 180px;
+  border: 1px solid rgba(167, 195, 255, 0.28);
+  background: rgba(5, 10, 24, 0.95);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dev-debug-title {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #b4c9f3;
+}
+
+.dev-debug-phase {
+  font-size: 12px;
+  color: #dbe8ff;
+}
+
+.dev-debug-action {
+  border: 1px solid rgba(167, 195, 255, 0.28);
+  background: rgba(18, 28, 58, 0.92);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
 }
 
 .pause-menu {

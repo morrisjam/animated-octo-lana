@@ -1,12 +1,20 @@
 import { createCombinedInput } from './input/combined';
+import { createEmptyPlayerInput } from './input/frame';
 import { createGamepadInput } from './input/gamepad';
 import { createKeyboardInput } from './input/keyboard';
 import { loadRuntimeConfig } from './config/features';
+import { fetchMatchmakingIceConfig } from './net/connectivityApi';
 import { createInputTimelineBuffer } from './net/inputTimeline';
 import {
   RollbackSession,
   type RollbackDiagnosticsSnapshot,
 } from './net/rollbackSession';
+import {
+  buildRtcConfiguration,
+  RelayFallbackController,
+  type ConnectionPath,
+  type MatchmakingIceConfig,
+} from './net/transport';
 import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT, isCharacterId, type CharacterId } from './sim/characters';
 import { createPlatformServices, type PlatformAuthSession } from './platform';
 import { validateReplayPayload } from './sim/replay';
@@ -23,10 +31,9 @@ import {
   type TrainingTelemetryTracker,
 } from './sim/trainingTelemetry';
 import { sanitiseTuning } from './sim/tuning';
-import type { PlayerId, PlayersById, RenderSnapshot } from './sim/types';
+import type { PlayerFrameInput, PlayerId, PlayersById, RenderSnapshot } from './sim/types';
 import {
   AI_DIFFICULTY_ORDER,
-  buildFrameInputWithAi,
   createAiController,
   tickAiController,
   type AiControllerState,
@@ -98,7 +105,7 @@ import {
   STAGE_ATMOSPHERE_OPTIONS,
 } from './view/stageAtmosphere';
 
-type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev';
+type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev' | 'online_bootstrap';
 interface StoredSettings {
   mode?: string;
   menuThemeId?: string;
@@ -130,6 +137,10 @@ const ROLLBACK_DIAGNOSTICS_STORAGE_KEY = 'gravity_well.rollback_diagnostics.v1';
 const TRAINING_TELEMETRY_STORAGE_KEY = 'gravity_well.training_telemetry.v1';
 const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
+const onlineRuntimeEnabled = platform.kind === 'web' && runtimeConfig.features.onlineMatchRuntimeEnabled;
+const publicOnlineEntryEnabled = platform.kind === 'web'
+  && runtimeConfig.features.onlineEnabled
+  && runtimeConfig.features.onlineMatchRuntimeEnabled;
 const DEFAULT_ARCADE_MENU_SETTINGS: ArcadeMenuSettings = {
   continues: 2,
   retryEnabled: true,
@@ -181,6 +192,12 @@ const hudRoot = document.querySelector<HTMLDivElement>('#hud');
 if (!matchInfo || !hudRoot) {
   throw new Error('Missing HUD match elements');
 }
+let devOpenMenuButton: HTMLButtonElement | null = null;
+let devDebugPanel: HTMLDivElement | null = null;
+let devDebugPhaseLabel: HTMLDivElement | null = null;
+let onlineBootstrapPanel: HTMLDivElement | null = null;
+let onlineBootstrapTitle: HTMLDivElement | null = null;
+let onlineBootstrapDetail: HTMLPreElement | null = null;
 
 const audioSystem = createAudioSystem({
   missingEventPolicy: runtimeConfig.features.debugToolsEnabled ? 'throw' : 'warn',
@@ -250,7 +267,11 @@ let selectedAiDifficulty: AiDifficultyId = loadedSettings.aiDifficulty;
 let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
 let arcadeHistory: ArcadeRunHistory = loadArcadeHistory();
 let profileSettingsCache: Record<string, unknown> = {};
-const seedParam = new URLSearchParams(window.location.search).get('seed');
+const urlParams = new URLSearchParams(window.location.search);
+const seedParam = urlParams.get('seed');
+const localRecoveryUiEnabled = urlParams.get('localDebug') === '1';
+const diagnosticsQueryOverride = urlParams.get('diagnostics');
+const debugHudEnabled = urlParams.get('debugHud') === '1';
 const forcedSeed = seedParam !== null ? Number(seedParam) : undefined;
 let selectedMatchSeed = Number.isFinite(forcedSeed) ? (forcedSeed as number) : 1;
 let selectedMode: GameMode = loadedSettings.mode;
@@ -287,11 +308,12 @@ let trainingTelemetry: TrainingTelemetryTracker = createTrainingTelemetryTracker
 const assetBudgetReport = buildAssetBudgetReport(DEFAULT_ASSET_MANIFEST, DEFAULT_ASSET_BUDGET_LIMITS);
 let assetPreloadBytesLoaded = 0;
 let appPhase: AppPhase = 'home';
+let startupMenuGuardArmed = true;
 let p1RoundWins = 0;
 let p2RoundWins = 0;
 let roundTransitionRemaining = 0;
 let simulationFrame = 0;
-let aiController: AiControllerState | null = null;
+let aiControllers: Partial<Record<PlayerId, AiControllerState>> = {};
 let arcadeRun: ArcadeRunState | null = null;
 let arcadePendingLossState: ArcadePendingLossState | null = null;
 const inputTimeline = createInputTimelineBuffer({ maxFrames: 60 * 20 });
@@ -334,9 +356,24 @@ type RegionId = 'us-east' | 'us-west' | 'eu-west' | 'ap-southeast';
 
 interface MatchStartPayload {
   sessionId: string;
+  sessionToken: string;
+  sessionTokenExpiresAt: string;
   queueType: QueueType;
   region: RegionId;
   createdAt: string;
+  expiresAt?: string;
+  localPlayer: {
+    accountId: string;
+    queueTicketId: string;
+    selectedCharacterId?: string | null;
+    side: 'P1' | 'P2';
+  };
+  peer: {
+    accountId: string;
+    queueTicketId: string;
+    selectedCharacterId?: string | null;
+    side: 'P1' | 'P2';
+  };
   diagnostics?: {
     skillTrack?: 'unranked' | 'rating' | 'master';
     expectedGap?: number | null;
@@ -371,6 +408,92 @@ interface MatchSessionView {
     side: 'P1' | 'P2';
     connectionStatus: 'connected' | 'disconnected';
   }>;
+}
+
+type OnlineBootstrapStatus = 'preparing' | 'awaiting_signaling' | 'failed';
+
+interface OnlineBootstrapState {
+  source: 'ranked_queue';
+  sessionId: string;
+  queueType: QueueType;
+  region: RegionId;
+  localAccountId: string;
+  peerAccountId: string | null;
+  sessionToken: string | null;
+  sessionTokenExpiresAt: string | null;
+  connectionPath: ConnectionPath | 'server';
+  status: OnlineBootstrapStatus;
+  statusDetail: string;
+  diagnosticsLine: string;
+  iceConfig: MatchmakingIceConfig | null;
+}
+
+interface OnlineSessionFrameEntry {
+  frame: number;
+  accountId: string;
+  input: PlayerFrameInput;
+  receivedAt: string;
+}
+
+interface OnlineSessionFrameResponse {
+  frames: OnlineSessionFrameEntry[];
+}
+
+type RankedMatchOutcome = 'p1_win' | 'p2_win' | 'draw' | 'forfeit';
+type OnlineRankedResultStatus = 'idle' | 'submitting' | 'accepted' | 'flagged_for_review' | 'already_processed' | 'failed';
+
+interface RankedResultDeltaView {
+  accountId: string;
+  side: PlayerId;
+  preRating: number;
+  postRating: number;
+  ratingDelta: number;
+  result: 'win' | 'loss' | 'draw' | 'forfeit' | string;
+  preLeagueTier?: string | null;
+  postLeagueTier?: string | null;
+  preLeaguePoints?: number | null;
+  postLeaguePoints?: number | null;
+  preMrPoints?: number | null;
+  postMrPoints?: number | null;
+}
+
+interface RankedResultSubmitResponse {
+  submissionId: string;
+  createdAt: string;
+  status: 'accepted' | 'flagged_for_review';
+  suspicious: boolean;
+  suspiciousReasons: string[];
+  reviewStatus: string;
+  ratingDeltas?: RankedResultDeltaView[];
+}
+
+interface OnlineMatchContext {
+  sessionId: string;
+  sessionToken: string;
+  queueType: QueueType;
+  region: RegionId;
+  matchLoadout: PlayersById<CharacterId>;
+  restoreMode: GameMode;
+  restoreLoadout: PlayersById<CharacterId>;
+  localPlayerId: PlayerId;
+  remotePlayerId: PlayerId;
+  localAccountId: string;
+  remoteAccountId: string;
+  statusText: string;
+  connectionPath: ConnectionPath | 'server';
+  lastRemoteFrame: number;
+  outgoingFrames: Array<{ frame: number; input: PlayerFrameInput }>;
+  pendingRemoteInputs: Map<number, PlayerFrameInput>;
+  sendAccumulatorSeconds: number;
+  pollAccumulatorSeconds: number;
+  sendInFlight: boolean;
+  pollInFlight: boolean;
+  finalOutcome: RankedMatchOutcome | null;
+  winnerAccountId: string | null;
+  rankedResultStatus: OnlineRankedResultStatus;
+  rankedResultDetail: string;
+  rankedResultSubmissionId: string | null;
+  rankedResultInFlight: boolean;
 }
 
 interface RoomView {
@@ -494,7 +617,7 @@ const diagnosticsBuildId = (
   || 'dev-local'
 );
 const diagnosticsRulesetVersion = activeRulesetVersion;
-const diagnosticsEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDiagnosticsEnabled;
+const diagnosticsEnabled = platform.kind === 'web' && diagnosticsQueryOverride === '1';
 let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   ticketId: null,
   sessionId: null,
@@ -506,6 +629,10 @@ let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   packetLossPercent: null,
   participantAccountIds: [],
 };
+let onlineBootstrapState: OnlineBootstrapState | null = null;
+let onlineRelayFallbackController: RelayFallbackController | null = null;
+let onlineMatchContext: OnlineMatchContext | null = null;
+let sessionAccountId: string | null = null;
 const diagnosticsOverlay = diagnosticsEnabled ? createOnlineDiagnosticsOverlay() : null;
 const onlineDevMenuEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDevMenuEnabled;
 const onlineDevMenu = onlineDevMenuEnabled
@@ -581,6 +708,29 @@ async function requestOnlineRaw(
   return response;
 }
 
+function cloneOnlinePlayerInput(input: PlayerFrameInput): PlayerFrameInput {
+  return {
+    moveX: input.moveX,
+    moveY: input.moveY,
+    boost: input.boost,
+    superBoost: input.superBoost,
+    special: input.special,
+    launch: input.launch,
+    dunk: input.dunk,
+    parry: input.parry,
+    breakLaunch: input.breakLaunch,
+  };
+}
+
+function hashSeedFromString(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) || 1;
+}
+
 function getQueueWaitMs(queuedAt: string | undefined): number | null {
   if (!queuedAt) {
     return null;
@@ -590,6 +740,248 @@ function getQueueWaitMs(queuedAt: string | undefined): number | null {
     return null;
   }
   return Math.max(0, Date.now() - queuedAtMs);
+}
+
+function getOnlineRuntimeStatusDetail(sessionId: string | null, phase?: string | null): string {
+  const sessionLine = `Session: ${sessionId ?? 'pending'}`;
+  const phaseLine = phase ? `Phase: ${phase}` : null;
+  return [
+    sessionLine,
+    phaseLine,
+    onlineRuntimeEnabled
+      ? 'Online runtime is enabled in this build. Ranked sessions can enter the live relay-backed match flow.'
+      : 'Public online entry is hidden in this build. Enable VITE_FEATURE_ONLINE_MATCH_RUNTIME=true to expose the relay-backed runtime.',
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join('\n');
+}
+
+async function submitOnlineSessionFrames(
+  context: OnlineMatchContext,
+  frames: Array<{ frame: number; input: PlayerFrameInput }>,
+): Promise<void> {
+  if (frames.length === 0) {
+    return;
+  }
+  await requestOnlineJson<{ acceptedFrames: number }>(
+    'POST',
+    `/matchmaking/sessions/${context.sessionId}/frames`,
+    context.localAccountId,
+    {
+      sessionToken: context.sessionToken,
+      frames: frames.map((entry) => ({
+        frame: entry.frame,
+        input: cloneOnlinePlayerInput(entry.input),
+      })),
+    },
+  );
+}
+
+async function pollOnlineSessionFrames(context: OnlineMatchContext): Promise<void> {
+  const response = await requestOnlineJson<OnlineSessionFrameResponse>(
+    'GET',
+    `/matchmaking/sessions/${context.sessionId}/frames?sessionToken=${encodeURIComponent(context.sessionToken)}&sinceFrame=${context.lastRemoteFrame}`,
+    context.localAccountId,
+  );
+  for (const entry of response.frames) {
+    context.pendingRemoteInputs.set(entry.frame, cloneOnlinePlayerInput(entry.input));
+    if (entry.frame > context.lastRemoteFrame) {
+      context.lastRemoteFrame = entry.frame;
+    }
+  }
+}
+
+function flushOnlineTransport(context: OnlineMatchContext): void {
+  if (context.outgoingFrames.length > 0 && !context.sendInFlight) {
+    const frames = context.outgoingFrames.splice(0, context.outgoingFrames.length);
+    context.sendInFlight = true;
+    void submitOnlineSessionFrames(context, frames)
+      .catch((error) => {
+        context.statusText = error instanceof Error
+          ? `Frame relay upload failed: ${error.message}`
+          : 'Frame relay upload failed.';
+      })
+      .finally(() => {
+        context.sendInFlight = false;
+      });
+  }
+
+  if (!context.pollInFlight) {
+    context.pollInFlight = true;
+    void pollOnlineSessionFrames(context)
+      .catch((error) => {
+        context.statusText = error instanceof Error
+          ? `Frame relay poll failed: ${error.message}`
+          : 'Frame relay poll failed.';
+      })
+      .finally(() => {
+        context.pollInFlight = false;
+      });
+  }
+}
+
+function buildOnlineRankSummaryLine(snapshot: RankedProgressionView | null): string {
+  if (!snapshot) {
+    return 'Rank snapshot unavailable.';
+  }
+  const tier = snapshot.leagueTier ?? 'Placement';
+  const rating = snapshot.rating ?? 'n/a';
+  const leaguePoints = snapshot.leaguePoints ?? 'n/a';
+  const mrPoints = snapshot.mrPoints ?? 'n/a';
+  return `Rank: ${tier} | Rating ${rating} | LP ${leaguePoints} | MR ${mrPoints}`;
+}
+
+function buildOnlineRankedResultDetail(context: OnlineMatchContext): string {
+  const lines = [`Ranked result: ${context.rankedResultStatus.replace(/_/g, ' ')}`];
+  if (context.rankedResultDetail.trim().length > 0) {
+    lines.push(context.rankedResultDetail.trim());
+  }
+  return lines.join('\n');
+}
+
+function renderOnlineMatchOverScreen(context: OnlineMatchContext, winner: PlayerId, p1Wins: number, p2Wins: number): void {
+  const subtitleLines = [
+    `Winner: ${winner}`,
+    `Final rounds: P1 ${p1Wins} - ${p2Wins} P2`,
+    `Session: ${context.sessionId}`,
+    `Queue: ${context.queueType} | Region: ${context.region}`,
+  ];
+  if (context.queueType === 'ranked') {
+    subtitleLines.push(buildOnlineRankedResultDetail(context));
+  } else if (context.statusText.trim().length > 0) {
+    subtitleLines.push(context.statusText.trim());
+  }
+
+  const secondaryLabel = context.queueType === 'ranked'
+    ? (context.rankedResultStatus === 'failed' ? 'Retry Submission' : 'Refresh Rank')
+    : 'Return to Home';
+  const secondaryAction = context.queueType === 'ranked'
+    ? () => {
+      if (context.rankedResultStatus === 'failed') {
+        void submitOnlineRankedResult(context);
+        return;
+      }
+      void refreshOnlineRankedResultSummary(context);
+    }
+    : () => {
+      returnToHome();
+    };
+
+  startMenu.showMatchOverScreen({
+    title: 'Online Match Complete',
+    subtitle: subtitleLines.join('\n'),
+    primaryLabel: 'Return to Home',
+    secondaryLabel,
+    onPrimary: () => {
+      returnToHome();
+    },
+    onSecondary: secondaryAction,
+  });
+}
+
+async function refreshOnlineRankedResultSummary(context: OnlineMatchContext): Promise<void> {
+  if (context.queueType !== 'ranked') {
+    return;
+  }
+  try {
+    await refreshRankedSnapshot();
+    context.rankedResultDetail = [
+      context.rankedResultDetail.trim(),
+      buildOnlineRankSummaryLine(playerRankedSnapshot),
+    ]
+      .filter((line, index, array) => line.length > 0 && array.indexOf(line) === index)
+      .join('\n');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Ranked progression refresh failed.';
+    context.rankedResultDetail = [
+      context.rankedResultDetail.trim(),
+      `Progression refresh failed: ${message}`,
+    ]
+      .filter((line, index, array) => line.length > 0 && array.indexOf(line) === index)
+      .join('\n');
+  }
+  if (onlineMatchContext === context && appPhase === 'match_over') {
+    const winner = context.winnerAccountId === context.localAccountId
+      ? context.localPlayerId
+      : context.remotePlayerId;
+    renderOnlineMatchOverScreen(context, winner, p1RoundWins, p2RoundWins);
+  }
+}
+
+async function submitOnlineRankedResult(context: OnlineMatchContext): Promise<void> {
+  if (context.queueType !== 'ranked' || !context.finalOutcome || context.rankedResultInFlight) {
+    return;
+  }
+
+  context.rankedResultInFlight = true;
+  context.rankedResultStatus = 'submitting';
+  context.rankedResultDetail = 'Submitting ranked result to API.';
+  if (onlineMatchContext === context && appPhase === 'match_over') {
+    const winner = context.winnerAccountId === context.localAccountId
+      ? context.localPlayerId
+      : context.remotePlayerId;
+    renderOnlineMatchOverScreen(context, winner, p1RoundWins, p2RoundWins);
+  }
+
+  try {
+    const response = await requestOnlineRaw(
+      'POST',
+      '/ranked/results',
+      context.localAccountId,
+      {
+        sessionId: context.sessionId,
+        matchId: context.sessionId,
+        sessionToken: context.sessionToken,
+        outcome: context.finalOutcome,
+        participantAccountIds: [context.localAccountId, context.remoteAccountId],
+        winnerAccountId: context.winnerAccountId,
+      },
+    );
+
+    if (response.ok) {
+      const payload = await response.json() as RankedResultSubmitResponse;
+      context.rankedResultSubmissionId = payload.submissionId;
+      if (payload.status === 'flagged_for_review') {
+        context.rankedResultStatus = 'flagged_for_review';
+        context.rankedResultDetail = `Submission flagged for review${payload.suspiciousReasons.length > 0 ? `: ${payload.suspiciousReasons.join(', ')}` : '.'}`;
+      } else {
+        context.rankedResultStatus = 'accepted';
+        const localDelta = payload.ratingDeltas?.find((entry) => entry.accountId === context.localAccountId) ?? null;
+        const deltaLine = localDelta
+          ? `Local result: ${localDelta.result} | Rating ${localDelta.preRating} -> ${localDelta.postRating} (${formatSigned(localDelta.ratingDelta)})`
+          : 'Ranked result accepted.';
+        context.rankedResultDetail = deltaLine;
+        await refreshOnlineRankedResultSummary(context);
+      }
+    } else {
+      const errorMessage = await parseOnlineApiError(response);
+      if (
+        response.status === 409
+        && (
+          errorMessage.includes('already been processed')
+          || errorMessage.includes('already submitted')
+        )
+      ) {
+        context.rankedResultStatus = 'already_processed';
+        context.rankedResultDetail = 'Ranked result was already processed for this session.';
+        await refreshOnlineRankedResultSummary(context);
+      } else {
+        context.rankedResultStatus = 'failed';
+        context.rankedResultDetail = errorMessage;
+      }
+    }
+  } catch (error) {
+    context.rankedResultStatus = 'failed';
+    context.rankedResultDetail = error instanceof Error ? error.message : 'Ranked result submission failed.';
+  } finally {
+    context.rankedResultInFlight = false;
+    if (onlineMatchContext === context && appPhase === 'match_over') {
+      const winner = context.winnerAccountId === context.localAccountId
+        ? context.localPlayerId
+        : context.remotePlayerId;
+      renderOnlineMatchOverScreen(context, winner, p1RoundWins, p2RoundWins);
+    }
+  }
 }
 
 function toRankedViewState(ticket: QueueTicketView | null, session: MatchSessionView | null): OnlineRankedViewState {
@@ -616,8 +1008,16 @@ function toRankedViewState(ticket: QueueTicketView | null, session: MatchSession
       ? `Band: ${diagnostics.skillTrack ?? 'n/a'} | Gap: ${diagnostics.matchedGap ?? 'n/a'} / ${diagnostics.expectedGap ?? 'n/a'}`
       : 'Band: pending';
     return {
-      headline: 'Match found',
-      detail: `Ticket: ${ticket.ticketId}\nSession: ${ticket.matchStart?.sessionId ?? session?.sessionId ?? 'pending'}\n${participantLine}\n${diagnosticsLine}`,
+      headline: 'Match found (session created)',
+      detail: [
+        `Ticket: ${ticket.ticketId}`,
+        participantLine,
+        diagnosticsLine,
+        getOnlineRuntimeStatusDetail(
+          ticket.matchStart?.sessionId ?? session?.sessionId ?? null,
+          session?.status ?? null,
+        ),
+      ].join('\n'),
     };
   }
   return {
@@ -636,9 +1036,12 @@ function toRoomViewState(room: RoomView | null, fallbackRoomCode?: string): Onli
   }
   const players = room.participants.filter((item) => item.role === 'player').length;
   const spectators = room.participants.filter((item) => item.role === 'spectator').length;
+  const sessionDetail = room.activeSession
+    ? getOnlineRuntimeStatusDetail(room.activeSession.sessionId, room.activeSession.phase)
+    : 'Session: none';
   return {
     headline: `Room ${room.roomCode} (${room.status})`,
-    detail: `Host: ${room.hostAccountId}\nPlayers: ${players}\nSpectators: ${spectators}\nSession: ${room.activeSession?.sessionId ?? 'none'}`,
+    detail: `Host: ${room.hostAccountId}\nPlayers: ${players}\nSpectators: ${spectators}\n${sessionDetail}`,
     roomCode: room.roomCode,
   };
 }
@@ -654,6 +1057,7 @@ async function joinRankedQueue(): Promise<OnlineRankedViewState> {
       regionPreferences: ['us-east', 'us-west', 'eu-west'],
       buildVersion: '0.1.0-web',
       platform: 'web',
+      characterId: selectedLoadout.P1,
     },
   );
   if (playerRankedTicket.matchStart?.sessionId) {
@@ -662,6 +1066,7 @@ async function joinRankedQueue(): Promise<OnlineRankedViewState> {
       `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
       accountId,
     );
+    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue');
   } else {
     playerRankedSession = null;
   }
@@ -684,6 +1089,7 @@ async function refreshRankedQueue(): Promise<OnlineRankedViewState> {
       `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
       accountId,
     );
+    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue');
   } else {
     playerRankedSession = null;
   }
@@ -1003,6 +1409,7 @@ async function refreshRankedSnapshot(): Promise<RankedSnapshotViewState> {
 }
 
 const startMenu = createStartMenu({
+  onlineMenuEnabled: publicOnlineEntryEnabled,
   initialMode: selectedMode,
   initialMenuThemeId: selectedMenuThemeId,
   availableMenuThemes: MENU_THEME_OPTIONS,
@@ -1014,7 +1421,7 @@ const startMenu = createStartMenu({
   enabledModes,
   initialAccountSummary: 'Guest Account',
   onStartMode: (mode, loadout, aiDifficulty, arcadeSettings) => {
-    beginMode(mode, loadout, aiDifficulty, arcadeSettings);
+    beginUserInitiatedMode(mode, loadout, aiDifficulty, arcadeSettings);
   },
   onOpenWebAuth: platform.kind === 'web'
     ? async (action: WebAuthMenuAction, request?: WebAuthMenuRequest) => {
@@ -1025,7 +1432,7 @@ const startMenu = createStartMenu({
     returnToHome();
   },
   onPlayAgain: () => {
-    beginMode(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
+    beginUserInitiatedMode(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
   },
   onJoinRankedQueue: async () => {
     return await joinRankedQueue();
@@ -1099,7 +1506,6 @@ let pauseToggleLockUntil = 0;
 let frameDataToggleButtonWasDown = false;
 let frameDataToggleLockUntil = 0;
 let trainingFrameDataVisible = selectedMode === 'training';
-let sessionAccountId: string | null = null;
 let replayReviewData: ReplayReviewData | null = null;
 let replayReviewSourceLabel = '';
 let replayFrameIndex = 0;
@@ -1143,7 +1549,7 @@ function formatAccountSummary(session: PlatformAuthSession): string {
 }
 
 function getEnabledModes(): GameMode[] {
-  return ['endless', 'best_of_3', 'arcade', 'training'];
+  return ['endless', 'best_of_3', 'arcade', 'training', 'cpu_vs_cpu'];
 }
 
 function getRulesForMode(mode: GameMode): { allowDunkWin: boolean } {
@@ -1234,7 +1640,7 @@ function loadSettings(): LoadedSettings {
   const fallback: LoadedSettings = {
     mode: fallbackMode,
     menuThemeId: DEFAULT_MENU_THEME_ID,
-    stageAtmosphereId: DEFAULT_STAGE_ATMOSPHERE_ID,
+      stageAtmosphereId: 'wormhole_depths_v1',
     loadout: {
       P1: DEFAULT_CHARACTER_LOADOUT.P1,
       P2: DEFAULT_CHARACTER_LOADOUT.P2,
@@ -1645,10 +2051,37 @@ function createTrainingTelemetryForCurrentSelection(): TrainingTelemetryTracker 
   });
 }
 
+function buildOfflineAiControllersForCurrentMode(): Partial<Record<PlayerId, AiControllerState>> {
+  if (selectedMode === 'training' || onlineMatchContext !== null) {
+    return {};
+  }
+
+  const profileId = resolveAiDifficultyForCurrentMatch();
+  if (selectedMode === 'cpu_vs_cpu') {
+    return {
+      P1: createAiController({
+        seed: selectedMatchSeed ^ 0x517cc1b7,
+        profileId,
+      }),
+      P2: createAiController({
+        seed: selectedMatchSeed ^ 0x9e3779b9,
+        profileId,
+      }),
+    };
+  }
+
+  return {
+    P2: createAiController({
+      seed: selectedMatchSeed ^ 0x9e3779b9,
+      profileId,
+    }),
+  };
+}
+
 function resetRoundState(): void {
   persistRollbackDiagnostics('round_reset');
   const tuning = state.tuning;
-  const matchLoadout = resolveLoadoutForCurrentMatch();
+  const matchLoadout = onlineMatchContext ? onlineMatchContext.matchLoadout : resolveLoadoutForCurrentMatch();
   state = createInitialState({
     loadout: matchLoadout,
     seed: selectedMatchSeed,
@@ -1661,20 +2094,16 @@ function resetRoundState(): void {
   inputTimeline.clear();
   simulationFrame = 0;
   rollbackSession = enableRollbackScaffold
+    || onlineMatchContext !== null
     ? new RollbackSession({
       initialState: state,
-      localPlayerId: 'P1',
+      localPlayerId: onlineMatchContext?.localPlayerId ?? 'P1',
       fixedDt,
       maxHistoryFrames: 60 * 20,
     })
     : null;
-  aiController = selectedMode === 'training'
-    ? null
-    : createAiController({
-      seed: selectedMatchSeed ^ 0x9e3779b9,
-      profileId: resolveAiDifficultyForCurrentMatch(),
-    });
-  const showDebugDiagnostics = runtimeConfig.features.debugToolsEnabled;
+  aiControllers = buildOfflineAiControllersForCurrentMode();
+  const showDebugDiagnostics = debugHudEnabled;
   hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
   hud.updateRollbackDiagnostics(showDebugDiagnostics && rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null);
   const roundStartCallout = voiceCalloutSystem.trigger({
@@ -1703,6 +2132,7 @@ function beginMode(
   aiDifficulty?: AiDifficultyId,
   arcadeSettings?: ArcadeMenuSettings,
 ): void {
+  clearOnlineBootstrapState();
   const resolvedMode = resolveStoredMode(mode);
   if (loadout) {
     selectedLoadout = {
@@ -1741,8 +2171,10 @@ function beginMode(
   resetRoundState();
   appPhase = 'playing';
   setTrainingFrameDataVisibility(selectedMode === 'training');
-  persistSettings();
-  if (sessionAccountId) {
+  if (!onlineMatchContext) {
+    persistSettings();
+  }
+  if (sessionAccountId && !onlineMatchContext) {
     void platform.profile.saveProfile(sessionAccountId, {
       settings: buildFullProfileSettingsPayload(profileSettingsCache, arcadeHistory),
     }).then((savedProfile) => {
@@ -1764,7 +2196,10 @@ function beginMode(
 }
 
 function returnToHome(): void {
+  startupMenuGuardArmed = false;
   persistRollbackDiagnostics('return_home');
+  clearOnlineBootstrapState();
+  clearOnlineMatchContext();
   if (selectedMode === 'training') {
     trainingTelemetry.endRound('mode_exit');
   }
@@ -1783,10 +2218,287 @@ function returnToHome(): void {
   accumulator = 0;
 }
 
+function beginUserInitiatedMode(
+  mode: GameMode,
+  loadout?: PlayersById<CharacterId>,
+  aiDifficulty?: AiDifficultyId,
+  arcadeSettings?: ArcadeMenuSettings,
+): void {
+  startupMenuGuardArmed = false;
+  clearOnlineBootstrapState();
+  clearOnlineMatchContext();
+  beginMode(mode, loadout, aiDifficulty, arcadeSettings);
+}
+
+function ensureDevOpenMenuButton(): void {
+  if (!localRecoveryUiEnabled || devOpenMenuButton) {
+    return;
+  }
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'dev-open-menu-button';
+  button.textContent = 'Open Menu';
+  button.addEventListener('click', () => {
+    returnToHome();
+  });
+  document.body.appendChild(button);
+  devOpenMenuButton = button;
+}
+
+function ensureDevDebugPanel(): void {
+  if (!localRecoveryUiEnabled || devDebugPanel) {
+    return;
+  }
+  const panel = document.createElement('div');
+  panel.className = 'dev-debug-panel';
+
+  const title = document.createElement('div');
+  title.className = 'dev-debug-title';
+  title.textContent = 'Local Debug';
+
+  const phaseLabel = document.createElement('div');
+  phaseLabel.className = 'dev-debug-phase';
+  phaseLabel.textContent = `Phase: ${appPhase}`;
+
+  const homeButton = document.createElement('button');
+  homeButton.type = 'button';
+  homeButton.className = 'dev-debug-action';
+  homeButton.textContent = 'Force Home Menu';
+  homeButton.addEventListener('click', () => {
+    returnToHome();
+  });
+
+  panel.append(title, phaseLabel, homeButton);
+  document.body.appendChild(panel);
+  devDebugPanel = panel;
+  devDebugPhaseLabel = phaseLabel;
+}
+
+function ensureOnlineBootstrapPanel(): void {
+  if (onlineBootstrapPanel) {
+    return;
+  }
+  const panel = document.createElement('div');
+  panel.className = 'online-bootstrap-panel';
+  panel.hidden = true;
+
+  const title = document.createElement('div');
+  title.className = 'online-bootstrap-title';
+  title.textContent = 'Online Session Bootstrap';
+
+  const detail = document.createElement('pre');
+  detail.className = 'online-bootstrap-detail';
+  detail.textContent = '';
+
+  const actions = document.createElement('div');
+  actions.className = 'online-bootstrap-actions';
+
+  const returnHomeButton = document.createElement('button');
+  returnHomeButton.type = 'button';
+  returnHomeButton.className = 'online-bootstrap-action';
+  returnHomeButton.textContent = 'Return Home';
+  returnHomeButton.addEventListener('click', () => {
+    returnToHome();
+  });
+
+  actions.appendChild(returnHomeButton);
+  panel.append(title, detail, actions);
+  document.body.appendChild(panel);
+
+  onlineBootstrapPanel = panel;
+  onlineBootstrapTitle = title;
+  onlineBootstrapDetail = detail;
+}
+
+function renderOnlineBootstrapPanel(): void {
+  ensureOnlineBootstrapPanel();
+  if (!onlineBootstrapPanel || !onlineBootstrapTitle || !onlineBootstrapDetail) {
+    return;
+  }
+  if (appPhase !== 'online_bootstrap' || !onlineBootstrapState) {
+    onlineBootstrapPanel.hidden = true;
+    onlineBootstrapDetail.textContent = '';
+    return;
+  }
+  onlineBootstrapTitle.textContent = 'Online Session Bootstrap';
+  const iceConfig = onlineBootstrapState.iceConfig;
+  const iceLine = iceConfig
+    ? `ICE servers: ${iceConfig.iceServers.length} | Direct timeout: ${iceConfig.directConnectTimeoutMs}ms`
+    : 'ICE servers: unavailable';
+  onlineBootstrapDetail.textContent = [
+    `Source: ${onlineBootstrapState.source}`,
+    `Session: ${onlineBootstrapState.sessionId}`,
+    `Queue: ${onlineBootstrapState.queueType}`,
+    `Region: ${onlineBootstrapState.region}`,
+    `Local: ${onlineBootstrapState.localAccountId}`,
+    `Peer: ${onlineBootstrapState.peerAccountId ?? 'pending'}`,
+    `Transport path: ${onlineBootstrapState.connectionPath}`,
+    `Status: ${onlineBootstrapState.status}`,
+    iceLine,
+    `Token expires: ${onlineBootstrapState.sessionTokenExpiresAt ?? 'unknown'}`,
+    onlineBootstrapState.diagnosticsLine,
+    '',
+    onlineBootstrapState.statusDetail,
+  ].join('\n');
+  onlineBootstrapPanel.hidden = false;
+}
+
+function clearOnlineBootstrapState(): void {
+  onlineBootstrapState = null;
+  onlineRelayFallbackController = null;
+  if (onlineBootstrapPanel) {
+    onlineBootstrapPanel.hidden = true;
+  }
+}
+
+function clearOnlineMatchContext(): void {
+  if (onlineMatchContext) {
+    selectedMode = onlineMatchContext.restoreMode;
+    selectedLoadout = {
+      P1: onlineMatchContext.restoreLoadout.P1,
+      P2: onlineMatchContext.restoreLoadout.P2,
+    };
+  }
+  onlineMatchContext = null;
+}
+
+function beginOnlineMatch(matchStart: MatchStartPayload): void {
+  const localPlayerId = matchStart.localPlayer.side;
+  const remotePlayerId = matchStart.peer.side;
+  const localCharacterId = isCharacterId(matchStart.localPlayer.selectedCharacterId)
+    ? matchStart.localPlayer.selectedCharacterId
+    : selectedLoadout.P1;
+  const remoteCharacterId = isCharacterId(matchStart.peer.selectedCharacterId)
+    ? matchStart.peer.selectedCharacterId
+    : selectedLoadout.P2;
+  const restoreMode = selectedMode;
+  const restoreLoadout = {
+    P1: selectedLoadout.P1,
+    P2: selectedLoadout.P2,
+  };
+  const matchLoadout = localPlayerId === 'P1'
+    ? { P1: localCharacterId, P2: remoteCharacterId }
+    : { P1: remoteCharacterId, P2: localCharacterId };
+
+  selectedMode = 'best_of_3';
+  selectedMatchSeed = hashSeedFromString(matchStart.sessionId);
+  onlineMatchContext = {
+    sessionId: matchStart.sessionId,
+    sessionToken: matchStart.sessionToken,
+    queueType: matchStart.queueType,
+    region: matchStart.region,
+    matchLoadout,
+    restoreMode,
+    restoreLoadout,
+    localPlayerId,
+    remotePlayerId,
+    localAccountId: matchStart.localPlayer.accountId,
+    remoteAccountId: matchStart.peer.accountId,
+    statusText: 'Connected via authenticated session relay.',
+    connectionPath: 'server',
+    lastRemoteFrame: -1,
+    outgoingFrames: [],
+    pendingRemoteInputs: new Map<number, PlayerFrameInput>(),
+    sendAccumulatorSeconds: 0,
+    pollAccumulatorSeconds: 0,
+    sendInFlight: false,
+    pollInFlight: false,
+    finalOutcome: null,
+    winnerAccountId: null,
+    rankedResultStatus: 'idle',
+    rankedResultDetail: 'Awaiting match completion.',
+    rankedResultSubmissionId: null,
+    rankedResultInFlight: false,
+  };
+  clearOnlineBootstrapState();
+  beginMode('best_of_3', undefined, selectedAiDifficulty, selectedArcadeSettings);
+}
+
+async function beginRankedSessionBootstrap(
+  ticket: QueueTicketView,
+  session: MatchSessionView | null,
+  source: 'ranked_queue',
+): Promise<void> {
+  if (!onlineRuntimeEnabled || !ticket.matchStart) {
+    return;
+  }
+
+  const accountId = sessionAccountId ?? ticket.accountId;
+  const matchStart = ticket.matchStart;
+  onlineRelayFallbackController = null;
+  onlineBootstrapState = {
+    source,
+    sessionId: matchStart.sessionId,
+    queueType: matchStart.queueType,
+    region: matchStart.region,
+    localAccountId: matchStart.localPlayer.accountId ?? accountId,
+    peerAccountId: matchStart.peer.accountId ?? null,
+    sessionToken: matchStart.sessionToken ?? null,
+    sessionTokenExpiresAt: matchStart.sessionTokenExpiresAt ?? null,
+    connectionPath: 'direct',
+    status: 'preparing',
+    diagnosticsLine: `Participants: ${matchStart.localPlayer.accountId} vs ${matchStart.peer.accountId}`,
+    statusDetail: 'Matched session accepted. Preparing online runtime bootstrap.',
+    iceConfig: null,
+  };
+  appPhase = 'online_bootstrap';
+  void platform.presence.setStatus('online_dev');
+  pauseMenu.setPaused(false);
+  pauseMenu.setCanRestartTraining(false);
+  startMenu.hideHome();
+  startMenu.hideRoundBanner();
+  replayViewer.hide();
+  onlineDevMenu?.hide();
+  hudRoot.style.visibility = 'hidden';
+  syncTrainingFrameDataVisibility();
+  accumulator = 0;
+  onlineDiagnosticsUpdate = {
+    ...onlineDiagnosticsUpdate,
+    ticketId: ticket.ticketId,
+    sessionId: matchStart.sessionId,
+    queueType: matchStart.queueType,
+    region: matchStart.region,
+    participantAccountIds: [matchStart.localPlayer.accountId, matchStart.peer.accountId],
+    queueWaitMs: getQueueWaitMs(ticket.queuedAt),
+    connectionPath: 'unknown',
+  };
+  renderOnlineBootstrapPanel();
+
+  const iceConfig = await fetchMatchmakingIceConfig(matchmakingApiBase, false);
+  if (!onlineBootstrapState || onlineBootstrapState.sessionId !== matchStart.sessionId) {
+    return;
+  }
+  if (iceConfig) {
+    onlineRelayFallbackController = new RelayFallbackController({
+      directConnectTimeoutMs: iceConfig.directConnectTimeoutMs,
+    });
+    onlineRelayFallbackController.startDirectAttempt(Date.now());
+    buildRtcConfiguration(iceConfig, 'direct');
+  }
+
+  onlineBootstrapState = {
+    ...onlineBootstrapState,
+    status: 'awaiting_signaling',
+    connectionPath: iceConfig ? 'direct' : 'server',
+    statusDetail: iceConfig
+      ? 'Session relay is ready now, and RTC configuration has also been prepared for a future direct path.'
+      : 'Session relay is ready. ICE config was unavailable, so the runtime will use server relay only.',
+    iceConfig,
+  };
+  onlineDiagnosticsUpdate = {
+    ...onlineDiagnosticsUpdate,
+    connectionPath: iceConfig ? 'direct' : 'relay',
+  };
+  renderOnlineBootstrapPanel();
+  beginOnlineMatch(matchStart);
+}
+
 function openOnlineDevMenu(section?: OnlineDevMenuTarget): void {
   if (!onlineDevMenu) {
     return;
   }
+  clearOnlineBootstrapState();
+  clearOnlineMatchContext();
   const sectionId: OnlineDevSectionId | undefined = section
     ? ({
       matchmaking: 'matchmaking',
@@ -2051,8 +2763,25 @@ function updateMatchInfo(): void {
     return;
   }
 
+  if (appPhase === 'online_bootstrap') {
+    const status = onlineBootstrapState?.status ?? 'preparing';
+    const path = onlineBootstrapState?.connectionPath ?? 'direct';
+    matchInfo.textContent = `Online Bootstrap | ${status} | ${path}`;
+    return;
+  }
+
+  if (onlineMatchContext && (appPhase === 'playing' || appPhase === 'round_transition' || appPhase === 'match_over')) {
+    matchInfo.textContent = `Online ${onlineMatchContext.queueType} | ${onlineMatchContext.region} | ${onlineMatchContext.connectionPath} relay | ${getRoundScoreText()}`;
+    return;
+  }
+
   if (selectedMode === 'endless') {
     matchInfo.textContent = 'Mode: Endless Dev';
+    return;
+  }
+
+  if (selectedMode === 'cpu_vs_cpu') {
+    matchInfo.textContent = `Mode: AI vs AI | ${getRoundScoreText()} | ${selectedAiDifficulty}`;
     return;
   }
 
@@ -2074,7 +2803,7 @@ function updateMatchInfo(): void {
 }
 
 function resolveAdaptiveMusicState(phase: AppPhase, snapshot: RenderSnapshot): MusicState {
-  if (phase === 'home' || phase === 'online_dev') {
+  if (phase === 'home' || phase === 'online_dev' || phase === 'online_bootstrap') {
     return 'menu';
   }
   if (phase === 'match_over' || snapshot.winner) {
@@ -2352,7 +3081,18 @@ function onRoundWin(winner: PlayerId): void {
       hud.showVoiceSubtitle(matchWinCallout.text);
     }
     void platform.presence.setStatus('match_over');
-    startMenu.showMatchOver(winner, p1RoundWins, p2RoundWins);
+    if (onlineMatchContext) {
+      onlineMatchContext.finalOutcome = winner === 'P1' ? 'p1_win' : 'p2_win';
+      onlineMatchContext.winnerAccountId = winner === onlineMatchContext.localPlayerId
+        ? onlineMatchContext.localAccountId
+        : onlineMatchContext.remoteAccountId;
+      renderOnlineMatchOverScreen(onlineMatchContext, winner, p1RoundWins, p2RoundWins);
+      if (onlineMatchContext.queueType === 'ranked') {
+        void submitOnlineRankedResult(onlineMatchContext);
+      }
+    } else {
+      startMenu.showMatchOver(winner, p1RoundWins, p2RoundWins);
+    }
     hudRoot.style.visibility = 'hidden';
     return;
   }
@@ -2388,6 +3128,14 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
+  if (appPhase === 'online_bootstrap') {
+    if (key === 'escape') {
+      event.preventDefault();
+      returnToHome();
+    }
+    return;
+  }
+
   if (selectedMode === 'training' && appPhase === 'playing' && key === 'n') {
     event.preventDefault();
     restartTrainingRound();
@@ -2407,6 +3155,15 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault();
     pauseMenu.toggle();
     accumulator = 0;
+  }
+
+  if (
+    runtimeConfig.features.debugToolsEnabled
+    && key === 'm'
+    && (appPhase === 'playing' || appPhase === 'round_transition')
+  ) {
+    event.preventDefault();
+    returnToHome();
   }
 });
 
@@ -2450,37 +3207,93 @@ function tick(nowMs: number): void {
   if (!pauseMenu.isPaused() && appPhase === 'playing') {
     while (accumulator >= fixedDt) {
       const frameInputRaw = input.getFrameInput();
-      let frameInput = frameInputRaw;
-      if (aiController) {
-        const aiTick = tickAiController(state, 'P2', aiController);
-        aiController = aiTick.next;
-        frameInput = buildFrameInputWithAi(frameInputRaw.p1, aiTick.input, 'P2');
-      }
-      inputTimeline.setLocalInput(simulationFrame, 'P1', frameInput.p1);
-      inputTimeline.setLocalInput(simulationFrame, 'P2', frameInput.p2);
-      if (rollbackSession) {
-        const rollbackResult = rollbackSession.advanceFrame({
-          localInput: frameInput.p1,
-          remoteAuthoritativeInput: frameInput.p2,
+      if (onlineMatchContext) {
+        const localInput = cloneOnlinePlayerInput(frameInputRaw.p1);
+        onlineMatchContext.outgoingFrames.push({
+          frame: simulationFrame,
+          input: localInput,
         });
-        if (runtimeConfig.features.debugToolsEnabled && rollbackResult.rollbackFrames > 0) {
-          console.info('[rollback] correction', {
-            frame: rollbackResult.frame,
-            rollbackFrames: rollbackResult.rollbackFrames,
+        const remoteInput = onlineMatchContext.pendingRemoteInputs.get(simulationFrame) ?? null;
+        if (remoteInput) {
+          onlineMatchContext.pendingRemoteInputs.delete(simulationFrame);
+        }
+        if (rollbackSession) {
+          const rollbackResult = rollbackSession.advanceFrame({
+            localInput,
+            remoteAuthoritativeInput: remoteInput,
           });
-        }
-        if (runtimeConfig.features.debugToolsEnabled) {
-          const desyncEvents = rollbackSession.drainPendingDesyncEvents();
-          for (const event of desyncEvents) {
-            console.warn('[rollback] desync event', event);
+          if (runtimeConfig.features.debugToolsEnabled && rollbackResult.rollbackFrames > 0) {
+            console.info('[rollback] online correction', {
+              frame: rollbackResult.frame,
+              rollbackFrames: rollbackResult.rollbackFrames,
+            });
           }
+          if (runtimeConfig.features.debugToolsEnabled) {
+            const desyncEvents = rollbackSession.drainPendingDesyncEvents();
+            for (const event of desyncEvents) {
+              console.warn('[rollback] online desync event', event);
+            }
+          }
+          state = rollbackSession.getStateSnapshot();
+        } else {
+          step(
+            state,
+            onlineMatchContext.localPlayerId === 'P1'
+              ? { p1: localInput, p2: createEmptyPlayerInput() }
+              : { p1: createEmptyPlayerInput(), p2: localInput },
+            fixedDt,
+          );
         }
-        state = rollbackSession.getStateSnapshot();
       } else {
-        step(state, frameInput, fixedDt);
+        let frameInput = frameInputRaw;
+        const p1AiController = aiControllers.P1;
+        const p2AiController = aiControllers.P2;
+        if (p1AiController || p2AiController) {
+          const p1Input = p1AiController
+            ? (() => {
+              const aiTick = tickAiController(state, 'P1', p1AiController);
+              aiControllers.P1 = aiTick.next;
+              return aiTick.input;
+            })()
+            : frameInputRaw.p1;
+          const p2Input = p2AiController
+            ? (() => {
+              const aiTick = tickAiController(state, 'P2', p2AiController);
+              aiControllers.P2 = aiTick.next;
+              return aiTick.input;
+            })()
+            : frameInputRaw.p2;
+          frameInput = {
+            p1: p1Input,
+            p2: p2Input,
+          };
+        }
+        inputTimeline.setLocalInput(simulationFrame, 'P1', frameInput.p1);
+        inputTimeline.setLocalInput(simulationFrame, 'P2', frameInput.p2);
+        if (rollbackSession) {
+          const rollbackResult = rollbackSession.advanceFrame({
+            localInput: frameInput.p1,
+            remoteAuthoritativeInput: frameInput.p2,
+          });
+          if (runtimeConfig.features.debugToolsEnabled && rollbackResult.rollbackFrames > 0) {
+            console.info('[rollback] correction', {
+              frame: rollbackResult.frame,
+              rollbackFrames: rollbackResult.rollbackFrames,
+            });
+          }
+          if (runtimeConfig.features.debugToolsEnabled) {
+            const desyncEvents = rollbackSession.drainPendingDesyncEvents();
+            for (const event of desyncEvents) {
+              console.warn('[rollback] desync event', event);
+            }
+          }
+          state = rollbackSession.getStateSnapshot();
+        } else {
+          step(state, frameInput, fixedDt);
+        }
       }
       if (selectedMode === 'training') {
-        trainingTelemetry.recordFrame(frameInput, state, fixedDt);
+        trainingTelemetry.recordFrame(frameInputRaw, state, fixedDt);
       }
       simulationFrame += 1;
       accumulator -= fixedDt;
@@ -2521,6 +3334,40 @@ function tick(nowMs: number): void {
     replayAccumulator = 0;
   }
 
+  if (onlineMatchContext && appPhase === 'playing') {
+    onlineMatchContext.sendAccumulatorSeconds += elapsedSeconds;
+    onlineMatchContext.pollAccumulatorSeconds += elapsedSeconds;
+    if (onlineMatchContext.sendAccumulatorSeconds >= 0.05 || onlineMatchContext.outgoingFrames.length >= 4) {
+      onlineMatchContext.sendAccumulatorSeconds = 0;
+      flushOnlineTransport(onlineMatchContext);
+    } else if (onlineMatchContext.pollAccumulatorSeconds >= 0.05) {
+      flushOnlineTransport(onlineMatchContext);
+    }
+    if (onlineMatchContext.pollAccumulatorSeconds >= 0.05) {
+      onlineMatchContext.pollAccumulatorSeconds = 0;
+    }
+  }
+
+  if (
+    appPhase === 'online_bootstrap'
+    && onlineBootstrapState
+    && onlineBootstrapState.iceConfig
+    && onlineRelayFallbackController
+    && onlineRelayFallbackController.shouldFallbackToRelay(nowMs)
+  ) {
+    onlineRelayFallbackController.applyRelayFallback();
+    buildRtcConfiguration(onlineBootstrapState.iceConfig, 'relay');
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      connectionPath: 'relay',
+      statusDetail: 'Direct connect timed out. Relay fallback is prepared. The remaining missing layer is signaling/datachannel exchange.',
+    };
+    onlineDiagnosticsUpdate = {
+      ...onlineDiagnosticsUpdate,
+      connectionPath: 'relay',
+    };
+  }
+
   const snapshot = appPhase === 'replay_review' && replayReviewData
     ? replayReviewData.frames[replayFrameIndex].snapshot
     : getRenderSnapshot(state);
@@ -2542,14 +3389,14 @@ function tick(nowMs: number): void {
   audioSystem.setBusVolume('voice', audioSettings.voiceVolume * dynamicRange.voice);
 
   renderFrame(sceneContext, snapshot);
-  const memoryDiagnostics = runtimeConfig.features.debugToolsEnabled
+  const memoryDiagnostics = debugHudEnabled
     ? getRuntimeMemoryDiagnosticsView(snapshot)
     : null;
 
   if (appPhase === 'replay_review') {
     hud.setRollbackDiagnosticsVisible(false);
     hud.updateRollbackDiagnostics(null);
-  } else if (runtimeConfig.features.debugToolsEnabled) {
+  } else if (debugHudEnabled) {
     hud.setRollbackDiagnosticsVisible(true);
     hud.updateRollbackDiagnostics(rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null, memoryDiagnostics);
   } else {
@@ -2559,15 +3406,34 @@ function tick(nowMs: number): void {
   hud.update(snapshot);
   updateMatchInfo();
   updateOnlineDiagnosticsOverlay();
+  renderOnlineBootstrapPanel();
+  if (devDebugPhaseLabel) {
+    devDebugPhaseLabel.textContent = `Phase: ${appPhase}`;
+  }
 
   requestAnimationFrame(tick);
 }
 
 hudRoot.style.visibility = 'hidden';
 syncTrainingFrameDataVisibility();
+ensureDevOpenMenuButton();
+ensureDevDebugPanel();
 void bootstrapPlatformProfile();
 void platform.presence.setStatus('home');
 startMenu.showHome();
+if (runtimeConfig.features.debugToolsEnabled) {
+  window.setTimeout(() => {
+    if (!startupMenuGuardArmed) {
+      return;
+    }
+    if (appPhase !== 'home') {
+      returnToHome();
+      return;
+    }
+    startMenu.showHome();
+    hudRoot.style.visibility = 'hidden';
+  }, 250);
+}
 requestAnimationFrame(tick);
 
 window.addEventListener('resize', () => {

@@ -3,6 +3,7 @@ import { CHARACTERS } from './characters';
 import {
   COMBAT_MOVE_FRAME_REGISTRY,
   MOVE_FRAME_DATA,
+  createMoveFrameData,
   framesToSeconds,
   secondsToFrames,
 } from './moveData';
@@ -39,19 +40,79 @@ describe('combat move frame registry', () => {
     assertFrameValue('special.cooldownFrames', COMBAT_MOVE_FRAME_REGISTRY.special.cooldownFrames);
   });
 
-  test('character move definitions and default move data are built from the shared registry', () => {
+  test('default move data is built from the shared registry', () => {
+    const defaultMoveData = createMoveFrameData('test_projectile');
+
     expect(MOVE_FRAME_DATA.launch).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.launch);
     expect(MOVE_FRAME_DATA.dunk).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.dunk);
     expect(MOVE_FRAME_DATA.parry).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.parry);
     expect(MOVE_FRAME_DATA.break).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.break);
     expect(MOVE_FRAME_DATA.special.timing).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.special);
+    expect(defaultMoveData.launch).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.launch);
+    expect(defaultMoveData.dunk).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.dunk);
+    expect(defaultMoveData.parry).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.parry);
+    expect(defaultMoveData.break).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.break);
+    expect(defaultMoveData.special.timing).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.special);
+  });
 
+  test('character move definitions remain internally coherent when kits override default timings', () => {
     for (const character of CHARACTERS) {
-      expect(character.moves.launch).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.launch);
-      expect(character.moves.dunk).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.dunk);
-      expect(character.moves.parry).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.parry);
-      expect(character.moves.break).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.break);
-      expect(character.moves.special.timing).toMatchObject(COMBAT_MOVE_FRAME_REGISTRY.special);
+      assertFrameValue(`${character.id}.launch.startupFrames`, character.moves.launch.startupFrames);
+      assertFrameValue(`${character.id}.launch.activeFrames`, character.moves.launch.activeFrames);
+      assertFrameValue(
+        `${character.id}.launch.recoveryOnHitFrames`,
+        character.moves.launch.recoveryOnHitFrames,
+      );
+      assertFrameValue(
+        `${character.id}.launch.recoveryOnWhiffFrames`,
+        character.moves.launch.recoveryOnWhiffFrames,
+      );
+
+      assertFrameValue(`${character.id}.dunk.startupFrames`, character.moves.dunk.startupFrames);
+      assertFrameValue(`${character.id}.dunk.activeFrames`, character.moves.dunk.activeFrames);
+      assertFrameValue(
+        `${character.id}.dunk.recoveryOnHitFrames`,
+        character.moves.dunk.recoveryOnHitFrames,
+      );
+      assertFrameValue(
+        `${character.id}.dunk.recoveryOnWhiffFrames`,
+        character.moves.dunk.recoveryOnWhiffFrames,
+      );
+      expect(character.moves.dunk.hitRange, `${character.id}.dunk.hitRange should be > 0`).toBeGreaterThan(0);
+
+      assertFrameValue(`${character.id}.parry.startupFrames`, character.moves.parry.startupFrames);
+      assertFrameValue(`${character.id}.parry.activeFrames`, character.moves.parry.activeFrames);
+      assertFrameValue(`${character.id}.parry.recoveryFrames`, character.moves.parry.recoveryFrames);
+      assertFrameValue(
+        `${character.id}.parry.counterStunFrames`,
+        character.moves.parry.counterStunFrames,
+      );
+
+      assertFrameValue(`${character.id}.break.startupFrames`, character.moves.break.startupFrames);
+      assertFrameValue(`${character.id}.break.activeFrames`, character.moves.break.activeFrames);
+      assertFrameValue(`${character.id}.break.recoveryFrames`, character.moves.break.recoveryFrames);
+      expect(
+        character.moves.break.velocityRetain,
+        `${character.id}.break.velocityRetain should be within [0, 1]`,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        character.moves.break.velocityRetain,
+        `${character.id}.break.velocityRetain should be within [0, 1]`,
+      ).toBeLessThanOrEqual(1);
+
+      assertFrameValue(`${character.id}.special.startupFrames`, character.moves.special.timing.startupFrames);
+      assertFrameValue(`${character.id}.special.activeFrames`, character.moves.special.timing.activeFrames);
+      assertFrameValue(`${character.id}.special.recoveryFrames`, character.moves.special.timing.recoveryFrames);
+      assertFrameValue(`${character.id}.special.cooldownFrames`, character.moves.special.timing.cooldownFrames);
+      expect(character.moves.special.id).toBeTruthy();
+      expect(character.moves.special.label).toBeTruthy();
+      expect(character.specials.length, `${character.id} should expose at least one special slot`).toBeGreaterThan(0);
+      expect(new Set(character.specials.map((special) => special.id)).size).toBe(character.specials.length);
+
+      const configuredSpecial = character.specials.find((special) => special.id === character.moves.special.id);
+      if (configuredSpecial) {
+        expect(configuredSpecial.label).toBe(character.moves.special.label);
+      }
     }
   });
 

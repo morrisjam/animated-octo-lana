@@ -12,7 +12,8 @@ export type QueueTicketClosedReason =
   | 'peer_left'
   | 'expired'
   | 'session_expired'
-  | 'reconnect_timeout';
+  | 'reconnect_timeout'
+  | 'session_completed';
 
 export interface QueuePlayerMetadata {
   displayName?: string | null;
@@ -77,7 +78,7 @@ export interface QueueTicketView {
 
 export type SessionConnectionStatus = 'connected' | 'disconnected';
 export type MatchSessionStatus = 'active' | 'resolved';
-export type MatchSessionResolvedReason = 'session_expired' | 'reconnect_timeout' | 'peer_left';
+export type MatchSessionResolvedReason = 'session_expired' | 'reconnect_timeout' | 'peer_left' | 'completed';
 
 export interface MatchSessionParticipantView {
   accountId: string;
@@ -465,6 +466,30 @@ export class MatchmakingQueueService {
     return { ok: true, value: this.toSessionView(session) };
   }
 
+  public completeSession(sessionId: string, accountId: string, sessionToken: string): SessionActionResult<MatchSessionView> {
+    const nowMs = this.now();
+    this.cleanup(nowMs);
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      return this.error('not_found', 'Session not found.');
+    }
+    const participant = this.findParticipant(session, accountId);
+    if (!participant) {
+      return this.error('forbidden', 'Session does not contain this account.');
+    }
+    if (session.status !== 'active') {
+      return this.error('session_resolved', 'Session has already resolved.');
+    }
+    if (nowMs > participant.sessionTokenExpiresAtMs) {
+      return this.error('token_expired', 'Session token has expired.');
+    }
+    if (participant.sessionToken !== sessionToken) {
+      return this.error('invalid_token', 'Session token is invalid.');
+    }
+    this.resolveSession(session, nowMs, 'completed');
+    return { ok: true, value: this.toSessionView(session) };
+  }
+
   public leaveTicket(ticketId: string, accountId: string): QueueTicketView | null {
     const nowMs = this.now();
     this.cleanup(nowMs);
@@ -838,7 +863,11 @@ export class MatchmakingQueueService {
     session.resolvedReason = reason;
     session.resolvedAtMs = nowMs;
 
-    const closeReason: QueueTicketClosedReason = reason === 'reconnect_timeout' ? 'reconnect_timeout' : 'session_expired';
+    const closeReason: QueueTicketClosedReason = reason === 'reconnect_timeout'
+      ? 'reconnect_timeout'
+      : reason === 'completed'
+        ? 'session_completed'
+        : 'session_expired';
     for (const participant of session.participants) {
       const ticket = this.ticketsById.get(participant.queueTicketId);
       if (ticket && ticket.status !== 'closed') {

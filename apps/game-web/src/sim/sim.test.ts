@@ -326,6 +326,89 @@ describe('super boost commit tracking', () => {
   });
 });
 
+describe('launch recovery and spacing', () => {
+  test('helpless state ends early once launch drift falls below controllable speed', () => {
+    const state = createInitialState();
+    state.players.P2.helpless = 4;
+    state.players.P2.vel = { x: 6, y: 0 };
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P2.helpless).toBe(0);
+  });
+
+  test('close-range neutral overlap applies separation so players do not stay stacked', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 1, y: 0 };
+    state.players.P1.vel = { x: 0, y: 0 };
+    state.players.P2.vel = { x: 0, y: 0 };
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P2.pos.x - state.players.P1.pos.x).toBeGreaterThan(1);
+    expect(state.players.P1.vel.x).toBeLessThan(0);
+    expect(state.players.P2.vel.x).toBeGreaterThan(0);
+  });
+
+  test('simultaneous launch attempts clash and create a large spacing reset', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: -2.5, y: 0 };
+    state.players.P2.pos = { x: 2.5, y: 0 };
+    state.players.P1.launchActive = 0.12;
+    state.players.P2.launchActive = 0.12;
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P1.helpless).toBe(0);
+    expect(state.players.P2.helpless).toBe(0);
+    expect(state.players.P2.pos.x - state.players.P1.pos.x).toBeGreaterThan(14);
+    expect(state.players.P1.vel.x).toBeLessThan(0);
+    expect(state.players.P2.vel.x).toBeGreaterThan(0);
+  });
+
+  test('boost keeps its original chase line instead of retargeting every frame', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 24, y: 0 };
+
+    const startBoost = neutralInput();
+    startBoost.p1.boost = true;
+    step(state, startBoost, FIXED_DT);
+
+    const sidestep = neutralInput();
+    sidestep.p1.boost = true;
+    sidestep.p2.superBoost = true;
+    sidestep.p2.moveY = 1;
+    step(state, sidestep, FIXED_DT);
+
+    expect(state.players.P1.boostActive).toBe(true);
+    expect(state.players.P1.vel.x).toBeGreaterThan(55);
+    expect(Math.abs(state.players.P1.vel.y)).toBeLessThan(0.5);
+  });
+
+  test('boost release applies a short recommit cooldown before it can lock again', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 24, y: 0 };
+
+    const boostInput = neutralInput();
+    boostInput.p1.boost = true;
+    runSteps(state, boostInput, 6);
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P1.boostActive).toBe(false);
+    expect(state.players.P1.cool.boost).toBeGreaterThan(0.1);
+
+    state.players.P2.pos = { x: -24, y: 0 };
+    step(state, boostInput, FIXED_DT);
+
+    expect(state.players.P1.boostActive).toBe(false);
+    expect(state.players.P1.vel.x).toBeGreaterThan(-20);
+  });
+});
+
 describe('deterministic seed and rng', () => {
   test('same seed produces identical deterministic random sequence', () => {
     const stateA = createInitialState({ seed: 1337 });

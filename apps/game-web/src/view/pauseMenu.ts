@@ -10,6 +10,8 @@ interface PauseMenuOptions {
   enableDebugTab?: boolean;
   canExportTrainingTelemetry?(): boolean;
   onExportTrainingTelemetry?(): Promise<string> | string;
+  canExportAiMatchTelemetry?(): boolean;
+  onExportAiMatchTelemetry?(): Promise<string> | string;
   onRestartTraining?(): void;
 }
 
@@ -62,6 +64,7 @@ export class PauseMenu {
   private readonly debugTabEnabled: boolean;
   private readonly restartTrainingButton!: HTMLButtonElement;
   private readonly exportTrainingTelemetryButton: HTMLButtonElement | null = null;
+  private readonly exportAiMatchTelemetryButton: HTMLButtonElement | null = null;
   private readonly tabPanels: Record<PauseTabId, HTMLDivElement>;
   private readonly fieldInputs = new Map<keyof GameTuning, HTMLInputElement>();
   private readonly audioVolumeInputs = new Map<AudioVolumeField['key'], HTMLInputElement>();
@@ -73,6 +76,7 @@ export class PauseMenu {
   private paused = false;
   private canRestartTraining = false;
   private exportingTrainingTelemetry = false;
+  private exportingAiMatchTelemetry = false;
   private activeTab: PauseTabId = 'pause';
 
   constructor(private readonly options: PauseMenuOptions) {
@@ -142,7 +146,7 @@ export class PauseMenu {
       this.setActiveTab('pause');
       this.syncInputsFromTuning();
       this.syncInputsFromAudioSettings();
-      this.refreshTrainingTelemetryControls();
+      this.refreshExportControls();
       if (this.copyStatus) {
         this.copyStatus.textContent = '';
       }
@@ -152,7 +156,7 @@ export class PauseMenu {
   setCanRestartTraining(enabled: boolean): void {
     this.canRestartTraining = enabled;
     this.restartTrainingButton.hidden = !enabled;
-    this.refreshTrainingTelemetryControls();
+    this.refreshExportControls();
   }
 
   private createTabButton(label: string, tabId: PauseTabId): HTMLButtonElement {
@@ -399,13 +403,27 @@ export class PauseMenu {
       });
     }
 
+    let exportAiMatchTelemetryButton: HTMLButtonElement | null = null;
+    if (this.options.onExportAiMatchTelemetry) {
+      exportAiMatchTelemetryButton = document.createElement('button');
+      exportAiMatchTelemetryButton.type = 'button';
+      exportAiMatchTelemetryButton.className = 'pause-action';
+      exportAiMatchTelemetryButton.textContent = 'Export AI Match Telemetry';
+      exportAiMatchTelemetryButton.addEventListener('click', () => {
+        void this.exportAiMatchTelemetry();
+      });
+    }
+
+    actions.append(resetButton, copyButton);
     if (exportTrainingTelemetryButton) {
-      actions.append(resetButton, copyButton, exportTrainingTelemetryButton);
-    } else {
-      actions.append(resetButton, copyButton);
+      actions.append(exportTrainingTelemetryButton);
+    }
+    if (exportAiMatchTelemetryButton) {
+      actions.append(exportAiMatchTelemetryButton);
     }
     tab.appendChild(actions);
     this.exportTrainingTelemetryButton = exportTrainingTelemetryButton;
+    this.exportAiMatchTelemetryButton = exportAiMatchTelemetryButton;
 
     this.copyStatus = document.createElement('div');
     this.copyStatus.className = 'copy-status';
@@ -484,15 +502,21 @@ export class PauseMenu {
     }
   }
 
-  private refreshTrainingTelemetryControls(): void {
-    if (!this.exportTrainingTelemetryButton) {
-      return;
+  private refreshExportControls(): void {
+    if (this.exportTrainingTelemetryButton) {
+      const canExportTraining = this.options.canExportTrainingTelemetry
+        ? this.options.canExportTrainingTelemetry()
+        : this.canRestartTraining;
+      this.exportTrainingTelemetryButton.hidden = !canExportTraining;
+      this.exportTrainingTelemetryButton.disabled = !canExportTraining || this.exportingTrainingTelemetry;
     }
-    const canExport = this.options.canExportTrainingTelemetry
-      ? this.options.canExportTrainingTelemetry()
-      : this.canRestartTraining;
-    this.exportTrainingTelemetryButton.hidden = !canExport;
-    this.exportTrainingTelemetryButton.disabled = !canExport || this.exportingTrainingTelemetry;
+    if (this.exportAiMatchTelemetryButton) {
+      const canExportAiMatch = this.options.canExportAiMatchTelemetry
+        ? this.options.canExportAiMatchTelemetry()
+        : false;
+      this.exportAiMatchTelemetryButton.hidden = !canExportAiMatch;
+      this.exportAiMatchTelemetryButton.disabled = !canExportAiMatch || this.exportingAiMatchTelemetry;
+    }
   }
 
   private async exportTrainingTelemetry(): Promise<void> {
@@ -500,7 +524,7 @@ export class PauseMenu {
       return;
     }
     this.exportingTrainingTelemetry = true;
-    this.refreshTrainingTelemetryControls();
+    this.refreshExportControls();
     if (this.copyStatus) {
       this.copyStatus.textContent = 'Exporting training telemetry...';
     }
@@ -517,7 +541,33 @@ export class PauseMenu {
       }
     } finally {
       this.exportingTrainingTelemetry = false;
-      this.refreshTrainingTelemetryControls();
+      this.refreshExportControls();
+    }
+  }
+
+  private async exportAiMatchTelemetry(): Promise<void> {
+    if (!this.options.onExportAiMatchTelemetry) {
+      return;
+    }
+    this.exportingAiMatchTelemetry = true;
+    this.refreshExportControls();
+    if (this.copyStatus) {
+      this.copyStatus.textContent = 'Exporting AI match telemetry...';
+    }
+    try {
+      const result = await this.options.onExportAiMatchTelemetry();
+      if (this.copyStatus) {
+        this.copyStatus.textContent = result || 'AI match telemetry exported.';
+      }
+    } catch (error) {
+      if (this.copyStatus) {
+        this.copyStatus.textContent = error instanceof Error
+          ? `AI match telemetry export failed: ${error.message}`
+          : 'AI match telemetry export failed.';
+      }
+    } finally {
+      this.exportingAiMatchTelemetry = false;
+      this.refreshExportControls();
     }
   }
 }

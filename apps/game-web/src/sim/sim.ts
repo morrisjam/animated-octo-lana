@@ -113,6 +113,9 @@ function createPlayer(id: PlayerId, characterId: CharacterId, spawnX: number, sp
     characterId,
     pos: { x: spawnX, y: spawnY },
     vel: { x: 0, y: 0 },
+    boostActive: false,
+    boostDir: { x: 0, y: 0 },
+    boostHeldTime: 0,
     radius: 2.25,
     maxFuel,
     fuel: maxFuel,
@@ -211,6 +214,9 @@ function clonePlayerState(player: PlayerState): PlayerState {
     characterId: player.characterId,
     pos: cloneVec2(player.pos),
     vel: cloneVec2(player.vel),
+    boostActive: player.boostActive ?? false,
+    boostDir: player.boostDir ? cloneVec2(player.boostDir) : { x: 0, y: 0 },
+    boostHeldTime: player.boostHeldTime ?? 0,
     radius: player.radius,
     maxFuel: player.maxFuel,
     fuel: player.fuel,
@@ -435,6 +441,46 @@ function resolveLaunchConnection(
   return true;
 }
 
+function resolveLaunchClash(state: GameState, attacker: PlayerState, target: PlayerState): void {
+  const deltaX = target.pos.x - attacker.pos.x;
+  const deltaY = target.pos.y - attacker.pos.y;
+  const distance = Math.hypot(deltaX, deltaY);
+  const fallbackDir = normalise(target.vel.x - attacker.vel.x, target.vel.y - attacker.vel.y);
+  const dir = distance > 0.001
+    ? { x: deltaX / distance, y: deltaY / distance }
+    : (Math.hypot(fallbackDir.x, fallbackDir.y) > 0 ? fallbackDir : { x: 1, y: 0 });
+  const midpoint = {
+    x: (attacker.pos.x + target.pos.x) * 0.5,
+    y: (attacker.pos.y + target.pos.y) * 0.5,
+  };
+  const clashDistance = Math.max(attacker.radius + target.radius + 11.2, distance + 6);
+  const clashImpulse = state.tuning.launchBasePower * 0.58;
+  const attackerRecovery = framesToSeconds(getCharacterMoves(attacker).launch.recoveryOnWhiffFrames) * 0.55;
+  const targetRecovery = framesToSeconds(getCharacterMoves(target).launch.recoveryOnWhiffFrames) * 0.55;
+
+  attacker.pos.x = midpoint.x - dir.x * clashDistance * 0.5;
+  attacker.pos.y = midpoint.y - dir.y * clashDistance * 0.5;
+  target.pos.x = midpoint.x + dir.x * clashDistance * 0.5;
+  target.pos.y = midpoint.y + dir.y * clashDistance * 0.5;
+
+  attacker.vel.x = -dir.x * clashImpulse;
+  attacker.vel.y = -dir.y * clashImpulse;
+  target.vel.x = dir.x * clashImpulse;
+  target.vel.y = dir.y * clashImpulse;
+
+  attacker.launchFlash = LAUNCH_FLASH_SECONDS;
+  target.launchFlash = LAUNCH_FLASH_SECONDS;
+  attacker.endLag = Math.max(attacker.endLag, attackerRecovery);
+  target.endLag = Math.max(target.endLag, targetRecovery);
+  attacker.cool.launch = Math.max(attacker.cool.launch, attackerRecovery);
+  target.cool.launch = Math.max(target.cool.launch, targetRecovery);
+
+  clearLaunchAttempt(attacker);
+  clearLaunchAttempt(target);
+  resetChain(attacker);
+  resetChain(target);
+}
+
 function startLaunchAttempt(player: PlayerState): void {
   const launchFrameData = getCharacterMoves(player).launch;
   if (
@@ -491,6 +537,10 @@ function advanceLaunchAttempt(
   const inRange = dist <= attacker.radius + target.radius + 2.8;
 
   if (inRange) {
+    if (target.launchStartup <= 0 && target.launchActive > 0) {
+      resolveLaunchClash(state, attacker, target);
+      return;
+    }
     const didConnect = resolveLaunchConnection(state, attacker, target, targetInput);
     clearLaunchAttempt(attacker);
     if (didConnect) {
@@ -539,6 +589,7 @@ function startDunkRecovery(state: GameState, attacker: PlayerState, target: Play
   target.parry = 0;
   target.endLag = 0;
   target.superBoost = 0;
+  clearBoostState(target);
   target.vel.x = recoveryDir.x * tuning.dunkRecoveryMoveSpeed;
   target.vel.y = recoveryDir.y * tuning.dunkRecoveryMoveSpeed;
   target.lastLaunchedBy = null;
@@ -769,13 +820,73 @@ function advanceSpecialAttempt(
   }
 }
 
-function applyBoostHold(player: PlayerState, target: PlayerState, speed: number): void {
+function clearBoostState(player: PlayerState): void {
+  player.boostActive = false;
+  player.boostHeldTime = 0;
+  player.boostDir = { x: 0, y: 0 };
+}
+
+function resolveCommittedBoostDirection(
+  player: PlayerState,
+  target: PlayerState,
+  playerInput: PlayerFrameInput,
+): Vec2 {
+  const toTarget = normalise(target.pos.x - player.pos.x, target.pos.y - player.pos.y);
+  if (Math.hypot(toTarget.x, toTarget.y) > 0) {
+    return toTarget;
+  }
+  const inputDir = normalise(playerInput.moveX, playerInput.moveY);
+  if (Math.hypot(inputDir.x, inputDir.y) > 0) {
+    return inputDir;
+  }
+  const velocityDir = normalise(player.vel.x, player.vel.y);
+  if (Math.hypot(velocityDir.x, velocityDir.y) > 0) {
+    return velocityDir;
+  }
+  return player.id === 'P1' ? { x: 1, y: 0 } : { x: -1, y: 0 };
+}
+
+function startCommittedBoost(
+  player: PlayerState,
+  target: PlayerState,
+  playerInput: PlayerFrameInput,
+): void {
+  if (player.boostActive || player.cool.boost > 0) {
+    return;
+  }
+  player.boostActive = true;
+  player.boostHeldTime = 0;
+  player.boostDir = resolveCommittedBoostDirection(player, target, playerInput);
+}
+
+function finishCommittedBoost(player: PlayerState, interrupted = false): void {
+  if (!player.boostActive) {
+    return;
+  }
+  const heldRatio = clamp(player.boostHeldTime / 0.38, 0, 1);
+  const recovery = interrupted
+    ? 0.1
+    : lerp(0.14, 0.34, heldRatio);
+  player.cool.boost = Math.max(player.cool.boost, recovery);
+  clearBoostState(player);
+}
+
+function applyBoostHold(player: PlayerState, speed: number): void {
   if (player.helpless > 0) {
     return;
   }
-  const dir = normalise(target.pos.x - player.pos.x, target.pos.y - player.pos.y);
-  player.vel.x = dir.x * speed;
-  player.vel.y = dir.y * speed;
+  player.vel.x = player.boostDir.x * speed;
+  player.vel.y = player.boostDir.y * speed;
+}
+
+function resolveHelplessReleaseSpeed(player: PlayerState, state: GameState): number {
+  const stats = getCharacterStats(player);
+  const moves = getCharacterMoves(player);
+  return tuningAwareBoostSpeed(state) * stats.boostSpeedMultiplier * moves.boost.holdSpeedMultiplier * 0.38;
+}
+
+function tuningAwareBoostSpeed(state: GameState): number {
+  return state.tuning.boostHoldSpeed;
 }
 
 function startSuperBoost(state: GameState, player: PlayerState, playerInput: PlayerFrameInput): void {
@@ -850,6 +961,7 @@ function movement(
   advanceSpecialAttempt(state, player, target, dt);
 
   if (player.recovering > 0 || player.stunned > 0 || player.helpless > 0 || state.winner) {
+    finishCommittedBoost(player, true);
     return;
   }
 
@@ -879,10 +991,15 @@ function movement(
   const boostHeld = playerInput.boost && player.superBoost <= 0 && (
     playerMoves.boost.holdFuelPerSecond <= 0 || player.fuel > 0
   );
-  if (boostHeld) {
+  if (boostHeld && !player.boostActive) {
+    startCommittedBoost(player, target, playerInput);
+  } else if (!boostHeld) {
+    finishCommittedBoost(player);
+  }
+  if (player.boostActive) {
+    player.boostHeldTime += dt;
     applyBoostHold(
       player,
-      target,
       tuning.boostHoldSpeed
       * playerStats.boostSpeedMultiplier
       * playerMoves.boost.holdSpeedMultiplier,
@@ -892,6 +1009,7 @@ function movement(
     }
   }
   if (playerInput.superBoost) {
+    finishCommittedBoost(player, true);
     if (player.superBoost <= 0) {
       startSuperBoost(state, player, playerInput);
     }
@@ -1008,6 +1126,18 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): void {
   player.cool.dunk = Math.max(0, player.cool.dunk - dt);
   player.cool.boost = Math.max(0, player.cool.boost - dt);
 
+  if (player.helpless > 0 || player.recovering > 0 || player.stunned > 0) {
+    clearBoostState(player);
+  }
+
+  if (player.helpless > 0) {
+    const helplessSpeed = Math.hypot(player.vel.x, player.vel.y);
+    const releaseSpeed = resolveHelplessReleaseSpeed(player, state);
+    if (helplessSpeed <= releaseSpeed) {
+      player.helpless = 0;
+    }
+  }
+
   if (player.chain > 0) {
     player.chainTimer = Math.max(0, player.chainTimer - dt);
     if (player.chainTimer <= 0) {
@@ -1056,6 +1186,56 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): void {
   }
 }
 
+function resolveCloseRangeSeparation(state: GameState): void {
+  const p1 = state.players.P1;
+  const p2 = state.players.P2;
+  if (state.winner || p1.recovering > 0 || p2.recovering > 0) {
+    return;
+  }
+  const p1InCommit = p1.helpless > 0
+    || p1.parry > 0
+    || p1.launchStartup > 0
+    || p1.launchActive > 0
+    || p1.dunkStartup > 0
+    || p1.dunkActive > 0
+    || p1.specialStartup > 0
+    || p1.specialActive > 0;
+  const p2InCommit = p2.helpless > 0
+    || p2.parry > 0
+    || p2.launchStartup > 0
+    || p2.launchActive > 0
+    || p2.dunkStartup > 0
+    || p2.dunkActive > 0
+    || p2.specialStartup > 0
+    || p2.specialActive > 0;
+  if (p1InCommit || p2InCommit) {
+    return;
+  }
+
+  const dx = p2.pos.x - p1.pos.x;
+  const dy = p2.pos.y - p1.pos.y;
+  const distance = Math.hypot(dx, dy);
+  const minimumDistance = p1.radius + p2.radius + 4.2;
+  if (distance >= minimumDistance) {
+    return;
+  }
+
+  const dir = distance > 0.001 ? { x: dx / distance, y: dy / distance } : { x: 1, y: 0 };
+  const overlap = minimumDistance - distance;
+  const separation = overlap * 0.5;
+
+  p1.pos.x -= dir.x * separation;
+  p1.pos.y -= dir.y * separation;
+  p2.pos.x += dir.x * separation;
+  p2.pos.y += dir.y * separation;
+
+  const impulse = 10 + overlap * 2.2;
+  p1.vel.x -= dir.x * impulse;
+  p1.vel.y -= dir.y * impulse;
+  p2.vel.x += dir.x * impulse;
+  p2.vel.y += dir.y * impulse;
+}
+
 function updateProjectiles(state: GameState, dt: number): void {
   for (let i = state.projectiles.length - 1; i >= 0; i -= 1) {
     const projectile = state.projectiles[i];
@@ -1092,6 +1272,7 @@ export function step(state: GameState, input: FrameInput, dt: number): GameState
 
   updatePlayer(state, 'P1', dt);
   updatePlayer(state, 'P2', dt);
+  resolveCloseRangeSeparation(state);
   updateProjectiles(state, dt);
 
   return state;

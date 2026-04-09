@@ -30,6 +30,10 @@ import {
   type TrainingTelemetrySummary,
   type TrainingTelemetryTracker,
 } from './sim/trainingTelemetry';
+import {
+  createMatchTelemetryTracker,
+  type MatchTelemetryTracker,
+} from './sim/matchTelemetry';
 import { sanitiseTuning } from './sim/tuning';
 import type { PlayerFrameInput, PlayerId, PlayersById, RenderSnapshot } from './sim/types';
 import {
@@ -72,6 +76,7 @@ import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay'
 import { createReplayViewer } from './view/replayViewer';
 import { renderFrame } from './view/render';
 import { applyStageAtmospherePreset, createScene, resizeScene } from './view/scene';
+import { buildInputHistoryView } from './view/inputHistory';
 import { createAudioSystem } from './view/audio/system';
 import type { CombatVfxEvent } from './view/vfx/types';
 import { createMusicStateController, type MusicState } from './view/audio/musicState';
@@ -135,6 +140,7 @@ const SETTINGS_STORAGE_KEY = 'gravity_well.settings.v1';
 const ARCADE_HISTORY_STORAGE_KEY = 'gravity_well.arcade_history.v1';
 const ROLLBACK_DIAGNOSTICS_STORAGE_KEY = 'gravity_well.rollback_diagnostics.v1';
 const TRAINING_TELEMETRY_STORAGE_KEY = 'gravity_well.training_telemetry.v1';
+const AI_MATCH_TELEMETRY_STORAGE_KEY = 'gravity_well.ai_match_telemetry.v1';
 const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
 const onlineRuntimeEnabled = platform.kind === 'web' && runtimeConfig.features.onlineMatchRuntimeEnabled;
@@ -305,6 +311,7 @@ let trainingTelemetry: TrainingTelemetryTracker = createTrainingTelemetryTracker
   playerCharacterId: selectedLoadout.P1,
   opponentCharacterId: selectedLoadout.P2,
 });
+let matchTelemetry: MatchTelemetryTracker = createMatchTelemetryTracker(state);
 const assetBudgetReport = buildAssetBudgetReport(DEFAULT_ASSET_MANIFEST, DEFAULT_ASSET_BUDGET_LIMITS);
 let assetPreloadBytesLoaded = 0;
 let appPhase: AppPhase = 'home';
@@ -349,6 +356,25 @@ interface StoredTrainingTelemetryEntry {
   rulesetVersion: string;
   balanceProfileId: string;
   summary: TrainingTelemetrySummary;
+}
+
+interface StoredAiMatchTelemetryEntry {
+  exportedAt: string;
+  mode: 'cpu_vs_cpu';
+  rulesetVersion: string;
+  balanceProfileId: string;
+  aiDifficulty: AiDifficultyId;
+  menuThemeId: string;
+  stageAtmosphereId: string;
+  seed: number;
+  loadout: PlayersById<CharacterId>;
+  score: {
+    p1Rounds: number;
+    p2Rounds: number;
+  };
+  winner: PlayerId | null;
+  statusText: string;
+  summary: ReturnType<MatchTelemetryTracker['toSummary']>;
 }
 
 type QueueType = 'unranked' | 'ranked';
@@ -467,6 +493,18 @@ interface RankedResultSubmitResponse {
   ratingDeltas?: RankedResultDeltaView[];
 }
 
+class OnlineRequestError extends Error {
+  public readonly status: number;
+  public readonly code: string | null;
+
+  public constructor(message: string, status: number, code: string | null) {
+    super(message);
+    this.name = 'OnlineRequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 interface OnlineMatchContext {
   sessionId: string;
   sessionToken: string;
@@ -494,6 +532,8 @@ interface OnlineMatchContext {
   rankedResultDetail: string;
   rankedResultSubmissionId: string | null;
   rankedResultInFlight: boolean;
+  sessionCompletionInFlight: boolean;
+  sessionCompletionStatus: 'idle' | 'completing' | 'completed' | 'failed';
 }
 
 interface RoomView {
@@ -577,6 +617,13 @@ const pauseMenu = createPauseMenu({
       return 'Training telemetry export is only available in training mode.';
     }
     return exportTrainingTelemetrySession();
+  },
+  canExportAiMatchTelemetry: () => selectedMode === 'cpu_vs_cpu',
+  onExportAiMatchTelemetry: async () => {
+    if (selectedMode !== 'cpu_vs_cpu') {
+      return 'AI match telemetry export is only available in AI vs AI mode.';
+    }
+    return exportAiMatchTelemetrySession();
   },
   onRestartTraining: () => {
     restartTrainingRound();
@@ -662,11 +709,24 @@ function getOnlineAccountIdOrThrow(): string {
 }
 
 async function parseOnlineApiError(response: Response): Promise<string> {
+  const failure = await parseOnlineApiFailure(response);
+  return failure.message;
+}
+
+async function parseOnlineApiFailure(response: Response): Promise<{ message: string; code: string | null; status: number }> {
   try {
-    const body = await response.json() as { error?: string; message?: string };
-    return body.error ?? body.message ?? `Request failed (${response.status})`;
+    const body = await response.json() as { error?: string; message?: string; code?: string };
+    return {
+      message: body.error ?? body.message ?? `Request failed (${response.status})`,
+      code: typeof body.code === 'string' && body.code.trim().length > 0 ? body.code.trim() : null,
+      status: response.status,
+    };
   } catch {
-    return `Request failed (${response.status})`;
+    return {
+      message: `Request failed (${response.status})`,
+      code: null,
+      status: response.status,
+    };
   }
 }
 
@@ -675,10 +735,12 @@ async function requestOnlineJson<T>(
   path: string,
   accountId: string,
   body?: unknown,
+  options?: { keepalive?: boolean },
 ): Promise<T> {
-  const response = await requestOnlineRaw(method, path, accountId, body);
+  const response = await requestOnlineRaw(method, path, accountId, body, options);
   if (!response.ok) {
-    throw new Error(await parseOnlineApiError(response));
+    const failure = await parseOnlineApiFailure(response);
+    throw new OnlineRequestError(failure.message, failure.status, failure.code);
   }
   return await response.json() as T;
 }
@@ -688,6 +750,7 @@ async function requestOnlineRaw(
   path: string,
   accountId: string,
   body?: unknown,
+  options?: { keepalive?: boolean },
 ): Promise<Response> {
   if (!matchmakingApiBase) {
     throw new Error('Missing VITE_MATCHMAKING_API_BASE or VITE_PROFILE_API_BASE.');
@@ -704,6 +767,7 @@ async function requestOnlineRaw(
     method,
     headers,
     body: payload,
+    keepalive: options?.keepalive ?? false,
   });
   return response;
 }
@@ -749,11 +813,69 @@ function getOnlineRuntimeStatusDetail(sessionId: string | null, phase?: string |
     sessionLine,
     phaseLine,
     onlineRuntimeEnabled
-      ? 'Online runtime is enabled in this build. Ranked sessions can enter the live relay-backed match flow.'
-      : 'Public online entry is hidden in this build. Enable VITE_FEATURE_ONLINE_MATCH_RUNTIME=true to expose the relay-backed runtime.',
+      ? 'Runtime: live relay-backed online flow enabled for this build.'
+      : 'Runtime: public online match entry is hidden for this build.',
   ]
     .filter((line): line is string => Boolean(line))
     .join('\n');
+}
+
+function getRankedQueueHint(ticket: QueueTicketView | null, session: MatchSessionView | null): string {
+  if (!ticket) {
+    return 'Join queue to start searching. Refresh later if you return to this screen mid-session.';
+  }
+  if (ticket.status === 'queued') {
+    return 'Stay here while searching. Refresh if the wait timer or queue state looks stale.';
+  }
+  if (ticket.status === 'matched') {
+    if (onlineRuntimeEnabled) {
+      return session?.status === 'active'
+        ? 'Match accepted. The client should transition into the online session automatically.'
+        : 'Session created. Stay on this screen while the browser finishes bootstrap.';
+    }
+    return 'This build can create ranked sessions, but the public online runtime entry is intentionally hidden.';
+  }
+  return 'Queue is closed. Join again to start a fresh search.';
+}
+
+function getRoomStateHint(room: RoomView | null): string {
+  if (!room) {
+    return 'Create a room for a private match or join with a six-character code.';
+  }
+  if (room.status === 'closed') {
+    return 'This room is closed. Create a new room for another private session.';
+  }
+  if (room.activeSession) {
+    if (room.activeSession.phase === 'in_match') {
+      return 'Room session is live. Refresh if participant or session state looks stale.';
+    }
+    return 'Room session is staged. Keep players in the room and refresh as the phase advances.';
+  }
+  return 'Share the room code with another player, then refresh once they join.';
+}
+
+function getBootstrapStatusLabel(status: OnlineBootstrapStatus): string {
+  switch (status) {
+    case 'awaiting_signaling':
+      return 'Runtime Prepared';
+    case 'failed':
+      return 'Bootstrap Failed';
+    case 'preparing':
+    default:
+      return 'Preparing Session';
+  }
+}
+
+function getBootstrapNextStep(state: OnlineBootstrapState): string {
+  if (state.status === 'failed') {
+    return 'Return home, refresh queue status, and retry the session if needed.';
+  }
+  if (state.status === 'awaiting_signaling') {
+    return state.connectionPath === 'relay'
+      ? 'Relay route is prepared. The client is handing off into the live match.'
+      : 'Direct route is preferred, with relay fallback available if the direct path stalls.';
+  }
+  return 'Validating session and preparing transport before entering the match.';
 }
 
 async function submitOnlineSessionFrames(
@@ -791,15 +913,75 @@ async function pollOnlineSessionFrames(context: OnlineMatchContext): Promise<voi
   }
 }
 
+function isTerminalOnlineTransportError(error: unknown): error is OnlineRequestError {
+  if (!(error instanceof OnlineRequestError)) {
+    return false;
+  }
+  if (error.code === 'session_resolved' || error.code === 'token_expired' || error.code === 'invalid_token') {
+    return true;
+  }
+  return error.status === 401 || error.status === 403 || error.status === 404 || error.status === 409;
+}
+
+function interruptOnlineMatch(context: OnlineMatchContext, reason: string): void {
+  context.outgoingFrames.length = 0;
+  context.pendingRemoteInputs.clear();
+  context.sendAccumulatorSeconds = 0;
+  context.pollAccumulatorSeconds = 0;
+  context.statusText = reason;
+  if (onlineMatchContext !== context) {
+    return;
+  }
+  if (appPhase !== 'playing' && appPhase !== 'round_transition') {
+    return;
+  }
+  pauseMenu.setPaused(false);
+  persistRollbackDiagnostics('online_session_interrupted');
+  appPhase = 'match_over';
+  void platform.presence.setStatus('match_over');
+  startMenu.showMatchOverScreen({
+    title: 'Online Session Interrupted',
+    subtitle: [
+      `Queue: ${context.queueType} | Region: ${context.region}`,
+      `Score: ${getRoundScoreText()}`,
+      '',
+      reason,
+      'The live relay stopped, so this match cannot continue.',
+    ].join('\n'),
+    primaryLabel: 'Return to Home',
+    secondaryLabel: '',
+    onPrimary: () => {
+      returnToHome();
+    },
+  });
+}
+
+function handleOnlineTransportError(
+  context: OnlineMatchContext,
+  phase: 'upload' | 'poll' | 'reconnect',
+  error: unknown,
+): void {
+  const prefix = phase === 'upload'
+    ? 'Frame relay upload failed'
+    : phase === 'poll'
+      ? 'Frame relay poll failed'
+      : 'Reconnect failed';
+  if (isTerminalOnlineTransportError(error)) {
+    interruptOnlineMatch(context, `${prefix}: ${error.message}`);
+    return;
+  }
+  context.statusText = error instanceof Error
+    ? `${prefix}: ${error.message}`
+    : `${prefix}.`;
+}
+
 function flushOnlineTransport(context: OnlineMatchContext): void {
   if (context.outgoingFrames.length > 0 && !context.sendInFlight) {
     const frames = context.outgoingFrames.splice(0, context.outgoingFrames.length);
     context.sendInFlight = true;
     void submitOnlineSessionFrames(context, frames)
       .catch((error) => {
-        context.statusText = error instanceof Error
-          ? `Frame relay upload failed: ${error.message}`
-          : 'Frame relay upload failed.';
+        handleOnlineTransportError(context, 'upload', error);
       })
       .finally(() => {
         context.sendInFlight = false;
@@ -810,9 +992,7 @@ function flushOnlineTransport(context: OnlineMatchContext): void {
     context.pollInFlight = true;
     void pollOnlineSessionFrames(context)
       .catch((error) => {
-        context.statusText = error instanceof Error
-          ? `Frame relay poll failed: ${error.message}`
-          : 'Frame relay poll failed.';
+        handleOnlineTransportError(context, 'poll', error);
       })
       .finally(() => {
         context.pollInFlight = false;
@@ -989,6 +1169,7 @@ function toRankedViewState(ticket: QueueTicketView | null, session: MatchSession
     return {
       headline: 'Not queued',
       detail: 'Press "Join Ranked Queue" to start matchmaking.',
+      hint: getRankedQueueHint(ticket, session),
     };
   }
   if (ticket.status === 'queued') {
@@ -997,6 +1178,7 @@ function toRankedViewState(ticket: QueueTicketView | null, session: MatchSession
     return {
       headline: 'Searching for match',
       detail: `Ticket: ${ticket.ticketId}\nQueue: ${ticket.queueType}\nWait: ${waitLabel}`,
+      hint: getRankedQueueHint(ticket, session),
     };
   }
   if (ticket.status === 'matched') {
@@ -1018,11 +1200,15 @@ function toRankedViewState(ticket: QueueTicketView | null, session: MatchSession
           session?.status ?? null,
         ),
       ].join('\n'),
+      tone: onlineRuntimeEnabled ? 'success' : 'warning',
+      hint: getRankedQueueHint(ticket, session),
     };
   }
   return {
     headline: 'Queue closed',
     detail: `Ticket: ${ticket.ticketId}\nReason: ${ticket.closedReason ?? 'closed'}`,
+    tone: 'warning',
+    hint: getRankedQueueHint(ticket, session),
   };
 }
 
@@ -1032,6 +1218,7 @@ function toRoomViewState(room: RoomView | null, fallbackRoomCode?: string): Onli
       headline: 'No room loaded',
       detail: 'Create a room or enter a code to join one.',
       roomCode: fallbackRoomCode ?? null,
+      hint: getRoomStateHint(room),
     };
   }
   const players = room.participants.filter((item) => item.role === 'player').length;
@@ -1043,6 +1230,8 @@ function toRoomViewState(room: RoomView | null, fallbackRoomCode?: string): Onli
     headline: `Room ${room.roomCode} (${room.status})`,
     detail: `Host: ${room.hostAccountId}\nPlayers: ${players}\nSpectators: ${spectators}\n${sessionDetail}`,
     roomCode: room.roomCode,
+    tone: room.activeSession ? 'success' : room.status === 'closed' ? 'warning' : 'neutral',
+    hint: getRoomStateHint(room),
   };
 }
 
@@ -1171,6 +1360,10 @@ async function refreshReplayArchive(): Promise<ReplayArchiveViewState> {
       ? `Loaded ${playerReplayItems.length} replay(s)`
       : 'No replays found',
     detail: formatReplayArchiveDetail(playerReplayItems),
+    tone: playerReplayItems.length > 0 ? 'success' : 'warning',
+    hint: playerReplayItems.length > 0
+      ? 'Open the latest replay to review the newest archived session.'
+      : 'Finish an online match and wait for replay persistence before refreshing again.',
   };
 }
 
@@ -1183,6 +1376,8 @@ async function openLatestReplay(): Promise<ReplayArchiveViewState> {
     return {
       headline: 'No replay available',
       detail: 'No replay records available to open.',
+      tone: 'warning',
+      hint: 'Refresh replay archive after a completed online session to fetch the newest replay.',
     };
   }
   const accountId = getOnlineAccountIdOrThrow();
@@ -1198,6 +1393,8 @@ async function openLatestReplay(): Promise<ReplayArchiveViewState> {
   return {
     headline: `Opened replay ${payloadResponse.replayId}`,
     detail: formatReplayArchiveDetail(playerReplayItems),
+    tone: 'success',
+    hint: 'Replay review is now active. Exit replay review to return to the menu.',
   };
 }
 
@@ -1371,6 +1568,8 @@ function toRankedSnapshotViewState(snapshot: RankedProgressionView | null, sourc
     return {
       headline: 'No ranked data',
       detail: 'No ranked progression data is available yet.',
+      tone: 'warning',
+      hint: 'Complete a ranked session, then refresh again after result submission finishes.',
     };
   }
   const sourceLabel = source === 'api' ? 'Ranked API' : 'Profile fallback';
@@ -1386,6 +1585,10 @@ function toRankedSnapshotViewState(snapshot: RankedProgressionView | null, sourc
   return {
     headline: `${snapshot.leagueTier ?? 'Placement'} | Rating ${snapshot.rating ?? 'n/a'}`,
     detail: `Source: ${sourceLabel}\nSeason: ${snapshot.seasonId ?? 'current'}\n${statusLine}\n${placementLine}\nLeague Points: ${snapshot.leaguePoints ?? 'n/a'}\nMR Points: ${snapshot.mrPoints ?? 'n/a'}\n${promotionLine}\n${trendLine}\nUpdated: ${snapshot.updatedAt ?? 'unknown'}`,
+    tone: source === 'api' ? 'success' : 'neutral',
+    hint: source === 'api'
+      ? 'Snapshot is current from the ranking service.'
+      : 'This snapshot came from stored profile data and may lag behind the latest match.',
   };
 }
 
@@ -1406,6 +1609,37 @@ async function refreshRankedSnapshot(): Promise<RankedSnapshotViewState> {
   const rankedSettings = asRecord(settings?.ranked) ?? asRecord(settings?.rankedProgression);
   playerRankedSnapshot = rankedSettings ? parseRankedProgression(rankedSettings) : null;
   return toRankedSnapshotViewState(playerRankedSnapshot, playerRankedSnapshot ? 'profile' : 'none');
+}
+
+function scheduleRankedQueueAutoRefresh(elapsedSeconds: number): void {
+  if (
+    !playerRankedTicket
+    || playerRankedTicket.status !== 'queued'
+    || appPhase !== 'home'
+    || onlineMatchContext !== null
+    || onlineBootstrapState !== null
+  ) {
+    rankedQueueAutoPollAccumulatorSeconds = 0;
+    return;
+  }
+  if (rankedQueueAutoPollInFlight) {
+    return;
+  }
+  rankedQueueAutoPollAccumulatorSeconds += elapsedSeconds;
+  if (rankedQueueAutoPollAccumulatorSeconds < 1) {
+    return;
+  }
+  rankedQueueAutoPollAccumulatorSeconds = 0;
+  rankedQueueAutoPollInFlight = true;
+  void refreshRankedQueue()
+    .catch((error) => {
+      if (runtimeConfig.features.debugToolsEnabled) {
+        console.warn('[online] ranked queue auto-refresh failed', error);
+      }
+    })
+    .finally(() => {
+      rankedQueueAutoPollInFlight = false;
+    });
 }
 
 const startMenu = createStartMenu({
@@ -1513,6 +1747,10 @@ let replayAccumulator = 0;
 let replayPaused = true;
 const replaySpeedOptions = [0.25, 0.5, 1, 2, 4];
 let replaySpeedIndex = 2;
+let rankedQueueAutoPollAccumulatorSeconds = 0;
+let rankedQueueAutoPollInFlight = false;
+let onlineLifecycleDisconnectedSessionId: string | null = null;
+let onlineLifecycleReconnectInFlight = false;
 let playerRankedTicket: QueueTicketView | null = null;
 let playerRankedSession: MatchSessionView | null = null;
 let playerRoom: RoomView | null = null;
@@ -2051,6 +2289,14 @@ function createTrainingTelemetryForCurrentSelection(): TrainingTelemetryTracker 
   });
 }
 
+function shouldShowLiveInputHistory(): boolean {
+  return appPhase === 'playing' && (selectedMode === 'training' || selectedMode === 'cpu_vs_cpu');
+}
+
+function shouldShowLiveMatchTelemetry(): boolean {
+  return appPhase === 'playing' && (selectedMode === 'training' || selectedMode === 'cpu_vs_cpu');
+}
+
 function buildOfflineAiControllersForCurrentMode(): Partial<Record<PlayerId, AiControllerState>> {
   if (selectedMode === 'training' || onlineMatchContext !== null) {
     return {};
@@ -2088,6 +2334,7 @@ function resetRoundState(): void {
     rules: getRulesForMode(selectedMode),
   });
   state.tuning = { ...tuning };
+  matchTelemetry = createMatchTelemetryTracker(state);
   sceneContext.cameraPlayerTracks.P1.set(state.players.P1.pos.x, state.players.P1.pos.y);
   sceneContext.cameraPlayerTracks.P2.set(state.players.P2.pos.x, state.players.P2.pos.y);
   sceneContext.launchCameraActive = false;
@@ -2105,7 +2352,11 @@ function resetRoundState(): void {
   aiControllers = buildOfflineAiControllersForCurrentMode();
   const showDebugDiagnostics = debugHudEnabled;
   hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
+  hud.setInputHistoryVisible(shouldShowLiveInputHistory());
+  hud.setMatchTelemetryVisible(shouldShowLiveMatchTelemetry());
   hud.updateRollbackDiagnostics(showDebugDiagnostics && rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null);
+  hud.updateInputHistory(null);
+  hud.updateMatchTelemetry(shouldShowLiveMatchTelemetry() ? matchTelemetry.toSummary() : null);
   const roundStartCallout = voiceCalloutSystem.trigger({
     playerId: 'P1',
     characterId: state.players.P1.characterId,
@@ -2214,6 +2465,10 @@ function returnToHome(): void {
   startMenu.showHome();
   replayViewer.hide();
   hudRoot.style.visibility = 'hidden';
+  hud.setInputHistoryVisible(false);
+  hud.setMatchTelemetryVisible(false);
+  hud.updateInputHistory(null);
+  hud.updateMatchTelemetry(null);
   syncTrainingFrameDataVisibility();
   accumulator = 0;
 }
@@ -2284,7 +2539,7 @@ function ensureOnlineBootstrapPanel(): void {
 
   const title = document.createElement('div');
   title.className = 'online-bootstrap-title';
-  title.textContent = 'Online Session Bootstrap';
+  title.textContent = 'Connecting Online Match';
 
   const detail = document.createElement('pre');
   detail.className = 'online-bootstrap-detail';
@@ -2296,7 +2551,7 @@ function ensureOnlineBootstrapPanel(): void {
   const returnHomeButton = document.createElement('button');
   returnHomeButton.type = 'button';
   returnHomeButton.className = 'online-bootstrap-action';
-  returnHomeButton.textContent = 'Return Home';
+  returnHomeButton.textContent = 'Cancel To Home';
   returnHomeButton.addEventListener('click', () => {
     returnToHome();
   });
@@ -2320,20 +2575,22 @@ function renderOnlineBootstrapPanel(): void {
     onlineBootstrapDetail.textContent = '';
     return;
   }
-  onlineBootstrapTitle.textContent = 'Online Session Bootstrap';
+  onlineBootstrapTitle.textContent = 'Connecting Online Match';
   const iceConfig = onlineBootstrapState.iceConfig;
   const iceLine = iceConfig
     ? `ICE servers: ${iceConfig.iceServers.length} | Direct timeout: ${iceConfig.directConnectTimeoutMs}ms`
     : 'ICE servers: unavailable';
+  const statusLabel = getBootstrapStatusLabel(onlineBootstrapState.status);
+  const nextStep = getBootstrapNextStep(onlineBootstrapState);
   onlineBootstrapDetail.textContent = [
-    `Source: ${onlineBootstrapState.source}`,
-    `Session: ${onlineBootstrapState.sessionId}`,
+    `Current Step: ${statusLabel}`,
+    `Next: ${nextStep}`,
+    '',
     `Queue: ${onlineBootstrapState.queueType}`,
     `Region: ${onlineBootstrapState.region}`,
-    `Local: ${onlineBootstrapState.localAccountId}`,
-    `Peer: ${onlineBootstrapState.peerAccountId ?? 'pending'}`,
+    `Session: ${onlineBootstrapState.sessionId}`,
+    `Players: ${onlineBootstrapState.localAccountId} vs ${onlineBootstrapState.peerAccountId ?? 'pending'}`,
     `Transport path: ${onlineBootstrapState.connectionPath}`,
-    `Status: ${onlineBootstrapState.status}`,
     iceLine,
     `Token expires: ${onlineBootstrapState.sessionTokenExpiresAt ?? 'unknown'}`,
     onlineBootstrapState.diagnosticsLine,
@@ -2360,6 +2617,114 @@ function clearOnlineMatchContext(): void {
     };
   }
   onlineMatchContext = null;
+  onlineLifecycleDisconnectedSessionId = null;
+  onlineLifecycleReconnectInFlight = false;
+}
+
+function createReconnectAttemptId(): string {
+  const runtimeCrypto = globalThis.crypto as { randomUUID?: () => string } | undefined;
+  if (runtimeCrypto && typeof runtimeCrypto.randomUUID === 'function') {
+    return `resume-${runtimeCrypto.randomUUID()}`;
+  }
+  const timestamp = Date.now().toString(36);
+  const random = Math.floor(Math.random() * 0xFFFFFF).toString(36);
+  return `resume-${timestamp}-${random}`;
+}
+
+function canLifecycleManageOnlineSession(): boolean {
+  return Boolean(
+    onlineMatchContext
+    && (appPhase === 'playing' || appPhase === 'round_transition'),
+  );
+}
+
+async function markOnlineSessionDisconnected(source: 'visibility_hidden' | 'pagehide'): Promise<void> {
+  const context = onlineMatchContext;
+  if (!context || !canLifecycleManageOnlineSession()) {
+    return;
+  }
+  if (onlineLifecycleDisconnectedSessionId === context.sessionId) {
+    return;
+  }
+  try {
+    await requestOnlineJson<MatchSessionView>(
+      'POST',
+      '/matchmaking/sessions/disconnect',
+      context.localAccountId,
+      { sessionId: context.sessionId },
+      { keepalive: source === 'pagehide' },
+    );
+    onlineLifecycleDisconnectedSessionId = context.sessionId;
+    context.statusText = `Session suspended (${source}). Reconnect will be requested when focus returns.`;
+  } catch (error) {
+    context.statusText = error instanceof Error
+      ? `Disconnect notice failed: ${error.message}`
+      : 'Disconnect notice failed.';
+  }
+}
+
+async function reconnectOnlineSessionAfterResume(source: 'visibility_visible'): Promise<void> {
+  const context = onlineMatchContext;
+  if (!context || !canLifecycleManageOnlineSession()) {
+    onlineLifecycleDisconnectedSessionId = null;
+    return;
+  }
+  if (onlineLifecycleDisconnectedSessionId !== context.sessionId || onlineLifecycleReconnectInFlight) {
+    return;
+  }
+  onlineLifecycleReconnectInFlight = true;
+  context.statusText = 'Requesting session reconnect after returning to the match.';
+  try {
+    await requestOnlineJson<MatchSessionView>(
+      'POST',
+      '/matchmaking/sessions/reconnect',
+      context.localAccountId,
+      {
+        sessionId: context.sessionId,
+        sessionToken: context.sessionToken,
+        reconnectAttemptId: createReconnectAttemptId(),
+      },
+    );
+    onlineLifecycleDisconnectedSessionId = null;
+    context.statusText = `Reconnect requested (${source}). Online relay resumed.`;
+  } catch (error) {
+    handleOnlineTransportError(context, 'reconnect', error);
+  } finally {
+    onlineLifecycleReconnectInFlight = false;
+  }
+}
+
+async function completeOnlineSession(context: OnlineMatchContext): Promise<void> {
+  if (context.sessionCompletionInFlight || context.sessionCompletionStatus === 'completed') {
+    return;
+  }
+  context.sessionCompletionInFlight = true;
+  context.sessionCompletionStatus = 'completing';
+  try {
+    await requestOnlineJson<MatchSessionView>(
+      'POST',
+      '/matchmaking/sessions/complete',
+      context.localAccountId,
+      {
+        sessionId: context.sessionId,
+        sessionToken: context.sessionToken,
+      },
+    );
+    context.sessionCompletionStatus = 'completed';
+    context.statusText = 'Online session closed cleanly.';
+  } catch (error) {
+    if (error instanceof OnlineRequestError && error.code === 'session_resolved') {
+      context.sessionCompletionStatus = 'completed';
+      context.statusText = 'Online session was already closed.';
+      return;
+    }
+    context.sessionCompletionStatus = 'failed';
+    context.statusText = error instanceof Error
+      ? `Session close failed: ${error.message}`
+      : 'Session close failed.';
+  } finally {
+    context.sessionCompletionInFlight = false;
+  }
 }
 
 function beginOnlineMatch(matchStart: MatchStartPayload): void {
@@ -2409,6 +2774,8 @@ function beginOnlineMatch(matchStart: MatchStartPayload): void {
     rankedResultDetail: 'Awaiting match completion.',
     rankedResultSubmissionId: null,
     rankedResultInFlight: false,
+    sessionCompletionInFlight: false,
+    sessionCompletionStatus: 'idle',
   };
   clearOnlineBootstrapState();
   beginMode('best_of_3', undefined, selectedAiDifficulty, selectedArcadeSettings);
@@ -2616,6 +2983,52 @@ function exportTrainingTelemetrySession(): string {
   }
 
   return `Training telemetry exported: ${fileName}`;
+}
+
+function exportAiMatchTelemetrySession(): string {
+  const exportedAt = new Date().toISOString();
+  const summary = matchTelemetry.toSummary();
+  const snapshot = getRenderSnapshot(state);
+  const payload: StoredAiMatchTelemetryEntry = {
+    exportedAt,
+    mode: 'cpu_vs_cpu',
+    rulesetVersion: activeRulesetVersion,
+    balanceProfileId: activeBalanceProfile.id,
+    aiDifficulty: selectedAiDifficulty,
+    menuThemeId: selectedMenuThemeId,
+    stageAtmosphereId: selectedStageAtmosphereId,
+    seed: selectedMatchSeed,
+    loadout: {
+      P1: selectedLoadout.P1,
+      P2: selectedLoadout.P2,
+    },
+    score: {
+      p1Rounds: p1RoundWins,
+      p2Rounds: p2RoundWins,
+    },
+    winner: state.winner,
+    statusText: snapshot.statusText,
+    summary,
+  };
+
+  const timestamp = exportedAt.replace(/[:.]/g, '-');
+  const fileName = `gravity-well-ai-match-telemetry-${timestamp}.json`;
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+
+  const writeResult = platform.persistence.writeJson(AI_MATCH_TELEMETRY_STORAGE_KEY, payload);
+  if (!writeResult.ok && runtimeConfig.features.debugToolsEnabled) {
+    console.warn('[persistence] ai match telemetry write skipped', writeResult);
+  }
+
+  return `AI match telemetry exported: ${fileName}`;
 }
 
 function restartTrainingRound(reason: TrainingRoundEndReason = 'manual_restart'): void {
@@ -3087,6 +3500,7 @@ function onRoundWin(winner: PlayerId): void {
         ? onlineMatchContext.localAccountId
         : onlineMatchContext.remoteAccountId;
       renderOnlineMatchOverScreen(onlineMatchContext, winner, p1RoundWins, p2RoundWins);
+      void completeOnlineSession(onlineMatchContext);
       if (onlineMatchContext.queueType === 'ranked') {
         void submitOnlineRankedResult(onlineMatchContext);
       }
@@ -3209,6 +3623,9 @@ function tick(nowMs: number): void {
       const frameInputRaw = input.getFrameInput();
       if (onlineMatchContext) {
         const localInput = cloneOnlinePlayerInput(frameInputRaw.p1);
+        const resolvedOnlineFrameInput = onlineMatchContext.localPlayerId === 'P1'
+          ? { p1: localInput, p2: createEmptyPlayerInput() }
+          : { p1: createEmptyPlayerInput(), p2: localInput };
         onlineMatchContext.outgoingFrames.push({
           frame: simulationFrame,
           input: localInput,
@@ -3236,14 +3653,9 @@ function tick(nowMs: number): void {
           }
           state = rollbackSession.getStateSnapshot();
         } else {
-          step(
-            state,
-            onlineMatchContext.localPlayerId === 'P1'
-              ? { p1: localInput, p2: createEmptyPlayerInput() }
-              : { p1: createEmptyPlayerInput(), p2: localInput },
-            fixedDt,
-          );
+          step(state, resolvedOnlineFrameInput, fixedDt);
         }
+        matchTelemetry.recordFrame(resolvedOnlineFrameInput, state, fixedDt);
       } else {
         let frameInput = frameInputRaw;
         const p1AiController = aiControllers.P1;
@@ -3291,9 +3703,10 @@ function tick(nowMs: number): void {
         } else {
           step(state, frameInput, fixedDt);
         }
-      }
-      if (selectedMode === 'training') {
-        trainingTelemetry.recordFrame(frameInputRaw, state, fixedDt);
+        matchTelemetry.recordFrame(frameInput, state, fixedDt);
+        if (selectedMode === 'training') {
+          trainingTelemetry.recordFrame(frameInput, state, fixedDt);
+        }
       }
       simulationFrame += 1;
       accumulator -= fixedDt;
@@ -3312,6 +3725,8 @@ function tick(nowMs: number): void {
       appPhase = 'playing';
     }
   }
+
+  scheduleRankedQueueAutoRefresh(elapsedSeconds);
 
   if (appPhase === 'replay_review' && replayReviewData) {
     if (!replayPaused) {
@@ -3403,6 +3818,12 @@ function tick(nowMs: number): void {
     hud.setRollbackDiagnosticsVisible(false);
     hud.updateRollbackDiagnostics(null);
   }
+  const showInputHistory = shouldShowLiveInputHistory();
+  const showMatchTelemetry = shouldShowLiveMatchTelemetry();
+  hud.setInputHistoryVisible(showInputHistory);
+  hud.setMatchTelemetryVisible(showMatchTelemetry);
+  hud.updateInputHistory(showInputHistory ? buildInputHistoryView(inputTimeline, 10) : null);
+  hud.updateMatchTelemetry(showMatchTelemetry ? matchTelemetry.toSummary() : null);
   hud.update(snapshot);
   updateMatchInfo();
   updateOnlineDiagnosticsOverlay();
@@ -3438,6 +3859,20 @@ requestAnimationFrame(tick);
 
 window.addEventListener('resize', () => {
   resizeScene(sceneContext);
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    void markOnlineSessionDisconnected('visibility_hidden');
+    return;
+  }
+  if (document.visibilityState === 'visible') {
+    void reconnectOnlineSessionAfterResume('visibility_visible');
+  }
+});
+
+window.addEventListener('pagehide', () => {
+  void markOnlineSessionDisconnected('pagehide');
 });
 
 window.addEventListener('beforeunload', () => {

@@ -449,3 +449,40 @@ test('session resolves if disconnected player misses reconnect grace window', ()
   assert.equal(secondTicket.status, 'closed');
   assert.equal(secondTicket.closedReason, 'reconnect_timeout');
 });
+
+test('session can be completed explicitly after a match finishes', () => {
+  const queue = createMatchmakingQueueService({
+    sessionTtlSeconds: 120,
+  });
+
+  queue.join({
+    accountId: ACCOUNT_1,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  });
+  const second = expectMatched(queue.join({
+    accountId: ACCOUNT_2,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  }));
+  const sessionId = second.matchStart.sessionId;
+  const sessionToken = second.matchStart.sessionToken;
+
+  const completion = queue.completeSession(sessionId, ACCOUNT_2, sessionToken);
+  assert.equal(completion.ok, true);
+  if (!completion.ok) {
+    throw new Error('Expected session completion to succeed');
+  }
+  assert.equal(completion.value.status, 'resolved');
+  assert.equal(completion.value.resolvedReason, 'completed');
+
+  const firstTicket = queue.getTicketForAccount(completion.value.participants[0].queueTicketId, ACCOUNT_1);
+  assert.ok(firstTicket);
+  assert.equal(firstTicket.status, 'closed');
+  assert.equal(firstTicket.closedReason, 'session_completed');
+
+  const secondTicket = queue.getTicketForAccount(completion.value.participants[1].queueTicketId, ACCOUNT_2);
+  assert.ok(secondTicket);
+  assert.equal(secondTicket.status, 'closed');
+  assert.equal(secondTicket.closedReason, 'session_completed');
+});

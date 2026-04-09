@@ -81,7 +81,7 @@ const app = Fastify({ logger: true });
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
 app.register(cors, {
   origin: (origin, callback) => {
-    if (!origin || allowedCorsOrigins.includes('*') || allowedCorsOrigins.includes(origin)) {
+    if (!origin || isAllowedCorsOrigin(origin, allowedCorsOrigins)) {
       callback(null, true);
       return;
     }
@@ -233,6 +233,11 @@ interface MatchmakingSessionReconnectBody {
   sessionId?: string;
   sessionToken?: string;
   reconnectAttemptId?: string;
+}
+
+interface MatchmakingSessionCompleteBody {
+  sessionId?: string;
+  sessionToken?: string;
 }
 
 interface MatchmakingSessionFramesSubmitBody {
@@ -496,12 +501,25 @@ function parsePercentageEnv(value: string | undefined): number | undefined {
 
 function parseCorsOrigins(value: string | undefined): string[] {
   if (!value) {
-    return ['http://localhost:5173', 'http://127.0.0.1:5173'];
+    return ['http://localhost:*', 'http://127.0.0.1:*'];
   }
   return value
     .split(',')
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
+}
+
+function isAllowedCorsOrigin(origin: string, allowedOrigins: string[]): boolean {
+  if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+    return true;
+  }
+  return allowedOrigins.some((allowedOrigin) => {
+    if (!allowedOrigin.endsWith(':*')) {
+      return false;
+    }
+    const prefix = allowedOrigin.slice(0, -1);
+    return origin.startsWith(prefix);
+  });
 }
 
 function parseConnectionPath(value: unknown): ConnectionPath | null {
@@ -3255,6 +3273,32 @@ app.post('/matchmaking/sessions/reconnect', async (request, reply) => {
     sessionToken,
     reconnectAttemptId,
   });
+  if (!result.ok) {
+    reply.code(mapSessionErrorToHttp(result.error.code));
+    return { error: result.error.message, code: result.error.code };
+  }
+  return result.value;
+});
+
+app.post('/matchmaking/sessions/complete', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const body = (request.body ?? {}) as MatchmakingSessionCompleteBody;
+  if (!isUuid(body.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+
+  const result = matchmakingQueueService.completeSession(body.sessionId, accountId, sessionToken);
   if (!result.ok) {
     reply.code(mapSessionErrorToHttp(result.error.code));
     return { error: result.error.message, code: result.error.code };

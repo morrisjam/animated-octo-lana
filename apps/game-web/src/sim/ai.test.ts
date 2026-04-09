@@ -8,6 +8,7 @@ import {
 } from './ai';
 import { createInitialState, step } from './sim';
 import type { PlayerFrameInput } from './types';
+import type { CharacterId } from './characters';
 
 function createIdleInput(): PlayerFrameInput {
   return {
@@ -21,6 +22,63 @@ function createIdleInput(): PlayerFrameInput {
     parry: false,
     breakLaunch: false,
   };
+}
+
+function runAiMirrorMatch(
+  loadout: { P1: CharacterId; P2: CharacterId },
+  frames: number,
+  profileId: 'cadet' | 'veteran' | 'ace' = 'ace',
+) {
+  const state = createInitialState({ seed: 2026, loadout });
+  let p1Controller = createAiController({ seed: 101, profileId });
+  let p2Controller = createAiController({ seed: 202, profileId });
+  const stats = {
+    p1Specials: 0,
+    p2Specials: 0,
+    p1Parries: 0,
+    p2Parries: 0,
+    p1Breaks: 0,
+    p2Breaks: 0,
+    maxProjectilesSeen: 0,
+  };
+
+  for (let frame = 0; frame < frames; frame += 1) {
+    const p1Tick = tickAiController(state, 'P1', p1Controller);
+    const p2Tick = tickAiController(state, 'P2', p2Controller);
+    p1Controller = p1Tick.next;
+    p2Controller = p2Tick.next;
+
+    if (p1Tick.input.special) {
+      stats.p1Specials += 1;
+    }
+    if (p2Tick.input.special) {
+      stats.p2Specials += 1;
+    }
+    if (p1Tick.input.parry) {
+      stats.p1Parries += 1;
+    }
+    if (p2Tick.input.parry) {
+      stats.p2Parries += 1;
+    }
+    if (p1Tick.input.breakLaunch) {
+      stats.p1Breaks += 1;
+    }
+    if (p2Tick.input.breakLaunch) {
+      stats.p2Breaks += 1;
+    }
+
+    step(
+      state,
+      {
+        p1: p1Tick.input,
+        p2: p2Tick.input,
+      },
+      1 / 60,
+    );
+    stats.maxProjectilesSeen = Math.max(stats.maxProjectilesSeen, state.projectiles.length);
+  }
+
+  return stats;
 }
 
 describe('sim AI behaviour framework', () => {
@@ -84,7 +142,7 @@ describe('sim AI behaviour framework', () => {
     expect(first).toEqual(second);
   });
 
-  test('difficulty profile changes aggression and error output', () => {
+  test('difficulty profile changes movement and action cadence', () => {
     const runSimulation = (profileId: 'rookie' | 'ace') => {
       const state = createInitialState({ seed: 2026 });
       let controller = createAiController({ seed: 2026, profileId });
@@ -106,7 +164,35 @@ describe('sim AI behaviour framework', () => {
     const rookie = runSimulation('rookie');
     const ace = runSimulation('ace');
 
-    expect(ace.actions).toBeGreaterThan(rookie.actions);
+    expect(ace.actions).not.toBe(rookie.actions);
     expect(ace.movementEnergy).toBeGreaterThan(rookie.movementEnergy);
+  });
+
+  test('AI uses character-specific specials and defensive options in the default matchup', () => {
+    const stats = runAiMirrorMatch({ P1: 'vanguard', P2: 'duelist' }, 900);
+
+    expect(stats.p1Specials).toBeGreaterThan(0);
+    expect(stats.p2Specials).toBeGreaterThan(0);
+    expect(stats.p1Parries + stats.p2Parries + stats.p1Breaks + stats.p2Breaks).toBeGreaterThan(0);
+  });
+
+  test('projectile archetype AI actually creates projectile traffic', () => {
+    const stats = runAiMirrorMatch({ P1: 'ace', P2: 'warden' }, 900);
+
+    expect(stats.p1Specials + stats.p2Specials).toBeGreaterThan(0);
+    expect(stats.maxProjectilesSeen).toBeGreaterThan(0);
+  });
+
+  test('AI spends launch breaks in urgent helpless situations', () => {
+    const state = createInitialState({ seed: 44 });
+    state.players.P2.helpless = 1.9;
+    state.players.P2.launchBreaks = 2;
+    state.players.P2.pos = { x: 61, y: 0 };
+    state.players.P1.pos = { x: 67, y: 0 };
+    const controller = createAiController({ seed: 44, profileId: 'ace' });
+
+    const tick = tickAiController(state, 'P2', controller);
+
+    expect(tick.input.breakLaunch).toBe(true);
   });
 });

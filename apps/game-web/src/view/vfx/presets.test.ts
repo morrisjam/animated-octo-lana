@@ -37,11 +37,13 @@ describe('combat VFX presets', () => {
     expect(overridePresetId).toBe('launch_arcane');
   });
 
-  test('launch/parry/boost/projectile/dunk presets expose particles, trail, flash, and sound cues', () => {
+  test('combat presets expose particles, trail, flash, and sound cues for readable state changes', () => {
     const events: CombatVfxEvent[] = [
       makeEvent('boost', 'vanguard'),
       makeEvent('launch', 'duelist'),
+      makeEvent('clash', 'ace'),
       makeEvent('parry', 'ace'),
+      makeEvent('break', 'duelist'),
       makeEvent('projectile', 'warden'),
       makeEvent('dunk', 'vanguard'),
     ];

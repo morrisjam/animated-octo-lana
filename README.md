@@ -70,6 +70,10 @@ npm run migrate -w @gravity-well/api
 ## Project docs
 
 - Structure guardrails: `docs/REPO_STRUCTURE.md`
+- Production workspace and current execution plan: `production/README.md`
+- Full game production plan: `production/FULL_GAME_PRODUCTION_PLAN.md`
+- Current milestone: `production/CURRENT_MILESTONE.md`
+- Current sprint: `production/CURRENT_SPRINT.md`
 - Game architecture and kits: `docs/CHARACTER_KITS.md`
 - Character package schema and validation flow: `docs/CHARACTER_PACKAGE_SCHEMA.md`
 - Character package user guide: `docs/CHARACTER_PACKAGE_USER_GUIDE.md`
@@ -82,6 +86,7 @@ npm run migrate -w @gravity-well/api
 - Move frame-data registry: `docs/MOVE_FRAME_DATA_REGISTRY.md`
 - Training frame-data overlay: `docs/FRAME_DATA_VISUALIZER_OVERLAY.md`
 - Asset manifest loader: `docs/ASSET_MANIFEST_LOADER.md`
+- Asset production and AI-assisted workflow: `docs/ASSET_PIPELINE.md`
 - Character visual profile abstraction: `docs/CHARACTER_VISUAL_PROFILE_ABSTRACTION.md`
 - VFX event binding and presets: `docs/VFX_EVENT_BINDING_PRESETS.md`
 - Asset budget validation: `docs/ASSET_BUDGET_VALIDATION.md`
@@ -101,3 +106,4 @@ npm run migrate -w @gravity-well/api
 - Neon setup checklist: `docs/NEON_SETUP_ACTION.md`
 - Deployment runbook (services, DNS, envs): `docs/DEPLOYMENT_RUNBOOK.md`
 - Steam packaging and CI artifact policy: `docs/STEAM_BUILD_PROFILE.md`
+- AI tooling and Codex-native studio workflows: `docs/AI_STUDIO_TOOLING_AND_WORKFLOWS.md`

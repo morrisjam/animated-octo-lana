@@ -23,6 +23,12 @@ export interface StageAtmospherePresetTokenOverrides {
   backgroundModelId?: string | null;
   backgroundModelTint?: string;
   backgroundModelOpacity?: number;
+  backgroundEffectId?: string | null;
+  backgroundEffectTint?: string;
+  backgroundEffectSecondaryTint?: string;
+  backgroundEffectOpacity?: number;
+  backgroundEffectSpeed?: number;
+  backgroundEffectScale?: number;
 }
 
 export interface StageAtmospherePresetDefinition {
@@ -33,6 +39,39 @@ export interface StageAtmospherePresetDefinition {
 }
 
 export const STAGE_ATMOSPHERE_PRESET_DEFINITIONS: StageAtmospherePresetDefinition[] = [
+  {
+    id: 'wormhole_depths_v1',
+    label: 'Wormhole Depths V1',
+    description: 'A spinning cosmic tunnel with neon depth rings, dense haze, and high-energy particles.',
+    tokens: {
+      sceneBackgroundColor: '#02040d',
+      fogColor: '#140d2d',
+      fogNear: 58,
+      fogFar: 210,
+      ambientLightColor: '#96a5ff',
+      ambientLightIntensity: 0.48,
+      keyLightColor: '#d7dbff',
+      keyLightIntensity: 1.34,
+      keyLightPositionX: 12,
+      keyLightPositionY: 18,
+      keyLightPositionZ: 46,
+      gravityWellColor: '#5c7cff',
+      gravityWellEmissive: '#6b2dff',
+      gravityWellEmissiveIntensity: 1.6,
+      ringColor: '#8f78ff',
+      ringOpacity: 0.38,
+      starsColor: '#6cc7ff',
+      starsSize: 0.34,
+      backgroundImageTextureId: null,
+      backgroundModelId: null,
+      backgroundEffectId: 'wormhole_v1',
+      backgroundEffectTint: '#4fd2ff',
+      backgroundEffectSecondaryTint: '#b24cff',
+      backgroundEffectOpacity: 1,
+      backgroundEffectSpeed: 0.9,
+      backgroundEffectScale: 1.2,
+    },
+  },
   {
     id: 'nebula_twilight_v1',
     label: 'Nebula Twilight V1',

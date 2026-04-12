@@ -12,7 +12,10 @@ const GUEST_ACCOUNT_KEY = 'gravity_well.guest_account_id';
 const AUTH_ACCOUNT_KEY = 'gravity_well.auth_account_id';
 const AUTH_DISPLAY_NAME_KEY = 'gravity_well.auth_display_name';
 const PROFILE_CACHE_KEY_PREFIX = 'gravity_well.profile.';
-const profileApiBase = (import.meta.env.VITE_PROFILE_API_BASE as string | undefined)?.trim();
+const profileApiBase = (
+  (import.meta.env.VITE_PROFILE_API_BASE as string | undefined)?.trim()
+  || (import.meta.env.VITE_MATCHMAKING_API_BASE as string | undefined)?.trim()
+);
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface StoredProfilePayload {

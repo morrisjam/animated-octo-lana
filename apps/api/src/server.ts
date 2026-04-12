@@ -10,6 +10,10 @@ import {
   type RegionId,
   type QueueType,
 } from './matchmaking/queueService';
+import {
+  createLiveSessionFrameRelay,
+  type RelayPlayerFrameInput,
+} from './matchmaking/liveSessionFrameRelay';
 import { createMatchmakingNetworkConfigFromEnv } from './matchmaking/networkConfig';
 import {
   createConnectivityTelemetryStore,
@@ -77,7 +81,7 @@ const app = Fastify({ logger: true });
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
 app.register(cors, {
   origin: (origin, callback) => {
-    if (!origin || allowedCorsOrigins.includes('*') || allowedCorsOrigins.includes(origin)) {
+    if (!origin || isAllowedCorsOrigin(origin, allowedCorsOrigins)) {
       callback(null, true);
       return;
     }
@@ -136,6 +140,7 @@ const matchmakingQueueService = createMatchmakingQueueService({
   rankedMasterMaxGap: parsePositiveIntegerEnv(process.env.MATCHMAKING_MASTER_MAX_GAP),
   rankedMasterStrictRegionSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_MASTER_STRICT_REGION_SECONDS),
 });
+const liveSessionFrameRelay = createLiveSessionFrameRelay();
 const matchmakingNetworkConfig = createMatchmakingNetworkConfigFromEnv(process.env);
 const connectivityTelemetryStore = createConnectivityTelemetryStore({
   retentionMs: parsePositiveIntegerEnv(process.env.MATCHMAKING_TELEMETRY_RETENTION_MS),
@@ -213,6 +218,7 @@ interface MatchmakingQueueJoinBody {
   regionPreferences?: string[];
   buildVersion?: string;
   platform?: string;
+  characterId?: string;
 }
 
 interface MatchmakingQueueLeaveBody {
@@ -227,6 +233,24 @@ interface MatchmakingSessionReconnectBody {
   sessionId?: string;
   sessionToken?: string;
   reconnectAttemptId?: string;
+}
+
+interface MatchmakingSessionCompleteBody {
+  sessionId?: string;
+  sessionToken?: string;
+}
+
+interface MatchmakingSessionFramesSubmitBody {
+  sessionToken?: string;
+  frames?: Array<{
+    frame?: number;
+    input?: Record<string, unknown>;
+  }>;
+}
+
+interface MatchmakingSessionFramesQuery {
+  sessionToken?: string;
+  sinceFrame?: string;
 }
 
 interface MatchmakingIceConfigQuery {
@@ -477,12 +501,25 @@ function parsePercentageEnv(value: string | undefined): number | undefined {
 
 function parseCorsOrigins(value: string | undefined): string[] {
   if (!value) {
-    return ['http://localhost:5173', 'http://127.0.0.1:5173'];
+    return ['http://localhost:*', 'http://127.0.0.1:*'];
   }
   return value
     .split(',')
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
+}
+
+function isAllowedCorsOrigin(origin: string, allowedOrigins: string[]): boolean {
+  if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+    return true;
+  }
+  return allowedOrigins.some((allowedOrigin) => {
+    if (!allowedOrigin.endsWith(':*')) {
+      return false;
+    }
+    const prefix = allowedOrigin.slice(0, -1);
+    return origin.startsWith(prefix);
+  });
 }
 
 function parseConnectionPath(value: unknown): ConnectionPath | null {
@@ -539,6 +576,68 @@ function parseRegionPreferences(value: unknown): RegionId[] | null {
     parsed.push(region);
   }
   return parsed.length > 0 ? parsed : null;
+}
+
+function parseOptionalCharacterId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 64) {
+    return null;
+  }
+  return trimmed;
+}
+
+function parseFrameAxis(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(-1, Math.min(1, value));
+}
+
+function parseFrameButton(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function parseRelayPlayerFrameInput(value: unknown): RelayPlayerFrameInput | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const moveX = parseFrameAxis(record.moveX);
+  const moveY = parseFrameAxis(record.moveY);
+  const boost = parseFrameButton(record.boost);
+  const superBoost = parseFrameButton(record.superBoost);
+  const special = parseFrameButton(record.special);
+  const launch = parseFrameButton(record.launch);
+  const dunk = parseFrameButton(record.dunk);
+  const parry = parseFrameButton(record.parry);
+  const breakLaunch = parseFrameButton(record.breakLaunch);
+  if (
+    moveX === null
+    || moveY === null
+    || boost === null
+    || superBoost === null
+    || special === null
+    || launch === null
+    || dunk === null
+    || parry === null
+    || breakLaunch === null
+  ) {
+    return null;
+  }
+  return {
+    moveX,
+    moveY,
+    boost,
+    superBoost,
+    special,
+    launch,
+    dunk,
+    parry,
+    breakLaunch,
+  };
 }
 
 async function getProfileDisplayName(accountId: string): Promise<string | null> {
@@ -3050,6 +3149,7 @@ app.post('/matchmaking/queue/join', async (request, reply) => {
       displayName,
       buildVersion: typeof body.buildVersion === 'string' ? body.buildVersion.trim() : null,
       platform: body.platform === 'steam' || body.platform === 'web' ? body.platform : null,
+      selectedCharacterId: parseOptionalCharacterId(body.characterId),
       rankedSnapshot,
     },
   });
@@ -3180,6 +3280,121 @@ app.post('/matchmaking/sessions/reconnect', async (request, reply) => {
   return result.value;
 });
 
+app.post('/matchmaking/sessions/complete', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const body = (request.body ?? {}) as MatchmakingSessionCompleteBody;
+  if (!isUuid(body.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+
+  const result = matchmakingQueueService.completeSession(body.sessionId, accountId, sessionToken);
+  if (!result.ok) {
+    reply.code(mapSessionErrorToHttp(result.error.code));
+    return { error: result.error.message, code: result.error.code };
+  }
+  return result.value;
+});
+
+app.post('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const params = request.params as { sessionId?: string };
+  if (!isUuid(params.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+
+  const body = (request.body ?? {}) as MatchmakingSessionFramesSubmitBody;
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+  const frames = Array.isArray(body.frames) ? body.frames : [];
+  if (frames.length === 0 || frames.length > 30) {
+    reply.code(400);
+    return { error: 'frames must contain between 1 and 30 entries.' };
+  }
+
+  const sessionValidation = matchmakingQueueService.validateSessionToken(params.sessionId, accountId, sessionToken);
+  if (!sessionValidation.ok) {
+    reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
+    return { error: sessionValidation.error.message, code: sessionValidation.error.code };
+  }
+
+  const parsedFrames: Array<{ frame: number; input: RelayPlayerFrameInput }> = [];
+  for (const item of frames) {
+    const frame = Number(item?.frame);
+    if (!Number.isInteger(frame) || frame < 0) {
+      reply.code(400);
+      return { error: 'Each frame entry requires a non-negative integer frame id.' };
+    }
+    const input = parseRelayPlayerFrameInput(item?.input);
+    if (!input) {
+      reply.code(400);
+      return { error: 'Each frame entry requires a valid input payload.' };
+    }
+    parsedFrames.push({ frame, input });
+  }
+
+  liveSessionFrameRelay.submitFrames({
+    sessionId: params.sessionId,
+    accountId,
+    frames: parsedFrames,
+  });
+  return { acceptedFrames: parsedFrames.length };
+});
+
+app.get('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const params = request.params as { sessionId?: string };
+  if (!isUuid(params.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+
+  const query = (request.query ?? {}) as MatchmakingSessionFramesQuery;
+  const sessionToken = String(query.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+  const sinceFrameRaw = query.sinceFrame ?? '-1';
+  const sinceFrame = Number(sinceFrameRaw);
+  if (!Number.isInteger(sinceFrame) || sinceFrame < -1) {
+    reply.code(400);
+    return { error: 'sinceFrame must be an integer greater than or equal to -1.' };
+  }
+
+  const sessionValidation = matchmakingQueueService.validateSessionToken(params.sessionId, accountId, sessionToken);
+  if (!sessionValidation.ok) {
+    reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
+    return { error: sessionValidation.error.message, code: sessionValidation.error.code };
+  }
+
+  return liveSessionFrameRelay.getPeerFrames(params.sessionId, accountId, sinceFrame);
+});
+
 app.post('/ranked/results', async (request, reply) => {
   const accountId = getAuthenticatedAccountId(request);
   if (!accountId) {
@@ -3242,7 +3457,10 @@ app.post('/ranked/results', async (request, reply) => {
     return { error: 'winnerAccountId is required for forfeit outcomes.' };
   }
 
-  const sessionValidation = matchmakingQueueService.validateSessionToken(body.sessionId, accountId, sessionToken);
+  const sessionValidation = matchmakingQueueService.validateSessionToken(body.sessionId, accountId, sessionToken, {
+    allowResolved: true,
+    allowExpiredToken: true,
+  });
   if (!sessionValidation.ok) {
     reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
     return { error: sessionValidation.error.message, code: sessionValidation.error.code };

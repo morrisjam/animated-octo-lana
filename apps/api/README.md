@@ -123,6 +123,27 @@ npm run api:local
 npm run api:test
 ```
 
+## Run ranked online smoke
+
+This validates:
+
+- ranked queue match creation
+- session read and authenticated frame relay
+- disconnect and reconnect flow
+- replayed reconnect rejection
+- post-match ranked result submission
+- duplicate submission rejection
+- progression update after result processing
+
+```bash
+API_BASE_URL=http://127.0.0.1:3000 ONLINE_SMOKE_WAIT_SECONDS=33 npm run api:smoke:ranked-online
+```
+
+Notes:
+- `ONLINE_SMOKE_WAIT_SECONDS=33` intentionally waits past the default session/token TTL to verify post-match submission still works during retention.
+- Reduce the wait for a faster happy-path smoke when needed.
+- The smoke script now covers both live-session lifecycle behavior and the post-match ranked lifecycle.
+
 ## Run ranked season reset job
 
 ```bash

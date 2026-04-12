@@ -40,6 +40,7 @@ npm run stage:validate -w @gravity-well/game-web
   - gravity well and ring presentation
   - starfield color/size
   - optional background image/model slots
+  - optional procedural background effect slots
 
 ## Background asset slots
 - Presets may specify:
@@ -48,6 +49,17 @@ npm run stage:validate -w @gravity-well/game-web
 - IDs must exist in `DEFAULT_ASSET_MANIFEST`:
   - textures list for `backgroundImageTextureId`
   - models list for `backgroundModelId`
+
+## Procedural effect slots
+- Presets may specify:
+  - `backgroundEffectId`
+  - `backgroundEffectTint`
+  - `backgroundEffectSecondaryTint`
+  - `backgroundEffectOpacity`
+  - `backgroundEffectSpeed`
+  - `backgroundEffectScale`
+- Runtime currently supports:
+  - `wormhole_v1`
 
 ## Report output
 - `apps/game-web/build-artifacts/stage-atmosphere-validation-report.json`

@@ -184,6 +184,8 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - `src/net/transport.ts` contains direct-to-relay fallback primitives for WebRTC session setup.
 - `src/net/connectivityApi.ts` contains API helpers for ICE config fetch and direct/relay telemetry posts.
 - Set `VITE_MATCHMAKING_API_BASE` to enable API-backed ICE config and telemetry in future online integration.
+- `VITE_FEATURE_ONLINE_MATCH_RUNTIME=true` enables the first runtime bootstrap handoff for matched ranked sessions.
+- Current limitation: public `Online` menu entry is hidden unless online runtime is explicitly enabled. The bootstrap path now consumes a matched ranked session and prepares ICE/RTC transport state, but peer signaling and live online gameplay are still not wired end to end.
 
 ## Online Dev menu shell
 

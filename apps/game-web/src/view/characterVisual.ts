@@ -11,6 +11,13 @@ interface CharacterPalette {
   body: string;
   accent: string;
   emissive: string;
+  detail: string;
+}
+
+interface CharacterStyle {
+  silhouette: 'vanguard' | 'duelist' | 'ace' | 'warden';
+  spriteShape: 'diamond' | 'spear' | 'crest' | 'hex';
+  accentShape: 'slash' | 'ring' | 'chevron';
 }
 
 export interface CharacterVisualHandle {
@@ -28,125 +35,337 @@ interface CharacterVisualUpdateContext {
 
 interface CharacterVisualAdapter {
   presentation: CharacterVisualPresentation;
-  createNode: (profile: CharacterVisualProfile, playerId: PlayerId) => THREE.Object3D;
+  createNode: (profile: CharacterVisualProfile, playerId: PlayerId, characterId: CharacterId) => THREE.Object3D;
   updateNode: (node: THREE.Object3D, context: CharacterVisualUpdateContext) => void;
 }
+
+const SPRITE_TEXTURE_CACHE = new Map<string, THREE.Texture>();
 
 function getPalette(playerId: PlayerId): CharacterPalette {
   if (playerId === 'P1') {
     return {
       body: '#58b6ff',
-      accent: '#7db7ff',
+      accent: '#8fe0ff',
       emissive: '#58b6ff',
+      detail: '#ffffff',
     };
   }
   return {
     body: '#ff74b8',
-    accent: '#ff9fd0',
+    accent: '#ffc0dc',
     emissive: '#ff74b8',
+    detail: '#fff0f7',
   };
 }
 
-function createMechBody(palette: CharacterPalette): THREE.Group {
+function getCharacterStyle(characterId: CharacterId): CharacterStyle {
+  switch (characterId) {
+    case 'duelist':
+      return { silhouette: 'duelist', spriteShape: 'spear', accentShape: 'slash' };
+    case 'ace':
+      return { silhouette: 'ace', spriteShape: 'crest', accentShape: 'chevron' };
+    case 'warden':
+      return { silhouette: 'warden', spriteShape: 'hex', accentShape: 'ring' };
+    case 'vanguard':
+    default:
+      return { silhouette: 'vanguard', spriteShape: 'diamond', accentShape: 'ring' };
+  }
+}
+
+function alphaForShape(
+  shape: CharacterStyle['spriteShape'] | CharacterStyle['accentShape'],
+  x: number,
+  y: number,
+): number {
+  const nx = x * 2 - 1;
+  const ny = y * 2 - 1;
+  const ax = Math.abs(nx);
+  const ay = Math.abs(ny);
+
+  switch (shape) {
+    case 'diamond':
+      return ax + ay <= 0.86 ? 1 : 0;
+    case 'spear':
+      if (ay <= 0.14 && ax <= 0.76) {
+        return 1;
+      }
+      return ax + Math.max(0, ny) * 0.8 <= 0.72 && ny >= -0.72 ? 1 : 0;
+    case 'crest':
+      if (ax + ay <= 0.8) {
+        return 1;
+      }
+      return ay <= 0.16 && ax <= 0.92 ? 1 : 0;
+    case 'hex':
+      return ax * 0.82 + ay <= 0.9 && ay * 0.82 + ax <= 0.9 ? 1 : 0;
+    case 'slash':
+      return Math.abs(ny - nx * 0.72) <= 0.16 && ax <= 0.84 && ay <= 0.84 ? 1 : 0;
+    case 'ring': {
+      const r = Math.hypot(nx, ny);
+      return r >= 0.5 && r <= 0.82 ? 1 : 0;
+    }
+    case 'chevron':
+      return ny >= -0.72 && ny <= 0.46 && ay + ax * 0.68 >= 0.32 && ay + ax * 0.68 <= 0.74 ? 1 : 0;
+    default:
+      return 0;
+  }
+}
+
+function getShapeTexture(shape: CharacterStyle['spriteShape'] | CharacterStyle['accentShape']): THREE.Texture {
+  const cached = SPRITE_TEXTURE_CACHE.get(shape);
+  if (cached) {
+    return cached;
+  }
+
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  for (let py = 0; py < size; py += 1) {
+    for (let px = 0; px < size; px += 1) {
+      const index = (py * size + px) * 4;
+      const alpha = alphaForShape(shape, (px + 0.5) / size, (py + 0.5) / size);
+      data[index] = 255;
+      data[index + 1] = 255;
+      data[index + 2] = 255;
+      data[index + 3] = Math.round(alpha * 255);
+    }
+  }
+
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  SPRITE_TEXTURE_CACHE.set(shape, texture);
+  return texture;
+}
+
+function createMaterial(color: string, emissive?: string, emissiveIntensity = 0.25): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color,
+    emissive: emissive ?? color,
+    emissiveIntensity,
+    metalness: 0.22,
+    roughness: 0.58,
+  });
+}
+
+function createMechBody(characterId: CharacterId, palette: CharacterPalette): THREE.Group {
+  const style = getCharacterStyle(characterId);
   const mech = new THREE.Group();
+
   const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(1.4, 2.7, 8, 14),
-    new THREE.MeshStandardMaterial({ color: palette.body, metalness: 0.35, roughness: 0.55 }),
+    new THREE.CapsuleGeometry(1.25, 2.5, 8, 14),
+    createMaterial(palette.body, palette.emissive, 0.35),
   );
   body.rotation.z = Math.PI / 2;
   mech.add(body);
 
   const core = new THREE.Mesh(
-    new THREE.SphereGeometry(0.45, 16, 16),
-    new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: palette.emissive, emissiveIntensity: 1.6 }),
+    new THREE.SphereGeometry(style.silhouette === 'warden' ? 0.34 : 0.46, 16, 16),
+    createMaterial(palette.detail, palette.emissive, 1.9),
   );
+  core.name = 'core';
   core.position.z = 1;
   mech.add(core);
 
-  const wingGeo = new THREE.ConeGeometry(1.2, 3.4, 3);
-  const wingMat = new THREE.MeshStandardMaterial({
-    color: palette.accent,
-    transparent: true,
-    opacity: 0.6,
-    emissive: palette.accent,
-    emissiveIntensity: 0.25,
-  });
+  if (style.silhouette === 'vanguard') {
+    const shoulderGeo = new THREE.BoxGeometry(0.65, 1.7, 1);
+    const shoulderMat = createMaterial(palette.accent, palette.emissive, 0.5);
+    const leftShoulder = new THREE.Mesh(shoulderGeo, shoulderMat);
+    leftShoulder.position.set(-0.45, 0, 1.1);
+    leftShoulder.rotation.z = 0.28;
+    mech.add(leftShoulder);
+    const rightShoulder = leftShoulder.clone();
+    rightShoulder.position.x *= -1;
+    rightShoulder.rotation.z *= -1;
+    mech.add(rightShoulder);
 
-  const leftWing = new THREE.Mesh(wingGeo, wingMat);
-  leftWing.position.set(-0.8, 0, -0.2);
-  leftWing.rotation.set(Math.PI / 2, 0, Math.PI * 0.2);
-  mech.add(leftWing);
+    const shield = new THREE.Mesh(
+      new THREE.TorusGeometry(2.2, 0.18, 14, 44),
+      new THREE.MeshBasicMaterial({
+        color: palette.accent,
+        transparent: true,
+        opacity: 0.34,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    shield.name = 'aura';
+    shield.rotation.x = Math.PI / 2;
+    mech.add(shield);
+  } else if (style.silhouette === 'warden') {
+    const fin = new THREE.Mesh(
+      new THREE.ConeGeometry(0.56, 2.8, 4),
+      createMaterial(palette.accent, palette.emissive, 0.42),
+    );
+    fin.position.set(0, 0, 1.6);
+    fin.rotation.x = Math.PI / 2;
+    fin.rotation.z = Math.PI / 4;
+    mech.add(fin);
 
-  const rightWing = leftWing.clone();
-  rightWing.position.x *= -1;
-  rightWing.rotation.z *= -1;
-  mech.add(rightWing);
+    for (const side of [-1, 1]) {
+      const pod = new THREE.Mesh(
+        new THREE.SphereGeometry(0.34, 10, 10),
+        createMaterial(palette.detail, palette.emissive, 0.8),
+      );
+      pod.position.set(side * 1.9, 0, 0.1);
+      pod.name = 'pod';
+      mech.add(pod);
+    }
+  } else if (style.silhouette === 'ace') {
+    const wingGeo = new THREE.ConeGeometry(1.05, 3.3, 3);
+    const wingMat = createMaterial(palette.accent, palette.emissive, 0.34);
+    const leftWing = new THREE.Mesh(wingGeo, wingMat);
+    leftWing.position.set(-0.75, 0, -0.1);
+    leftWing.rotation.set(Math.PI / 2, 0, Math.PI * 0.2);
+    mech.add(leftWing);
+    const rightWing = leftWing.clone();
+    rightWing.position.x *= -1;
+    rightWing.rotation.z *= -1;
+    mech.add(rightWing);
+  }
 
   return mech;
 }
 
-function createSpriteNode(palette: CharacterPalette): THREE.Sprite {
+function createSpriteNode(characterId: CharacterId, palette: CharacterPalette): THREE.Sprite {
+  const style = getCharacterStyle(characterId);
   const material = new THREE.SpriteMaterial({
+    map: getShapeTexture(style.spriteShape),
     color: palette.body,
     transparent: true,
-    opacity: 0.94,
+    opacity: 0.98,
+    alphaTest: 0.08,
   });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(6, 6, 1);
+  sprite.scale.set(6.2, 6.2, 1);
+  sprite.name = 'sprite-body';
+
+  const accent = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: getShapeTexture(style.accentShape),
+      color: palette.accent,
+      transparent: true,
+      opacity: 0.58,
+      alphaTest: 0.08,
+    }),
+  );
+  accent.name = 'accent';
+  accent.position.set(0, 0, 0.02);
+  accent.scale.set(5.1, 5.1, 1);
+  sprite.add(accent);
+
   return sprite;
+}
+
+function createHybridNode(characterId: CharacterId, palette: CharacterPalette): THREE.Group {
+  const style = getCharacterStyle(characterId);
+  const group = new THREE.Group();
+  group.name = `${characterId}:hybrid`;
+  group.add(createMechBody(characterId, palette));
+
+  const aura = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: getShapeTexture(style.spriteShape),
+      color: palette.accent,
+      transparent: true,
+      opacity: 0.24,
+      alphaTest: 0.08,
+    }),
+  );
+  aura.name = 'aura';
+  aura.position.set(0, 0, -1.15);
+  aura.scale.set(8.8, 8.8, 1);
+  group.add(aura);
+
+  return group;
+}
+
+function applyVisualPulse(node: THREE.Object3D, context: CharacterVisualUpdateContext): void {
+  const pressure = Math.max(
+    context.own.launchFlash * 1.9,
+    context.own.parryFlash * 1.4,
+    context.own.specialFlash * 1.8,
+    context.own.breakFlash * 1.7,
+    context.own.dunkFlash * 1.8,
+  );
+  const pulse = 1 + pressure * 0.16 + Math.abs(Math.sin(context.gameTime * 7.5)) * 0.025;
+  node.scale.setScalar(pulse);
+
+  node.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      const material = child.material;
+      if (Array.isArray(material)) {
+        return;
+      }
+      if ('emissiveIntensity' in material) {
+        const base = child.name === 'core' ? 1.5 : 0.25;
+        material.emissiveIntensity = base + pressure * (child.name === 'core' ? 1.8 : 0.65);
+      }
+      if ('opacity' in material && material.transparent) {
+        material.opacity = THREE.MathUtils.clamp((material.opacity ?? 1) + pressure * 0.04, 0, 1);
+      }
+    }
+    if (child instanceof THREE.Sprite) {
+      const material = child.material as THREE.SpriteMaterial;
+      material.opacity = child.name === 'aura'
+        ? THREE.MathUtils.clamp(0.24 + pressure * 0.14, 0, 0.8)
+        : THREE.MathUtils.clamp(0.86 + pressure * 0.1, 0, 1);
+    }
+  });
 }
 
 const threeDAdapter: CharacterVisualAdapter = {
   presentation: '3d',
-  createNode(profile: CharacterVisualProfile, playerId: PlayerId): THREE.Object3D {
-    const mech = createMechBody(getPalette(playerId));
+  createNode(profile: CharacterVisualProfile, playerId: PlayerId, characterId: CharacterId): THREE.Object3D {
+    const mech = createMechBody(characterId, getPalette(playerId));
     mech.name = `${profile.modelId}:${profile.animationSetId}`;
     return mech;
   },
   updateNode(node: THREE.Object3D, context: CharacterVisualUpdateContext): void {
     node.lookAt(context.opponent.pos.x, context.opponent.pos.y, 0);
     node.rotation.x = Math.PI / 2;
+    applyVisualPulse(node, context);
   },
 };
 
 const spriteAdapter: CharacterVisualAdapter = {
   presentation: 'sprite',
-  createNode(profile: CharacterVisualProfile, playerId: PlayerId): THREE.Object3D {
-    const sprite = createSpriteNode(getPalette(playerId));
+  createNode(profile: CharacterVisualProfile, playerId: PlayerId, characterId: CharacterId): THREE.Object3D {
+    const sprite = createSpriteNode(characterId, getPalette(playerId));
     sprite.name = `${profile.modelId}:sprite`;
     return sprite;
   },
   updateNode(node: THREE.Object3D, context: CharacterVisualUpdateContext): void {
     const sprite = node as THREE.Sprite;
-    const pulse = 1 + Math.abs(Math.sin(context.gameTime * 5.5)) * 0.04;
-    sprite.scale.set(6 * pulse, 6 * pulse, 1);
+    const directionalLean = THREE.MathUtils.clamp(context.opponent.pos.x - context.own.pos.x, -1, 1) * 0.08;
+    const pulse = 1 + Math.abs(Math.sin(context.gameTime * 5.2)) * 0.05 + context.own.specialFlash * 0.16;
+    sprite.scale.set(6.2 * pulse, 6.2 * pulse, 1);
+    sprite.material.rotation = directionalLean;
+    const accent = sprite.children.find((child) => child.name === 'accent');
+    if (accent instanceof THREE.Sprite) {
+      accent.scale.set(4.8 + context.own.launchFlash * 1.1, 4.8 + context.own.launchFlash * 1.1, 1);
+      (accent.material as THREE.SpriteMaterial).rotation = -directionalLean * 1.8;
+      (accent.material as THREE.SpriteMaterial).opacity = THREE.MathUtils.clamp(0.46 + context.own.breakFlash * 0.8, 0, 0.95);
+    }
   },
 };
 
 const hybridAdapter: CharacterVisualAdapter = {
   presentation: 'hybrid',
-  createNode(profile: CharacterVisualProfile, playerId: PlayerId): THREE.Object3D {
-    const palette = getPalette(playerId);
-    const group = new THREE.Group();
+  createNode(profile: CharacterVisualProfile, playerId: PlayerId, characterId: CharacterId): THREE.Object3D {
+    const group = createHybridNode(characterId, getPalette(playerId));
     group.name = `${profile.modelId}:hybrid`;
-
-    const mech = createMechBody(palette);
-    group.add(mech);
-
-    const aura = createSpriteNode(palette);
-    aura.position.set(0, 0, -1.2);
-    aura.scale.set(8, 8, 1);
-    group.add(aura);
-
     return group;
   },
   updateNode(node: THREE.Object3D, context: CharacterVisualUpdateContext): void {
     node.lookAt(context.opponent.pos.x, context.opponent.pos.y, 0);
     node.rotation.x = Math.PI / 2;
-    const aura = node.children.find((child) => child instanceof THREE.Sprite) as THREE.Sprite | undefined;
-    if (aura) {
-      const pulse = 1 + Math.abs(Math.sin(context.gameTime * 4)) * 0.1;
-      aura.scale.set(8 * pulse, 8 * pulse, 1);
+    applyVisualPulse(node, context);
+    const aura = node.children.find((child) => child.name === 'aura');
+    if (aura instanceof THREE.Sprite) {
+      const pulse = 1 + Math.abs(Math.sin(context.gameTime * 4.1)) * 0.12 + context.own.launchFlash * 0.22;
+      aura.scale.set(8.8 * pulse, 8.8 * pulse, 1);
     }
   },
 };
@@ -170,7 +389,7 @@ export function createCharacterVisualHandle(characterId: CharacterId, playerId: 
     characterId,
     profile,
     adapter,
-    node: adapter.createNode(profile, playerId),
+    node: adapter.createNode(profile, playerId, characterId),
   };
 }
 
@@ -191,10 +410,13 @@ export function disposeCharacterVisualNode(node: THREE.Object3D): void {
     }
     if (mesh.material) {
       const material = mesh.material as THREE.Material | THREE.Material[];
+      const disposeMaterial = (entry: THREE.Material) => {
+        entry.dispose();
+      };
       if (Array.isArray(material)) {
-        material.forEach((item) => item.dispose());
+        material.forEach(disposeMaterial);
       } else {
-        material.dispose();
+        disposeMaterial(material);
       }
     }
   });

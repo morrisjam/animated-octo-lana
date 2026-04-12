@@ -11,11 +11,16 @@ import {
   DEFAULT_AI_DIFFICULTY,
   type AiDifficultyId,
 } from '../sim/ai';
+import {
+  DEFAULT_ARCADE_STAGES,
+  type ArcadeStageDefinition,
+} from '../sim/arcade';
 import type { PlayerId, PlayersById } from '../sim/types';
 
-export type GameMode = 'endless' | 'best_of_3' | 'arcade' | 'training';
+export type GameMode = 'endless' | 'best_of_3' | 'arcade' | 'training' | 'cpu_vs_cpu';
 export type WebAuthMenuAction = 'signin' | 'signup' | 'signout';
 export type OnlineDevMenuTarget = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
+export type StatusTone = 'neutral' | 'success' | 'warning' | 'danger';
 export interface ArcadeMenuSettings {
   continues: number;
   retryEnabled: boolean;
@@ -39,19 +44,27 @@ export interface WebAuthMenuRequest {
 export interface OnlineRankedViewState {
   headline: string;
   detail: string;
+  tone?: StatusTone;
+  hint?: string;
 }
 export interface OnlineRoomViewState {
   headline: string;
   detail: string;
   roomCode?: string | null;
+  tone?: StatusTone;
+  hint?: string;
 }
 export interface ReplayArchiveViewState {
   headline: string;
   detail: string;
+  tone?: StatusTone;
+  hint?: string;
 }
 export interface RankedSnapshotViewState {
   headline: string;
   detail: string;
+  tone?: StatusTone;
+  hint?: string;
 }
 export interface MatchOverScreenOptions {
   title?: string;
@@ -76,6 +89,7 @@ type StartScreen =
   | 'match_over';
 
 interface StartMenuOptions {
+  onlineMenuEnabled?: boolean;
   initialMode?: GameMode;
   initialLoadout?: PlayersById<CharacterId>;
   initialAiDifficulty?: AiDifficultyId;
@@ -126,8 +140,9 @@ const MODE_LABELS: Record<GameMode, string> = {
   best_of_3: 'Best of 3',
   arcade: 'Arcade Ladder',
   training: 'Training',
+  cpu_vs_cpu: 'AI vs AI',
 };
-const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'arcade', 'training'];
+const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'arcade', 'training', 'cpu_vs_cpu'];
 const ARCADE_CONTINUE_OPTIONS = [0, 1, 2, 3];
 const SETTINGS_THEME_ROW_INDEX = 3;
 const SETTINGS_STAGE_ATMOSPHERE_ROW_INDEX = 4;
@@ -180,7 +195,7 @@ function cycleCharacter(current: CharacterId, direction: 1 | -1): CharacterId {
 
 function sanitiseEnabledModes(rawModes: GameMode[] | undefined): GameMode[] {
   if (!rawModes || rawModes.length === 0) {
-    return ['endless', 'best_of_3', 'arcade'];
+    return ['endless', 'best_of_3', 'arcade', 'cpu_vs_cpu'];
   }
   const uniqueModes: GameMode[] = [];
   for (const mode of MODE_ORDER) {
@@ -357,6 +372,26 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+function buildArcadeLadderView(
+  playerCharacterId: CharacterId,
+  settings: ArcadeMenuSettings,
+  stages: ArcadeStageDefinition[] = DEFAULT_ARCADE_STAGES,
+): { headline: string; detail: string; hint: string } {
+  const playerCharacter = CHARACTER_BY_ID[playerCharacterId]?.displayName ?? playerCharacterId;
+  const finalEncounter = stages.find((stage) => stage.finalEncounter) ?? stages[stages.length - 1] ?? null;
+  const stageLines = stages.map((stage, index) => {
+    const opponent = CHARACTER_BY_ID[stage.opponentCharacterId]?.displayName ?? stage.opponentCharacterId;
+    const tag = stage.finalEncounter ? 'Final' : `Stage ${index + 1}`;
+    return `${tag}: ${stage.label} | ${opponent} | ${getAiDifficultyLabel(stage.aiDifficulty)}`;
+  });
+
+  return {
+    headline: `${stages.length}-stage ladder | ${playerCharacter} run`,
+    detail: `Encounter Order:\n${stageLines.join('\n')}`,
+    hint: `Rounds: best of 3. Continues: ${settings.continues}. Retry stage: ${settings.retryEnabled ? 'Enabled' : 'Disabled'}. Final encounter: ${finalEncounter?.label ?? 'Unknown'}.`,
+  };
+}
+
 export class StartMenu {
   private readonly root: HTMLDivElement;
   private readonly roundBanner: HTMLDivElement;
@@ -391,7 +426,7 @@ export class StartMenu {
   private readonly signOutButton: HTMLButtonElement;
   private readonly titleContinueButton: HTMLButtonElement;
   private readonly continueButton: HTMLButtonElement;
-  private readonly mainOnlineButton: HTMLButtonElement;
+  private readonly mainOnlineButton: HTMLButtonElement | null;
   private readonly mainLocalButton: HTMLButtonElement;
   private readonly entitlementStatusLabel: HTMLDivElement;
   private readonly settingsSignOutButton: HTMLButtonElement;
@@ -403,8 +438,10 @@ export class StartMenu {
   private readonly settingsStageAtmosphereButton: HTMLButtonElement;
   private readonly rankedStatusHeadline: HTMLDivElement;
   private readonly rankedStatusDetail: HTMLPreElement;
+  private readonly rankedStatusHint: HTMLDivElement;
   private readonly roomStatusHeadline: HTMLDivElement;
   private readonly roomStatusDetail: HTMLPreElement;
+  private readonly roomStatusHint: HTMLDivElement;
   private readonly roomCodeInput: HTMLInputElement;
   private readonly rankedJoinButton: HTMLButtonElement;
   private readonly rankedRefreshButton: HTMLButtonElement;
@@ -415,10 +452,12 @@ export class StartMenu {
   private readonly roomCloseButton: HTMLButtonElement;
   private readonly replayStatusHeadline: HTMLDivElement;
   private readonly replayStatusDetail: HTMLPreElement;
+  private readonly replayStatusHint: HTMLDivElement;
   private readonly replayRefreshButton: HTMLButtonElement;
   private readonly replayOpenLatestButton: HTMLButtonElement;
   private readonly rankingsStatusHeadline: HTMLDivElement;
   private readonly rankingsStatusDetail: HTMLPreElement;
+  private readonly rankingsStatusHint: HTMLDivElement;
   private readonly rankingsRefreshButton: HTMLButtonElement;
   private readonly localModeOptionsLabel: HTMLDivElement;
   private readonly localModeButton: HTMLButtonElement;
@@ -427,6 +466,9 @@ export class StartMenu {
   private readonly localArcadeContinuesOptionsLabel: HTMLDivElement;
   private readonly localArcadeContinuesButton: HTMLButtonElement;
   private readonly localArcadeRetryButton: HTMLButtonElement;
+  private readonly localArcadeLadderHeadline: HTMLDivElement;
+  private readonly localArcadeLadderDetail: HTMLPreElement;
+  private readonly localArcadeLadderHint: HTMLDivElement;
   private readonly localArcadeHistoryHeadline: HTMLDivElement;
   private readonly localArcadeHistoryDetail: HTMLPreElement;
   private readonly p1CharacterButton: HTMLButtonElement;
@@ -444,6 +486,7 @@ export class StartMenu {
   private rafId = 0;
 
   private readonly enabledModes: GameMode[];
+  private readonly onlineMenuEnabled: boolean;
   private readonly menuThemeOptions: StartMenuThemeOption[];
   private readonly stageAtmosphereOptions: StartStageAtmosphereOption[];
   private currentMode: GameMode;
@@ -511,6 +554,7 @@ export class StartMenu {
 
   public constructor(private readonly options: StartMenuOptions) {
     this.enabledModes = sanitiseEnabledModes(options.enabledModes);
+    this.onlineMenuEnabled = options.onlineMenuEnabled !== false;
     this.menuThemeOptions = sanitiseMenuThemeOptions(options.availableMenuThemes);
     this.stageAtmosphereOptions = sanitiseStageAtmosphereOptions(options.availableStageAtmospheres);
     this.currentMenuThemeId = resolveInitialMenuThemeId(options.initialMenuThemeId, this.menuThemeOptions);
@@ -530,6 +574,7 @@ export class StartMenu {
     this.root.hidden = true;
 
     this.titlePanel = this.createPanel('Gravity Well', 'Press continue to enter the portal.');
+    this.titlePanel.classList.add('start-title-panel');
     const titleSubtitle = this.titlePanel.querySelector('p');
     if (!(titleSubtitle instanceof HTMLParagraphElement)) {
       throw new Error('Missing title subtitle paragraph.');
@@ -537,13 +582,21 @@ export class StartMenu {
     this.titleSubtitle = titleSubtitle;
     this.loginPanel = this.createPanel('Login', 'Sign in, sign up, or continue as guest.');
     this.mainPanel = this.createPanel('Main Menu', 'Choose a category.');
+    this.mainPanel.classList.add('start-nav-panel');
     this.onlinePanel = this.createPanel('Online', 'Matchmaking and custom rooms.');
+    this.onlinePanel.classList.add('start-nav-panel');
     this.onlineRankedPanel = this.createPanel('Ranked Queue', 'Join, refresh, and leave queue from one place.');
+    this.onlineRankedPanel.classList.add('start-utility-panel');
     this.onlineRoomPanel = this.createPanel('Custom Room', 'Create or join room sessions by code.');
+    this.onlineRoomPanel.classList.add('start-utility-panel');
     this.localPanel = this.createPanel('Local', 'Local match setup.');
+    this.localPanel.classList.add('start-local-panel');
     this.replaysPanel = this.createPanel('Replays', 'Review archived and fixture replays.');
+    this.replaysPanel.classList.add('start-utility-panel');
     this.rankingsPanel = this.createPanel('Rankings', 'Ranked snapshot and leaderboard entry point.');
+    this.rankingsPanel.classList.add('start-utility-panel');
     this.settingsPanel = this.createPanel('Settings', 'Account and social options.');
+    this.settingsPanel.classList.add('start-settings-panel');
 
     const continueRow = this.createActionRow('Continue', () => {
       this.setScreen('login');
@@ -660,10 +713,12 @@ export class StartMenu {
     entitlementRow.appendChild(this.entitlementStatusLabel);
     this.mainPanel.appendChild(entitlementRow);
 
-    const mainOnlineRow = this.createActionRow('Online', () => {
-      this.setScreen('online');
-    });
-    this.mainOnlineButton = mainOnlineRow.button;
+    const mainOnlineRow = this.onlineMenuEnabled
+      ? this.createActionRow('Online', () => {
+        this.setScreen('online');
+      })
+      : null;
+    this.mainOnlineButton = mainOnlineRow?.button ?? null;
     const mainLocalRow = this.createActionRow('Local', () => {
       this.setScreen('local');
     });
@@ -681,22 +736,19 @@ export class StartMenu {
       this.setScreen('login');
     });
 
-    this.mainPanel.append(
-      mainOnlineRow.row,
+    const mainRows: HTMLDivElement[] = [];
+    if (mainOnlineRow) {
+      mainRows.push(mainOnlineRow.row);
+    }
+    mainRows.push(
       mainLocalRow.row,
       mainReplaysRow.row,
       mainRankingsRow.row,
       mainSettingsRow.row,
       mainBackRow.row,
     );
-    this.registerRows('main', [
-      mainOnlineRow.row,
-      mainLocalRow.row,
-      mainReplaysRow.row,
-      mainRankingsRow.row,
-      mainSettingsRow.row,
-      mainBackRow.row,
-    ]);
+    this.mainPanel.append(...mainRows);
+    this.registerRows('main', mainRows);
 
     const onlineRankedRow = this.createActionRow('Ranked', () => {
       this.setScreen('online_ranked');
@@ -713,7 +765,7 @@ export class StartMenu {
     const rankedStatusPanel = this.createStatusPanel('Status');
     this.rankedStatusHeadline = rankedStatusPanel.headline;
     this.rankedStatusDetail = rankedStatusPanel.detail;
-    this.onlineRankedPanel.appendChild(rankedStatusPanel.root);
+    this.rankedStatusHint = rankedStatusPanel.hint;
     const rankedJoinRow = this.createActionRow('Join Ranked Queue', async () => {
       await this.handleRankedAction('join');
     });
@@ -729,7 +781,16 @@ export class StartMenu {
     const rankedBackRow = this.createActionRow('Back', () => {
       this.setScreen('online');
     });
-    this.onlineRankedPanel.append(rankedJoinRow.row, rankedRefreshRow.row, rankedLeaveRow.row, rankedBackRow.row);
+    const rankedLayout = document.createElement('div');
+    rankedLayout.className = 'start-utility-layout';
+    const rankedInfo = document.createElement('div');
+    rankedInfo.className = 'start-utility-info';
+    const rankedActions = document.createElement('div');
+    rankedActions.className = 'start-utility-actions';
+    rankedInfo.appendChild(rankedStatusPanel.root);
+    rankedActions.append(rankedJoinRow.row, rankedRefreshRow.row, rankedLeaveRow.row, rankedBackRow.row);
+    rankedLayout.append(rankedInfo, rankedActions);
+    this.onlineRankedPanel.append(rankedLayout);
     this.registerRows('online_ranked', [rankedJoinRow.row, rankedRefreshRow.row, rankedLeaveRow.row, rankedBackRow.row]);
 
     const roomCodeField = document.createElement('label');
@@ -745,7 +806,7 @@ export class StartMenu {
     const roomStatusPanel = this.createStatusPanel('Room Status');
     this.roomStatusHeadline = roomStatusPanel.headline;
     this.roomStatusDetail = roomStatusPanel.detail;
-    this.onlineRoomPanel.appendChild(roomStatusPanel.root);
+    this.roomStatusHint = roomStatusPanel.hint;
     const roomCreateRow = this.createActionRow('Create Room', async () => {
       await this.handleRoomAction('create');
     });
@@ -765,7 +826,16 @@ export class StartMenu {
     const roomBackRow = this.createActionRow('Back', () => {
       this.setScreen('online');
     });
-    this.onlineRoomPanel.append(roomCreateRow.row, roomJoinRow.row, roomRefreshRow.row, roomCloseRow.row, roomBackRow.row);
+    const roomLayout = document.createElement('div');
+    roomLayout.className = 'start-utility-layout';
+    const roomInfo = document.createElement('div');
+    roomInfo.className = 'start-utility-info';
+    const roomActions = document.createElement('div');
+    roomActions.className = 'start-utility-actions';
+    roomInfo.append(roomCodeField, roomStatusPanel.root);
+    roomActions.append(roomCreateRow.row, roomJoinRow.row, roomRefreshRow.row, roomCloseRow.row, roomBackRow.row);
+    roomLayout.append(roomInfo, roomActions);
+    this.onlineRoomPanel.append(roomLayout);
     this.registerRows('online_room', [roomCreateRow.row, roomJoinRow.row, roomRefreshRow.row, roomCloseRow.row, roomBackRow.row]);
 
     const localModeRow = this.createActionRow('', () => {
@@ -810,6 +880,10 @@ export class StartMenu {
 
     this.localCharacterList = document.createElement('div');
     this.localCharacterList.className = 'start-character-list';
+    const localArcadeLadderPanel = this.createStatusPanel('Arcade Ladder');
+    this.localArcadeLadderHeadline = localArcadeLadderPanel.headline;
+    this.localArcadeLadderDetail = localArcadeLadderPanel.detail;
+    this.localArcadeLadderHint = localArcadeLadderPanel.hint;
     const localArcadeHistoryPanel = this.createStatusPanel('Arcade History');
     this.localArcadeHistoryHeadline = localArcadeHistoryPanel.headline;
     this.localArcadeHistoryDetail = localArcadeHistoryPanel.detail;
@@ -821,7 +895,23 @@ export class StartMenu {
       this.setScreen('main');
     });
 
-    this.localPanel.append(
+    const localLayout = document.createElement('div');
+    localLayout.className = 'start-local-layout';
+    const localRulesColumn = document.createElement('div');
+    localRulesColumn.className = 'start-local-column start-local-rules';
+    const localRosterColumn = document.createElement('div');
+    localRosterColumn.className = 'start-local-column start-local-roster';
+    const localRulesHeading = document.createElement('div');
+    localRulesHeading.className = 'start-section-heading';
+    localRulesHeading.textContent = 'Match Rules';
+    const localRosterHeading = document.createElement('div');
+    localRosterHeading.className = 'start-section-heading';
+    localRosterHeading.textContent = 'Fighters';
+    const localActions = document.createElement('div');
+    localActions.className = 'start-local-actions';
+
+    localRulesColumn.append(
+      localRulesHeading,
       localModeRow.row,
       this.localModeOptionsLabel,
       localDifficultyRow.row,
@@ -829,13 +919,19 @@ export class StartMenu {
       localArcadeContinuesRow.row,
       this.localArcadeContinuesOptionsLabel,
       localArcadeRetryRow.row,
+      localArcadeLadderPanel.root,
+      localArcadeHistoryPanel.root,
+    );
+    localRosterColumn.append(
+      localRosterHeading,
       localP1Row.row,
       localP2Row.row,
       this.localCharacterList,
-      localArcadeHistoryPanel.root,
-      localStartRow.row,
-      localBackRow.row,
     );
+    localLayout.append(localRulesColumn, localRosterColumn);
+    localActions.append(localStartRow.row, localBackRow.row);
+
+    this.localPanel.append(localLayout, localActions);
     this.registerRows(
       'local',
       [
@@ -853,7 +949,7 @@ export class StartMenu {
     const replayStatusPanel = this.createStatusPanel('Replay Archive');
     this.replayStatusHeadline = replayStatusPanel.headline;
     this.replayStatusDetail = replayStatusPanel.detail;
-    this.replaysPanel.appendChild(replayStatusPanel.root);
+    this.replayStatusHint = replayStatusPanel.hint;
     const replayRefreshRow = this.createActionRow('Refresh Replay Archive', async () => {
       await this.handleReplayAction('refresh');
     });
@@ -868,13 +964,22 @@ export class StartMenu {
     const replayBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
-    this.replaysPanel.append(replayRefreshRow.row, replayOpenLatestRow.row, replayFixtureRow.row, replayBackRow.row);
+    const replayLayout = document.createElement('div');
+    replayLayout.className = 'start-utility-layout';
+    const replayInfo = document.createElement('div');
+    replayInfo.className = 'start-utility-info';
+    const replayActions = document.createElement('div');
+    replayActions.className = 'start-utility-actions';
+    replayInfo.appendChild(replayStatusPanel.root);
+    replayActions.append(replayRefreshRow.row, replayOpenLatestRow.row, replayFixtureRow.row, replayBackRow.row);
+    replayLayout.append(replayInfo, replayActions);
+    this.replaysPanel.append(replayLayout);
     this.registerRows('replays', [replayRefreshRow.row, replayOpenLatestRow.row, replayFixtureRow.row, replayBackRow.row]);
 
     const rankingsStatusPanel = this.createStatusPanel('Ranked Snapshot');
     this.rankingsStatusHeadline = rankingsStatusPanel.headline;
     this.rankingsStatusDetail = rankingsStatusPanel.detail;
-    this.rankingsPanel.appendChild(rankingsStatusPanel.root);
+    this.rankingsStatusHint = rankingsStatusPanel.hint;
     const rankingsRefreshRow = this.createActionRow('Refresh Ranked Snapshot', async () => {
       await this.handleRankingsRefreshAction();
     });
@@ -882,7 +987,16 @@ export class StartMenu {
     const rankingsBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
-    this.rankingsPanel.append(rankingsRefreshRow.row, rankingsBackRow.row);
+    const rankingsLayout = document.createElement('div');
+    rankingsLayout.className = 'start-utility-layout';
+    const rankingsInfo = document.createElement('div');
+    rankingsInfo.className = 'start-utility-info';
+    const rankingsActions = document.createElement('div');
+    rankingsActions.className = 'start-utility-actions';
+    rankingsInfo.appendChild(rankingsStatusPanel.root);
+    rankingsActions.append(rankingsRefreshRow.row, rankingsBackRow.row);
+    rankingsLayout.append(rankingsInfo, rankingsActions);
+    this.rankingsPanel.append(rankingsLayout);
     this.registerRows('rankings', [rankingsRefreshRow.row, rankingsBackRow.row]);
 
     const settingsSessionRow = document.createElement('div');
@@ -931,16 +1045,38 @@ export class StartMenu {
     const settingsBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
-    this.settingsPanel.append(
+    const settingsLayout = document.createElement('div');
+    settingsLayout.className = 'start-settings-layout';
+    const settingsAccountColumn = document.createElement('div');
+    settingsAccountColumn.className = 'start-settings-column';
+    const settingsPresentationColumn = document.createElement('div');
+    settingsPresentationColumn.className = 'start-settings-column';
+    const settingsAccountHeading = document.createElement('div');
+    settingsAccountHeading.className = 'start-section-heading';
+    settingsAccountHeading.textContent = 'Account';
+    const settingsPresentationHeading = document.createElement('div');
+    settingsPresentationHeading.className = 'start-section-heading';
+    settingsPresentationHeading.textContent = 'Presentation';
+    const settingsActions = document.createElement('div');
+    settingsActions.className = 'start-settings-actions';
+
+    settingsAccountColumn.append(
+      settingsAccountHeading,
+      settingsSessionRow,
       settingsAccountRow.row,
       settingsSignOutRow.row,
       settingsSocialRow.row,
+    );
+    settingsPresentationColumn.append(
+      settingsPresentationHeading,
       settingsThemeInfoRow,
       settingsThemeRow.row,
       settingsStageAtmosphereInfoRow,
       settingsStageAtmosphereRow.row,
-      settingsBackRow.row,
     );
+    settingsLayout.append(settingsAccountColumn, settingsPresentationColumn);
+    settingsActions.append(settingsBackRow.row);
+    this.settingsPanel.append(settingsLayout, settingsActions);
     this.registerRows('settings', [
       settingsAccountRow.row,
       settingsSignOutRow.row,
@@ -1020,19 +1156,23 @@ export class StartMenu {
     this.applyRankedState({
       headline: 'Not queued',
       detail: 'Press "Join Ranked Queue" to start matchmaking.',
+      hint: 'Refresh queue status if this screen looks stale after joining.',
     });
     this.applyRoomState({
       headline: 'No room loaded',
       detail: 'Create a room or enter a code to join one.',
       roomCode: null,
+      hint: 'Custom rooms are best for direct invites and private tests.',
     });
     this.applyReplayState({
       headline: 'Replay archive idle',
       detail: 'Press "Refresh Replay Archive" to load recent matches.',
+      hint: 'Recent online sessions only appear here after the replay payload has been stored.',
     });
     this.applyRankingsState({
       headline: 'No ranked snapshot loaded',
       detail: 'Press "Refresh Ranked Snapshot" to load progression.',
+      hint: 'Use this after a ranked session to confirm placement and rating changes.',
     });
     this.setArcadeHistoryView(
       'No arcade runs',
@@ -1074,6 +1214,7 @@ export class StartMenu {
   private resetMatchOverActions(): void {
     this.matchPrimaryButton.textContent = 'Play Again';
     this.matchSecondaryButton.textContent = 'Return to Home';
+    this.matchSecondaryButton.hidden = false;
     this.matchPrimaryAction = () => this.options.onPlayAgain();
     this.matchSecondaryAction = () => this.options.onReturnHome();
   }
@@ -1094,8 +1235,9 @@ export class StartMenu {
     if (options.primaryLabel) {
       this.matchPrimaryButton.textContent = options.primaryLabel;
     }
-    if (options.secondaryLabel) {
+    if (options.secondaryLabel !== undefined) {
       this.matchSecondaryButton.textContent = options.secondaryLabel;
+      this.matchSecondaryButton.hidden = options.secondaryLabel.trim().length === 0;
     }
     if (options.onPrimary) {
       this.matchPrimaryAction = options.onPrimary;
@@ -1176,15 +1318,28 @@ export class StartMenu {
     this.localArcadeHistoryDetail.textContent = detail;
   }
 
+  public setArcadeLadderView(headline: string, detail: string, hint = ''): void {
+    this.localArcadeLadderHeadline.textContent = headline;
+    this.localArcadeLadderDetail.textContent = detail;
+    this.localArcadeLadderHint.hidden = hint.trim().length === 0;
+    this.localArcadeLadderHint.textContent = hint;
+  }
+
   public setEntitlementGate(canAccessGameplay: boolean, message: string | null): void {
-    this.mainOnlineButton.disabled = !canAccessGameplay;
+    if (this.mainOnlineButton) {
+      this.mainOnlineButton.disabled = !canAccessGameplay;
+    }
     this.mainLocalButton.disabled = !canAccessGameplay;
     this.titleContinueButton.disabled = false;
     this.titleSubtitle.textContent = canAccessGameplay
       ? 'Press continue to enter the portal.'
       : 'Access to gameplay is currently blocked. See status details.';
-    this.entitlementStatusLabel.textContent = message ?? '';
-    this.entitlementStatusLabel.classList.toggle('error', !canAccessGameplay && Boolean(message));
+    const entitlementMessage = message?.trim() ?? '';
+    this.entitlementStatusLabel.textContent = entitlementMessage;
+    this.entitlementStatusLabel.classList.toggle('error', !canAccessGameplay && entitlementMessage.length > 0);
+    if (this.entitlementStatusLabel.parentElement instanceof HTMLElement) {
+      this.entitlementStatusLabel.parentElement.hidden = entitlementMessage.length === 0;
+    }
   }
 
   private createPanel(title: string, subtitle: string): HTMLDivElement {
@@ -1192,11 +1347,19 @@ export class StartMenu {
     panel.className = 'start-panel start-home-panel';
     panel.hidden = true;
 
+    const header = document.createElement('div');
+    header.className = 'start-panel-header';
+    const kicker = document.createElement('div');
+    kicker.className = 'start-panel-kicker';
+    kicker.textContent = 'Gravity Well';
     const heading = document.createElement('h1');
+    heading.className = 'start-panel-title';
     heading.textContent = title;
     const sub = document.createElement('p');
+    sub.className = 'start-panel-subtitle';
     sub.textContent = subtitle;
-    panel.append(heading, sub);
+    header.append(kicker, heading, sub);
+    panel.append(header);
 
     return panel;
   }
@@ -1205,6 +1368,7 @@ export class StartMenu {
     root: HTMLDivElement;
     headline: HTMLDivElement;
     detail: HTMLPreElement;
+    hint: HTMLDivElement;
   } {
     const root = document.createElement('div');
     root.className = 'start-status-panel';
@@ -1217,31 +1381,47 @@ export class StartMenu {
     const detail = document.createElement('pre');
     detail.className = 'start-status-detail';
     detail.textContent = '-';
-    root.append(heading, headline, detail);
-    return { root, headline, detail };
+    const hint = document.createElement('div');
+    hint.className = 'start-status-hint';
+    hint.hidden = true;
+    root.append(heading, headline, detail, hint);
+    return { root, headline, detail, hint };
   }
 
   private applyRankedState(state: OnlineRankedViewState): void {
-    this.rankedStatusHeadline.textContent = state.headline;
-    this.rankedStatusDetail.textContent = state.detail;
+    this.applyStatusPanelState(this.rankedStatusHeadline, this.rankedStatusDetail, this.rankedStatusHint, state);
   }
 
   private applyRoomState(state: OnlineRoomViewState): void {
-    this.roomStatusHeadline.textContent = state.headline;
-    this.roomStatusDetail.textContent = state.detail;
+    this.applyStatusPanelState(this.roomStatusHeadline, this.roomStatusDetail, this.roomStatusHint, state);
     if (state.roomCode) {
       this.roomCodeInput.value = state.roomCode;
     }
   }
 
   private applyReplayState(state: ReplayArchiveViewState): void {
-    this.replayStatusHeadline.textContent = state.headline;
-    this.replayStatusDetail.textContent = state.detail;
+    this.applyStatusPanelState(this.replayStatusHeadline, this.replayStatusDetail, this.replayStatusHint, state);
   }
 
   private applyRankingsState(state: RankedSnapshotViewState): void {
-    this.rankingsStatusHeadline.textContent = state.headline;
-    this.rankingsStatusDetail.textContent = state.detail;
+    this.applyStatusPanelState(this.rankingsStatusHeadline, this.rankingsStatusDetail, this.rankingsStatusHint, state);
+  }
+
+  private applyStatusPanelState(
+    headlineNode: HTMLDivElement,
+    detailNode: HTMLPreElement,
+    hintNode: HTMLDivElement,
+    state: { headline: string; detail: string; tone?: StatusTone; hint?: string },
+  ): void {
+    const tone = state.tone ?? 'neutral';
+    const hint = state.hint?.trim() ?? '';
+    headlineNode.textContent = state.headline;
+    detailNode.textContent = state.detail;
+    headlineNode.dataset.tone = tone;
+    detailNode.dataset.tone = tone;
+    hintNode.dataset.tone = tone;
+    hintNode.hidden = hint.length === 0;
+    hintNode.textContent = hint;
   }
 
   private setRankedBusy(busy: boolean): void {
@@ -1273,7 +1453,7 @@ export class StartMenu {
 
   private createActionRow(label: string, onActivate: () => void | Promise<void>, primary = false): { row: HTMLDivElement; button: HTMLButtonElement } {
     const row = document.createElement('div');
-    row.className = 'start-menu-row';
+    row.className = 'start-menu-row start-action-row';
     const button = document.createElement('button');
     button.type = 'button';
     button.className = primary ? 'start-action primary' : 'start-action';
@@ -1367,11 +1547,14 @@ export class StartMenu {
 
   private refreshLocalRows(): void {
     const arcadeModeSelected = this.currentMode === 'arcade';
+    const aiVsAiSelected = this.currentMode === 'cpu_vs_cpu';
     this.localModeButton.textContent = `Mode: ${MODE_LABELS[this.currentMode]}`;
     this.localModeOptionsLabel.textContent = this.enabledModes
       .map((mode) => mode === this.currentMode ? `[${MODE_LABELS[mode]}]` : MODE_LABELS[mode])
       .join('  |  ');
-    this.localDifficultyButton.textContent = `AI Difficulty: ${getAiDifficultyLabel(this.currentAiDifficulty)}`;
+    this.localDifficultyButton.textContent = aiVsAiSelected
+      ? `AI Difficulty: ${getAiDifficultyLabel(this.currentAiDifficulty)} (Both)`
+      : `AI Difficulty: ${getAiDifficultyLabel(this.currentAiDifficulty)}`;
     this.localDifficultyOptionsLabel.textContent = AI_DIFFICULTY_ORDER
       .map((difficulty) => (
         difficulty === this.currentAiDifficulty
@@ -1381,6 +1564,7 @@ export class StartMenu {
       .join('  |  ');
     this.localArcadeContinuesButton.disabled = !arcadeModeSelected;
     this.localArcadeRetryButton.disabled = !arcadeModeSelected;
+    this.p2CharacterButton.disabled = arcadeModeSelected;
     this.localArcadeContinuesOptionsLabel.classList.toggle('muted', !arcadeModeSelected);
     if (arcadeModeSelected) {
       this.localArcadeContinuesButton.textContent = `Arcade Continues: ${this.currentArcadeSettings.continues}`;
@@ -1388,16 +1572,25 @@ export class StartMenu {
         .map((value) => value === this.currentArcadeSettings.continues ? `[${value}]` : `${value}`)
         .join('  |  ');
       this.localArcadeRetryButton.textContent = `Arcade Retry: ${this.currentArcadeSettings.retryEnabled ? 'Enabled' : 'Disabled'}`;
+      const ladderView = buildArcadeLadderView(this.currentLoadout.P1, this.currentArcadeSettings);
+      this.setArcadeLadderView(ladderView.headline, ladderView.detail, ladderView.hint);
     } else {
       this.localArcadeContinuesButton.textContent = 'Arcade Continues: Arcade mode only';
       this.localArcadeContinuesOptionsLabel.textContent = 'Switch mode to Arcade Ladder to edit continue and retry rules.';
       this.localArcadeRetryButton.textContent = 'Arcade Retry: Arcade mode only';
+      this.setArcadeLadderView(
+        'Arcade ladder preview',
+        'Switch to Arcade Ladder to preview the encounter order, final encounter, and current continue rules.',
+        'Arcade runs replace the normal P2 selection with ladder-controlled opponents.',
+      );
     }
 
     const p1 = CHARACTER_BY_ID[this.currentLoadout.P1];
     const p2 = CHARACTER_BY_ID[this.currentLoadout.P2];
     this.p1CharacterButton.textContent = `P1: ${p1.displayName} (${p1.mechanicsTag})`;
-    this.p2CharacterButton.textContent = `P2: ${p2.displayName} (${p2.mechanicsTag})`;
+    this.p2CharacterButton.textContent = arcadeModeSelected
+      ? 'P2: Ladder-controlled opponents'
+      : `P2: ${p2.displayName} (${p2.mechanicsTag})`;
 
     this.localCharacterList.innerHTML = '';
     for (const character of CHARACTERS) {
@@ -1444,7 +1637,94 @@ export class StartMenu {
     if (error instanceof Error) {
       return error.message;
     }
-    return 'Unexpected authentication failure.';
+    return 'Unexpected request failure.';
+  }
+
+  private getRankedBusyState(action: 'join' | 'refresh' | 'leave'): OnlineRankedViewState {
+    if (action === 'join') {
+      return {
+        headline: 'Joining ranked queue',
+        detail: 'Submitting matchmaking ticket and waiting for queue confirmation.',
+        tone: 'neutral',
+        hint: 'Stay on this screen. Buttons will re-enable once the request resolves.',
+      };
+    }
+    if (action === 'refresh') {
+      return {
+        headline: 'Refreshing queue state',
+        detail: 'Pulling the latest ticket and session status from the online service.',
+        tone: 'neutral',
+        hint: 'Use this if the queue looks stale or the match does not advance.',
+      };
+    }
+    return {
+      headline: 'Leaving ranked queue',
+      detail: 'Cancelling the current search ticket.',
+      tone: 'warning',
+      hint: 'You can join again immediately after the queue closes.',
+    };
+  }
+
+  private getRoomBusyState(action: 'create' | 'join' | 'refresh' | 'close', roomCode: string): OnlineRoomViewState {
+    if (action === 'create') {
+      return {
+        headline: 'Creating room',
+        detail: 'Requesting a new private room and reserving a shareable code.',
+        tone: 'neutral',
+        hint: 'Share the generated code once the room is ready.',
+      };
+    }
+    if (action === 'join') {
+      return {
+        headline: `Joining room ${roomCode}`,
+        detail: 'Resolving the room and joining it as a player.',
+        roomCode,
+        tone: 'neutral',
+        hint: 'If join fails, confirm the room code and whether the room is still open.',
+      };
+    }
+    if (action === 'refresh') {
+      return {
+        headline: `Refreshing room ${roomCode}`,
+        detail: 'Loading the latest participant and session state.',
+        roomCode,
+        tone: 'neutral',
+        hint: 'Use refresh when a player joins, leaves, or a session should have started.',
+      };
+    }
+    return {
+      headline: `Closing room ${roomCode}`,
+      detail: 'Sending a close request to stop new joins and resolve the room.',
+      roomCode,
+      tone: 'warning',
+      hint: 'Once closed, players need a new room code for the next session.',
+    };
+  }
+
+  private getReplayBusyState(action: 'refresh' | 'open_latest'): ReplayArchiveViewState {
+    if (action === 'refresh') {
+      return {
+        headline: 'Refreshing replay archive',
+        detail: 'Loading the latest archived sessions for this account.',
+        tone: 'neutral',
+        hint: 'Recent online matches may take a moment to appear after result submission.',
+      };
+    }
+    return {
+      headline: 'Opening latest replay',
+      detail: 'Fetching replay payload and switching into replay review.',
+      tone: 'neutral',
+      hint: 'If this stalls, refresh the archive first to make sure a replay is available.',
+    };
+  }
+
+  private getRankingsBusyState(): RankedSnapshotViewState {
+    return {
+      headline: 'Refreshing ranked snapshot',
+      detail: 'Requesting progression, placement, and recent ranked deltas.',
+      tone: 'neutral',
+      hint: 'Use this after a ranked set to confirm the latest rating update landed.',
+    };
   }
 
   private getAuthRequest(action: WebAuthMenuAction): WebAuthMenuRequest | undefined {
@@ -1524,9 +1804,12 @@ export class StartMenu {
       this.applyRankedState({
         headline: 'Unavailable',
         detail: 'Ranked queue is not configured for this build.',
+        tone: 'warning',
+        hint: 'Use Local or Arcade from the main menu in builds without online matchmaking.',
       });
       return;
     }
+    this.applyRankedState(this.getRankedBusyState(action));
     this.setRankedBusy(true);
     try {
       const state = await callback();
@@ -1535,6 +1818,8 @@ export class StartMenu {
       this.applyRankedState({
         headline: 'Queue action failed',
         detail: this.getErrorMessage(error),
+        tone: 'danger',
+        hint: 'Try refresh first if the action may have completed on the server.',
       });
     } finally {
       this.setRankedBusy(false);
@@ -1548,9 +1833,12 @@ export class StartMenu {
       this.applyRoomState({
         headline: 'Room code required',
         detail: 'Enter a room code before this action.',
+        tone: 'warning',
+        hint: 'Room codes are six-character share codes such as ABC123.',
       });
       return;
     }
+    this.applyRoomState(this.getRoomBusyState(action, roomCode));
     this.setRoomBusy(true);
     try {
       let state: OnlineRoomViewState | undefined;
@@ -1583,6 +1871,8 @@ export class StartMenu {
         headline: 'Room action failed',
         detail: this.getErrorMessage(error),
         roomCode,
+        tone: 'danger',
+        hint: 'Refresh the room or re-enter the code before trying again.',
       });
     } finally {
       this.setRoomBusy(false);
@@ -1597,9 +1887,12 @@ export class StartMenu {
       this.applyReplayState({
         headline: 'Replay unavailable',
         detail: 'Replay archive is not configured for this build.',
+        tone: 'warning',
+        hint: 'You can still use the fixture replay review entry from this menu.',
       });
       return;
     }
+    this.applyReplayState(this.getReplayBusyState(action));
     this.setReplayBusy(true);
     try {
       const state = await callback();
@@ -1608,6 +1901,8 @@ export class StartMenu {
       this.applyReplayState({
         headline: 'Replay action failed',
         detail: this.getErrorMessage(error),
+        tone: 'danger',
+        hint: 'Refresh the archive and retry once the latest replay entry appears.',
       });
     } finally {
       this.setReplayBusy(false);
@@ -1619,9 +1914,12 @@ export class StartMenu {
       this.applyRankingsState({
         headline: 'Ranked snapshot unavailable',
         detail: 'Ranked progression API is not configured for this build.',
+        tone: 'warning',
+        hint: 'Ranked progression is only available in builds with the ranking service enabled.',
       });
       return;
     }
+    this.applyRankingsState(this.getRankingsBusyState());
     this.setRankingsBusy(true);
     try {
       const state = await this.options.onRefreshRankedSnapshot();
@@ -1630,6 +1928,8 @@ export class StartMenu {
       this.applyRankingsState({
         headline: 'Ranked snapshot failed',
         detail: this.getErrorMessage(error),
+        tone: 'danger',
+        hint: 'Retry after the current online request finishes or after result submission completes.',
       });
     } finally {
       this.setRankingsBusy(false);

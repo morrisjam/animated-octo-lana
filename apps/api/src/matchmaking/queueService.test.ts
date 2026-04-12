@@ -330,6 +330,52 @@ test('validateSessionToken rejects invalid token', () => {
   assert.equal(result.error.code, 'invalid_token');
 });
 
+test('validateSessionToken can allow resolved sessions and expired tokens for post-match flows', () => {
+  let nowMs = 1_000_000;
+  const queue = createMatchmakingQueueService({
+    sessionTtlSeconds: 2,
+    sessionTokenTtlSeconds: 1,
+    now: () => nowMs,
+  });
+  queue.join({
+    accountId: ACCOUNT_1,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  });
+  const matched = expectMatched(queue.join({
+    accountId: ACCOUNT_2,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  }));
+
+  nowMs += 3_000;
+  const strictResult = queue.validateSessionToken(
+    matched.matchStart.sessionId,
+    ACCOUNT_2,
+    matched.matchStart.sessionToken,
+  );
+  assert.equal(strictResult.ok, false);
+  if (strictResult.ok) {
+    throw new Error('Expected strict validation failure after session resolution.');
+  }
+  assert.equal(strictResult.error.code, 'session_resolved');
+
+  const relaxedResult = queue.validateSessionToken(
+    matched.matchStart.sessionId,
+    ACCOUNT_2,
+    matched.matchStart.sessionToken,
+    {
+      allowResolved: true,
+      allowExpiredToken: true,
+    },
+  );
+  assert.equal(relaxedResult.ok, true);
+  if (!relaxedResult.ok) {
+    throw new Error('Expected relaxed validation success for post-match flow.');
+  }
+  assert.equal(relaxedResult.value.status, 'resolved');
+});
+
 test('reconnect attempt fails when session token expires', () => {
   let nowMs = 1_000_000;
   const queue = createMatchmakingQueueService({
@@ -402,4 +448,41 @@ test('session resolves if disconnected player misses reconnect grace window', ()
   assert.ok(secondTicket);
   assert.equal(secondTicket.status, 'closed');
   assert.equal(secondTicket.closedReason, 'reconnect_timeout');
+});
+
+test('session can be completed explicitly after a match finishes', () => {
+  const queue = createMatchmakingQueueService({
+    sessionTtlSeconds: 120,
+  });
+
+  queue.join({
+    accountId: ACCOUNT_1,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  });
+  const second = expectMatched(queue.join({
+    accountId: ACCOUNT_2,
+    queueType: 'ranked',
+    regionPreferences: ['eu-west'],
+  }));
+  const sessionId = second.matchStart.sessionId;
+  const sessionToken = second.matchStart.sessionToken;
+
+  const completion = queue.completeSession(sessionId, ACCOUNT_2, sessionToken);
+  assert.equal(completion.ok, true);
+  if (!completion.ok) {
+    throw new Error('Expected session completion to succeed');
+  }
+  assert.equal(completion.value.status, 'resolved');
+  assert.equal(completion.value.resolvedReason, 'completed');
+
+  const firstTicket = queue.getTicketForAccount(completion.value.participants[0].queueTicketId, ACCOUNT_1);
+  assert.ok(firstTicket);
+  assert.equal(firstTicket.status, 'closed');
+  assert.equal(firstTicket.closedReason, 'session_completed');
+
+  const secondTicket = queue.getTicketForAccount(completion.value.participants[1].queueTicketId, ACCOUNT_2);
+  assert.ok(secondTicket);
+  assert.equal(secondTicket.status, 'closed');
+  assert.equal(secondTicket.closedReason, 'session_completed');
 });

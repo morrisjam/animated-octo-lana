@@ -55,6 +55,10 @@ interface MatchupSmokeFixture {
   id: string;
   description: string;
   totalFrames: number;
+  loadout?: {
+    P1: GameState['loadout']['P1'];
+    P2: GameState['loadout']['P2'];
+  };
   setup: (state: GameState) => void;
   inputForFrame: (frame: number) => FrameInput;
   semanticCheck: (state: GameState, runtime: MatchupSmokeFixtureRuntime) => { pass: boolean; message: string };
@@ -192,8 +196,12 @@ const MATCHUP_SMOKE_FIXTURES: MatchupSmokeFixture[] = [
   },
   {
     id: 'special_projectile_spawn',
-    description: 'P1 special resolves and spawns at least one projectile.',
+    description: 'Projectile archetype special resolves and spawns at least one projectile.',
     totalFrames: 12,
+    loadout: {
+      P1: 'ace',
+      P2: 'duelist',
+    },
     setup: (state) => {
       state.players.P1.pos = { x: 0, y: 0 };
       state.players.P2.pos = { x: 36, y: 0 };
@@ -209,11 +217,57 @@ const MATCHUP_SMOKE_FIXTURES: MatchupSmokeFixture[] = [
       return { pass: true, message: 'Special projectile behavior is stable.' };
     },
   },
+  {
+    id: 'special_guard_window',
+    description: 'Vanguard special resolves into a guard window instead of a projectile.',
+    totalFrames: 18,
+    loadout: {
+      P1: 'vanguard',
+      P2: 'duelist',
+    },
+    setup: (state) => {
+      state.players.P1.pos = { x: 0, y: 0 };
+      state.players.P2.pos = { x: 18, y: 0 };
+    },
+    inputForFrame: specialInput,
+    semanticCheck: (state, runtime) => {
+      if (state.players.P1.parry <= 0) {
+        return { pass: false, message: 'Guard special did not grant a parry window.' };
+      }
+      if (runtime.maxProjectilesSeen !== 0) {
+        return { pass: false, message: 'Guard special incorrectly spawned a projectile.' };
+      }
+      return { pass: true, message: 'Guard special behavior is stable.' };
+    },
+  },
+  {
+    id: 'special_dash_resolve',
+    description: 'Duelist special resolves into a forward dash without spawning a projectile.',
+    totalFrames: 12,
+    loadout: {
+      P1: 'duelist',
+      P2: 'vanguard',
+    },
+    setup: (state) => {
+      state.players.P1.pos = { x: 0, y: 0 };
+      state.players.P2.pos = { x: 20, y: 0 };
+    },
+    inputForFrame: specialInput,
+    semanticCheck: (state, runtime) => {
+      if (state.players.P1.pos.x <= 0.5) {
+        return { pass: false, message: 'Dash special did not carry P1 toward the target.' };
+      }
+      if (runtime.maxProjectilesSeen !== 0) {
+        return { pass: false, message: 'Dash special incorrectly spawned a projectile.' };
+      }
+      return { pass: true, message: 'Dash special behavior is stable.' };
+    },
+  },
 ];
 
 function runFixtureForProfile(profileId: string, fixture: MatchupSmokeFixture): MatchupSmokeFixtureResult {
   const profile = resolveBalanceProfile(profileId);
-  const state = createInitialState();
+  const state = createInitialState(fixture.loadout ? { loadout: fixture.loadout } : undefined);
   state.tuning = { ...profile.tuning };
   fixture.setup(state);
 

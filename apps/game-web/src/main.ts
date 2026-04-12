@@ -1,12 +1,20 @@
 import { createCombinedInput } from './input/combined';
+import { createEmptyPlayerInput } from './input/frame';
 import { createGamepadInput } from './input/gamepad';
 import { createKeyboardInput } from './input/keyboard';
 import { loadRuntimeConfig } from './config/features';
+import { fetchMatchmakingIceConfig } from './net/connectivityApi';
 import { createInputTimelineBuffer } from './net/inputTimeline';
 import {
   RollbackSession,
   type RollbackDiagnosticsSnapshot,
 } from './net/rollbackSession';
+import {
+  buildRtcConfiguration,
+  RelayFallbackController,
+  type ConnectionPath,
+  type MatchmakingIceConfig,
+} from './net/transport';
 import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT, isCharacterId, type CharacterId } from './sim/characters';
 import { createPlatformServices, type PlatformAuthSession } from './platform';
 import { validateReplayPayload } from './sim/replay';
@@ -22,11 +30,14 @@ import {
   type TrainingTelemetrySummary,
   type TrainingTelemetryTracker,
 } from './sim/trainingTelemetry';
+import {
+  createMatchTelemetryTracker,
+  type MatchTelemetryTracker,
+} from './sim/matchTelemetry';
 import { sanitiseTuning } from './sim/tuning';
-import type { PlayerId, PlayersById, RenderSnapshot } from './sim/types';
+import type { PlayerFrameInput, PlayerId, PlayersById, RenderSnapshot } from './sim/types';
 import {
   AI_DIFFICULTY_ORDER,
-  buildFrameInputWithAi,
   createAiController,
   tickAiController,
   type AiControllerState,
@@ -65,6 +76,7 @@ import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay'
 import { createReplayViewer } from './view/replayViewer';
 import { renderFrame } from './view/render';
 import { applyStageAtmospherePreset, createScene, resizeScene } from './view/scene';
+import { buildInputHistoryView } from './view/inputHistory';
 import { createAudioSystem } from './view/audio/system';
 import type { CombatVfxEvent } from './view/vfx/types';
 import { createMusicStateController, type MusicState } from './view/audio/musicState';
@@ -98,7 +110,7 @@ import {
   STAGE_ATMOSPHERE_OPTIONS,
 } from './view/stageAtmosphere';
 
-type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev';
+type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev' | 'online_bootstrap';
 interface StoredSettings {
   mode?: string;
   menuThemeId?: string;
@@ -128,8 +140,12 @@ const SETTINGS_STORAGE_KEY = 'gravity_well.settings.v1';
 const ARCADE_HISTORY_STORAGE_KEY = 'gravity_well.arcade_history.v1';
 const ROLLBACK_DIAGNOSTICS_STORAGE_KEY = 'gravity_well.rollback_diagnostics.v1';
 const TRAINING_TELEMETRY_STORAGE_KEY = 'gravity_well.training_telemetry.v1';
+const AI_MATCH_TELEMETRY_STORAGE_KEY = 'gravity_well.ai_match_telemetry.v1';
 const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
+const onlineRuntimeEnabled = platform.kind === 'web' && runtimeConfig.features.onlineMatchRuntimeEnabled;
+const publicOnlineEntryEnabled = platform.kind === 'web'
+  && runtimeConfig.features.onlineEnabled;
 const DEFAULT_ARCADE_MENU_SETTINGS: ArcadeMenuSettings = {
   continues: 2,
   retryEnabled: true,
@@ -181,6 +197,12 @@ const hudRoot = document.querySelector<HTMLDivElement>('#hud');
 if (!matchInfo || !hudRoot) {
   throw new Error('Missing HUD match elements');
 }
+let devOpenMenuButton: HTMLButtonElement | null = null;
+let devDebugPanel: HTMLDivElement | null = null;
+let devDebugPhaseLabel: HTMLDivElement | null = null;
+let onlineBootstrapPanel: HTMLDivElement | null = null;
+let onlineBootstrapTitle: HTMLDivElement | null = null;
+let onlineBootstrapDetail: HTMLPreElement | null = null;
 
 const audioSystem = createAudioSystem({
   missingEventPolicy: runtimeConfig.features.debugToolsEnabled ? 'throw' : 'warn',
@@ -250,7 +272,11 @@ let selectedAiDifficulty: AiDifficultyId = loadedSettings.aiDifficulty;
 let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
 let arcadeHistory: ArcadeRunHistory = loadArcadeHistory();
 let profileSettingsCache: Record<string, unknown> = {};
-const seedParam = new URLSearchParams(window.location.search).get('seed');
+const urlParams = new URLSearchParams(window.location.search);
+const seedParam = urlParams.get('seed');
+const localRecoveryUiEnabled = urlParams.get('localDebug') === '1';
+const diagnosticsQueryOverride = urlParams.get('diagnostics');
+const debugHudEnabled = urlParams.get('debugHud') === '1';
 const forcedSeed = seedParam !== null ? Number(seedParam) : undefined;
 let selectedMatchSeed = Number.isFinite(forcedSeed) ? (forcedSeed as number) : 1;
 let selectedMode: GameMode = loadedSettings.mode;
@@ -284,14 +310,16 @@ let trainingTelemetry: TrainingTelemetryTracker = createTrainingTelemetryTracker
   playerCharacterId: selectedLoadout.P1,
   opponentCharacterId: selectedLoadout.P2,
 });
+let matchTelemetry: MatchTelemetryTracker = createMatchTelemetryTracker(state);
 const assetBudgetReport = buildAssetBudgetReport(DEFAULT_ASSET_MANIFEST, DEFAULT_ASSET_BUDGET_LIMITS);
 let assetPreloadBytesLoaded = 0;
 let appPhase: AppPhase = 'home';
+let startupMenuGuardArmed = true;
 let p1RoundWins = 0;
 let p2RoundWins = 0;
 let roundTransitionRemaining = 0;
 let simulationFrame = 0;
-let aiController: AiControllerState | null = null;
+let aiControllers: Partial<Record<PlayerId, AiControllerState>> = {};
 let arcadeRun: ArcadeRunState | null = null;
 let arcadePendingLossState: ArcadePendingLossState | null = null;
 const inputTimeline = createInputTimelineBuffer({ maxFrames: 60 * 20 });
@@ -329,14 +357,48 @@ interface StoredTrainingTelemetryEntry {
   summary: TrainingTelemetrySummary;
 }
 
+interface StoredAiMatchTelemetryEntry {
+  exportedAt: string;
+  mode: 'cpu_vs_cpu';
+  rulesetVersion: string;
+  balanceProfileId: string;
+  aiDifficulty: AiDifficultyId;
+  menuThemeId: string;
+  stageAtmosphereId: string;
+  seed: number;
+  loadout: PlayersById<CharacterId>;
+  score: {
+    p1Rounds: number;
+    p2Rounds: number;
+  };
+  winner: PlayerId | null;
+  statusText: string;
+  summary: ReturnType<MatchTelemetryTracker['toSummary']>;
+}
+
 type QueueType = 'unranked' | 'ranked';
 type RegionId = 'us-east' | 'us-west' | 'eu-west' | 'ap-southeast';
 
 interface MatchStartPayload {
   sessionId: string;
+  sessionToken: string;
+  sessionTokenExpiresAt: string;
   queueType: QueueType;
   region: RegionId;
   createdAt: string;
+  expiresAt?: string;
+  localPlayer: {
+    accountId: string;
+    queueTicketId: string;
+    selectedCharacterId?: string | null;
+    side: 'P1' | 'P2';
+  };
+  peer: {
+    accountId: string;
+    queueTicketId: string;
+    selectedCharacterId?: string | null;
+    side: 'P1' | 'P2';
+  };
   diagnostics?: {
     skillTrack?: 'unranked' | 'rating' | 'master';
     expectedGap?: number | null;
@@ -371,6 +433,106 @@ interface MatchSessionView {
     side: 'P1' | 'P2';
     connectionStatus: 'connected' | 'disconnected';
   }>;
+}
+
+type OnlineBootstrapStatus = 'preparing' | 'awaiting_signaling' | 'failed';
+
+interface OnlineBootstrapState {
+  source: 'ranked_queue';
+  sessionId: string;
+  queueType: QueueType;
+  region: RegionId;
+  localAccountId: string;
+  peerAccountId: string | null;
+  sessionToken: string | null;
+  sessionTokenExpiresAt: string | null;
+  connectionPath: ConnectionPath | 'server';
+  status: OnlineBootstrapStatus;
+  statusDetail: string;
+  diagnosticsLine: string;
+  iceConfig: MatchmakingIceConfig | null;
+}
+
+interface OnlineSessionFrameEntry {
+  frame: number;
+  accountId: string;
+  input: PlayerFrameInput;
+  receivedAt: string;
+}
+
+interface OnlineSessionFrameResponse {
+  frames: OnlineSessionFrameEntry[];
+}
+
+type RankedMatchOutcome = 'p1_win' | 'p2_win' | 'draw' | 'forfeit';
+type OnlineRankedResultStatus = 'idle' | 'submitting' | 'accepted' | 'flagged_for_review' | 'already_processed' | 'failed';
+
+interface RankedResultDeltaView {
+  accountId: string;
+  side: PlayerId;
+  preRating: number;
+  postRating: number;
+  ratingDelta: number;
+  result: 'win' | 'loss' | 'draw' | 'forfeit' | string;
+  preLeagueTier?: string | null;
+  postLeagueTier?: string | null;
+  preLeaguePoints?: number | null;
+  postLeaguePoints?: number | null;
+  preMrPoints?: number | null;
+  postMrPoints?: number | null;
+}
+
+interface RankedResultSubmitResponse {
+  submissionId: string;
+  createdAt: string;
+  status: 'accepted' | 'flagged_for_review';
+  suspicious: boolean;
+  suspiciousReasons: string[];
+  reviewStatus: string;
+  ratingDeltas?: RankedResultDeltaView[];
+}
+
+class OnlineRequestError extends Error {
+  public readonly status: number;
+  public readonly code: string | null;
+
+  public constructor(message: string, status: number, code: string | null) {
+    super(message);
+    this.name = 'OnlineRequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+interface OnlineMatchContext {
+  sessionId: string;
+  sessionToken: string;
+  queueType: QueueType;
+  region: RegionId;
+  matchLoadout: PlayersById<CharacterId>;
+  restoreMode: GameMode;
+  restoreLoadout: PlayersById<CharacterId>;
+  localPlayerId: PlayerId;
+  remotePlayerId: PlayerId;
+  localAccountId: string;
+  remoteAccountId: string;
+  statusText: string;
+  connectionPath: ConnectionPath | 'server';
+  lastRemoteFrame: number;
+  outgoingFrames: Array<{ frame: number; input: PlayerFrameInput }>;
+  pendingRemoteInputs: Map<number, PlayerFrameInput>;
+  sendAccumulatorSeconds: number;
+  pollAccumulatorSeconds: number;
+  sendInFlight: boolean;
+  pollInFlight: boolean;
+  finalOutcome: RankedMatchOutcome | null;
+  winnerAccountId: string | null;
+  rankedResultStatus: OnlineRankedResultStatus;
+  rankedResultDetail: string;
+  rankedResultSubmissionId: string | null;
+  rankedResultInFlight: boolean;
+  sessionCompletionInFlight: boolean;
+  sessionCompletionStatus: 'idle' | 'completing' | 'completed' | 'failed';
 }
 
 interface RoomView {
@@ -455,6 +617,13 @@ const pauseMenu = createPauseMenu({
     }
     return exportTrainingTelemetrySession();
   },
+  canExportAiMatchTelemetry: () => selectedMode === 'cpu_vs_cpu',
+  onExportAiMatchTelemetry: async () => {
+    if (selectedMode !== 'cpu_vs_cpu') {
+      return 'AI match telemetry export is only available in AI vs AI mode.';
+    }
+    return exportAiMatchTelemetrySession();
+  },
   onRestartTraining: () => {
     restartTrainingRound();
   },
@@ -494,7 +663,13 @@ const diagnosticsBuildId = (
   || 'dev-local'
 );
 const diagnosticsRulesetVersion = activeRulesetVersion;
-const diagnosticsEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDiagnosticsEnabled;
+const diagnosticsEnabled = platform.kind === 'web' && (
+  diagnosticsQueryOverride === '1'
+  || (
+    diagnosticsQueryOverride !== '0'
+    && runtimeConfig.features.onlineDiagnosticsEnabled
+  )
+);
 let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   ticketId: null,
   sessionId: null,
@@ -506,6 +681,10 @@ let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   packetLossPercent: null,
   participantAccountIds: [],
 };
+let onlineBootstrapState: OnlineBootstrapState | null = null;
+let onlineRelayFallbackController: RelayFallbackController | null = null;
+let onlineMatchContext: OnlineMatchContext | null = null;
+let sessionAccountId: string | null = null;
 const diagnosticsOverlay = diagnosticsEnabled ? createOnlineDiagnosticsOverlay() : null;
 const onlineDevMenuEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDevMenuEnabled;
 const onlineDevMenu = onlineDevMenuEnabled
@@ -535,11 +714,24 @@ function getOnlineAccountIdOrThrow(): string {
 }
 
 async function parseOnlineApiError(response: Response): Promise<string> {
+  const failure = await parseOnlineApiFailure(response);
+  return failure.message;
+}
+
+async function parseOnlineApiFailure(response: Response): Promise<{ message: string; code: string | null; status: number }> {
   try {
-    const body = await response.json() as { error?: string; message?: string };
-    return body.error ?? body.message ?? `Request failed (${response.status})`;
+    const body = await response.json() as { error?: string; message?: string; code?: string };
+    return {
+      message: body.error ?? body.message ?? `Request failed (${response.status})`,
+      code: typeof body.code === 'string' && body.code.trim().length > 0 ? body.code.trim() : null,
+      status: response.status,
+    };
   } catch {
-    return `Request failed (${response.status})`;
+    return {
+      message: `Request failed (${response.status})`,
+      code: null,
+      status: response.status,
+    };
   }
 }
 
@@ -548,10 +740,12 @@ async function requestOnlineJson<T>(
   path: string,
   accountId: string,
   body?: unknown,
+  options?: { keepalive?: boolean },
 ): Promise<T> {
-  const response = await requestOnlineRaw(method, path, accountId, body);
+  const response = await requestOnlineRaw(method, path, accountId, body, options);
   if (!response.ok) {
-    throw new Error(await parseOnlineApiError(response));
+    const failure = await parseOnlineApiFailure(response);
+    throw new OnlineRequestError(failure.message, failure.status, failure.code);
   }
   return await response.json() as T;
 }
@@ -561,6 +755,7 @@ async function requestOnlineRaw(
   path: string,
   accountId: string,
   body?: unknown,
+  options?: { keepalive?: boolean },
 ): Promise<Response> {
   if (!matchmakingApiBase) {
     throw new Error('Missing VITE_MATCHMAKING_API_BASE or VITE_PROFILE_API_BASE.');
@@ -577,8 +772,32 @@ async function requestOnlineRaw(
     method,
     headers,
     body: payload,
+    keepalive: options?.keepalive ?? false,
   });
   return response;
+}
+
+function cloneOnlinePlayerInput(input: PlayerFrameInput): PlayerFrameInput {
+  return {
+    moveX: input.moveX,
+    moveY: input.moveY,
+    boost: input.boost,
+    superBoost: input.superBoost,
+    special: input.special,
+    launch: input.launch,
+    dunk: input.dunk,
+    parry: input.parry,
+    breakLaunch: input.breakLaunch,
+  };
+}
+
+function hashSeedFromString(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) || 1;
 }
 
 function getQueueWaitMs(queuedAt: string | undefined): number | null {
@@ -592,11 +811,370 @@ function getQueueWaitMs(queuedAt: string | undefined): number | null {
   return Math.max(0, Date.now() - queuedAtMs);
 }
 
+function getOnlineRuntimeStatusDetail(sessionId: string | null, phase?: string | null): string {
+  const sessionLine = `Session: ${sessionId ?? 'pending'}`;
+  const phaseLine = phase ? `Phase: ${phase}` : null;
+  return [
+    sessionLine,
+    phaseLine,
+    onlineRuntimeEnabled
+      ? 'Runtime: live relay-backed online flow enabled for this build.'
+      : 'Runtime: public online match entry is hidden for this build.',
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join('\n');
+}
+
+function getRankedQueueHint(ticket: QueueTicketView | null, session: MatchSessionView | null): string {
+  if (!ticket) {
+    return 'Join queue to start searching. Refresh later if you return to this screen mid-session.';
+  }
+  if (ticket.status === 'queued') {
+    return 'Stay here while searching. Refresh if the wait timer or queue state looks stale.';
+  }
+  if (ticket.status === 'matched') {
+    if (onlineRuntimeEnabled) {
+      return session?.status === 'active'
+        ? 'Match accepted. The client should transition into the online session automatically.'
+        : 'Session created. Stay on this screen while the browser finishes bootstrap.';
+    }
+    return 'This build can create ranked sessions, but the public online runtime entry is intentionally hidden.';
+  }
+  return 'Queue is closed. Join again to start a fresh search.';
+}
+
+function getRoomStateHint(room: RoomView | null): string {
+  if (!room) {
+    return 'Create a room for a private match or join with a six-character code.';
+  }
+  if (room.status === 'closed') {
+    return 'This room is closed. Create a new room for another private session.';
+  }
+  if (room.activeSession) {
+    if (room.activeSession.phase === 'in_match') {
+      return 'Room session is live. Refresh if participant or session state looks stale.';
+    }
+    return 'Room session is staged. Keep players in the room and refresh as the phase advances.';
+  }
+  return 'Share the room code with another player, then refresh once they join.';
+}
+
+function getBootstrapStatusLabel(status: OnlineBootstrapStatus): string {
+  switch (status) {
+    case 'awaiting_signaling':
+      return 'Runtime Prepared';
+    case 'failed':
+      return 'Bootstrap Failed';
+    case 'preparing':
+    default:
+      return 'Preparing Session';
+  }
+}
+
+function getBootstrapNextStep(state: OnlineBootstrapState): string {
+  if (state.status === 'failed') {
+    return 'Return home, refresh queue status, and retry the session if needed.';
+  }
+  if (state.status === 'awaiting_signaling') {
+    return state.connectionPath === 'relay'
+      ? 'Relay route is prepared. The client is handing off into the live match.'
+      : 'Direct route is preferred, with relay fallback available if the direct path stalls.';
+  }
+  return 'Validating session and preparing transport before entering the match.';
+}
+
+async function submitOnlineSessionFrames(
+  context: OnlineMatchContext,
+  frames: Array<{ frame: number; input: PlayerFrameInput }>,
+): Promise<void> {
+  if (frames.length === 0) {
+    return;
+  }
+  await requestOnlineJson<{ acceptedFrames: number }>(
+    'POST',
+    `/matchmaking/sessions/${context.sessionId}/frames`,
+    context.localAccountId,
+    {
+      sessionToken: context.sessionToken,
+      frames: frames.map((entry) => ({
+        frame: entry.frame,
+        input: cloneOnlinePlayerInput(entry.input),
+      })),
+    },
+  );
+}
+
+async function pollOnlineSessionFrames(context: OnlineMatchContext): Promise<void> {
+  const response = await requestOnlineJson<OnlineSessionFrameResponse>(
+    'GET',
+    `/matchmaking/sessions/${context.sessionId}/frames?sessionToken=${encodeURIComponent(context.sessionToken)}&sinceFrame=${context.lastRemoteFrame}`,
+    context.localAccountId,
+  );
+  for (const entry of response.frames) {
+    context.pendingRemoteInputs.set(entry.frame, cloneOnlinePlayerInput(entry.input));
+    if (entry.frame > context.lastRemoteFrame) {
+      context.lastRemoteFrame = entry.frame;
+    }
+  }
+}
+
+function isTerminalOnlineTransportError(error: unknown): error is OnlineRequestError {
+  if (!(error instanceof OnlineRequestError)) {
+    return false;
+  }
+  if (error.code === 'session_resolved' || error.code === 'token_expired' || error.code === 'invalid_token') {
+    return true;
+  }
+  return error.status === 401 || error.status === 403 || error.status === 404 || error.status === 409;
+}
+
+function interruptOnlineMatch(context: OnlineMatchContext, reason: string): void {
+  context.outgoingFrames.length = 0;
+  context.pendingRemoteInputs.clear();
+  context.sendAccumulatorSeconds = 0;
+  context.pollAccumulatorSeconds = 0;
+  context.statusText = reason;
+  if (onlineMatchContext !== context) {
+    return;
+  }
+  if (appPhase !== 'playing' && appPhase !== 'round_transition') {
+    return;
+  }
+  pauseMenu.setPaused(false);
+  persistRollbackDiagnostics('online_session_interrupted');
+  appPhase = 'match_over';
+  void platform.presence.setStatus('match_over');
+  startMenu.showMatchOverScreen({
+    title: 'Online Session Interrupted',
+    subtitle: [
+      `Queue: ${context.queueType} | Region: ${context.region}`,
+      `Score: ${getRoundScoreText()}`,
+      '',
+      reason,
+      'The live relay stopped, so this match cannot continue.',
+    ].join('\n'),
+    primaryLabel: 'Return to Home',
+    secondaryLabel: '',
+    onPrimary: () => {
+      returnToHome();
+    },
+  });
+}
+
+function handleOnlineTransportError(
+  context: OnlineMatchContext,
+  phase: 'upload' | 'poll' | 'reconnect',
+  error: unknown,
+): void {
+  const prefix = phase === 'upload'
+    ? 'Frame relay upload failed'
+    : phase === 'poll'
+      ? 'Frame relay poll failed'
+      : 'Reconnect failed';
+  if (isTerminalOnlineTransportError(error)) {
+    interruptOnlineMatch(context, `${prefix}: ${error.message}`);
+    return;
+  }
+  context.statusText = error instanceof Error
+    ? `${prefix}: ${error.message}`
+    : `${prefix}.`;
+}
+
+function flushOnlineTransport(context: OnlineMatchContext): void {
+  if (context.outgoingFrames.length > 0 && !context.sendInFlight) {
+    const frames = context.outgoingFrames.splice(0, context.outgoingFrames.length);
+    context.sendInFlight = true;
+    void submitOnlineSessionFrames(context, frames)
+      .catch((error) => {
+        handleOnlineTransportError(context, 'upload', error);
+      })
+      .finally(() => {
+        context.sendInFlight = false;
+      });
+  }
+
+  if (!context.pollInFlight) {
+    context.pollInFlight = true;
+    void pollOnlineSessionFrames(context)
+      .catch((error) => {
+        handleOnlineTransportError(context, 'poll', error);
+      })
+      .finally(() => {
+        context.pollInFlight = false;
+      });
+  }
+}
+
+function buildOnlineRankSummaryLine(snapshot: RankedProgressionView | null): string {
+  if (!snapshot) {
+    return 'Rank snapshot unavailable.';
+  }
+  const tier = snapshot.leagueTier ?? 'Placement';
+  const rating = snapshot.rating ?? 'n/a';
+  const leaguePoints = snapshot.leaguePoints ?? 'n/a';
+  const mrPoints = snapshot.mrPoints ?? 'n/a';
+  return `Rank: ${tier} | Rating ${rating} | LP ${leaguePoints} | MR ${mrPoints}`;
+}
+
+function buildOnlineRankedResultDetail(context: OnlineMatchContext): string {
+  const lines = [`Ranked result: ${context.rankedResultStatus.replace(/_/g, ' ')}`];
+  if (context.rankedResultDetail.trim().length > 0) {
+    lines.push(context.rankedResultDetail.trim());
+  }
+  return lines.join('\n');
+}
+
+function renderOnlineMatchOverScreen(context: OnlineMatchContext, winner: PlayerId, p1Wins: number, p2Wins: number): void {
+  const subtitleLines = [
+    `Winner: ${winner}`,
+    `Final rounds: P1 ${p1Wins} - ${p2Wins} P2`,
+    `Session: ${context.sessionId}`,
+    `Queue: ${context.queueType} | Region: ${context.region}`,
+  ];
+  if (context.queueType === 'ranked') {
+    subtitleLines.push(buildOnlineRankedResultDetail(context));
+  } else if (context.statusText.trim().length > 0) {
+    subtitleLines.push(context.statusText.trim());
+  }
+
+  const secondaryLabel = context.queueType === 'ranked'
+    ? (context.rankedResultStatus === 'failed' ? 'Retry Submission' : 'Refresh Rank')
+    : 'Return to Home';
+  const secondaryAction = context.queueType === 'ranked'
+    ? () => {
+      if (context.rankedResultStatus === 'failed') {
+        void submitOnlineRankedResult(context);
+        return;
+      }
+      void refreshOnlineRankedResultSummary(context);
+    }
+    : () => {
+      returnToHome();
+    };
+
+  startMenu.showMatchOverScreen({
+    title: 'Online Match Complete',
+    subtitle: subtitleLines.join('\n'),
+    primaryLabel: 'Return to Home',
+    secondaryLabel,
+    onPrimary: () => {
+      returnToHome();
+    },
+    onSecondary: secondaryAction,
+  });
+}
+
+async function refreshOnlineRankedResultSummary(context: OnlineMatchContext): Promise<void> {
+  if (context.queueType !== 'ranked') {
+    return;
+  }
+  try {
+    await refreshRankedSnapshot();
+    context.rankedResultDetail = [
+      context.rankedResultDetail.trim(),
+      buildOnlineRankSummaryLine(playerRankedSnapshot),
+    ]
+      .filter((line, index, array) => line.length > 0 && array.indexOf(line) === index)
+      .join('\n');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Ranked progression refresh failed.';
+    context.rankedResultDetail = [
+      context.rankedResultDetail.trim(),
+      `Progression refresh failed: ${message}`,
+    ]
+      .filter((line, index, array) => line.length > 0 && array.indexOf(line) === index)
+      .join('\n');
+  }
+  if (onlineMatchContext === context && appPhase === 'match_over') {
+    const winner = context.winnerAccountId === context.localAccountId
+      ? context.localPlayerId
+      : context.remotePlayerId;
+    renderOnlineMatchOverScreen(context, winner, p1RoundWins, p2RoundWins);
+  }
+}
+
+async function submitOnlineRankedResult(context: OnlineMatchContext): Promise<void> {
+  if (context.queueType !== 'ranked' || !context.finalOutcome || context.rankedResultInFlight) {
+    return;
+  }
+
+  context.rankedResultInFlight = true;
+  context.rankedResultStatus = 'submitting';
+  context.rankedResultDetail = 'Submitting ranked result to API.';
+  if (onlineMatchContext === context && appPhase === 'match_over') {
+    const winner = context.winnerAccountId === context.localAccountId
+      ? context.localPlayerId
+      : context.remotePlayerId;
+    renderOnlineMatchOverScreen(context, winner, p1RoundWins, p2RoundWins);
+  }
+
+  try {
+    const response = await requestOnlineRaw(
+      'POST',
+      '/ranked/results',
+      context.localAccountId,
+      {
+        sessionId: context.sessionId,
+        matchId: context.sessionId,
+        sessionToken: context.sessionToken,
+        outcome: context.finalOutcome,
+        participantAccountIds: [context.localAccountId, context.remoteAccountId],
+        winnerAccountId: context.winnerAccountId,
+      },
+    );
+
+    if (response.ok) {
+      const payload = await response.json() as RankedResultSubmitResponse;
+      context.rankedResultSubmissionId = payload.submissionId;
+      if (payload.status === 'flagged_for_review') {
+        context.rankedResultStatus = 'flagged_for_review';
+        context.rankedResultDetail = `Submission flagged for review${payload.suspiciousReasons.length > 0 ? `: ${payload.suspiciousReasons.join(', ')}` : '.'}`;
+      } else {
+        context.rankedResultStatus = 'accepted';
+        const localDelta = payload.ratingDeltas?.find((entry) => entry.accountId === context.localAccountId) ?? null;
+        const deltaLine = localDelta
+          ? `Local result: ${localDelta.result} | Rating ${localDelta.preRating} -> ${localDelta.postRating} (${formatSigned(localDelta.ratingDelta)})`
+          : 'Ranked result accepted.';
+        context.rankedResultDetail = deltaLine;
+        await refreshOnlineRankedResultSummary(context);
+      }
+    } else {
+      const errorMessage = await parseOnlineApiError(response);
+      if (
+        response.status === 409
+        && (
+          errorMessage.includes('already been processed')
+          || errorMessage.includes('already submitted')
+        )
+      ) {
+        context.rankedResultStatus = 'already_processed';
+        context.rankedResultDetail = 'Ranked result was already processed for this session.';
+        await refreshOnlineRankedResultSummary(context);
+      } else {
+        context.rankedResultStatus = 'failed';
+        context.rankedResultDetail = errorMessage;
+      }
+    }
+  } catch (error) {
+    context.rankedResultStatus = 'failed';
+    context.rankedResultDetail = error instanceof Error ? error.message : 'Ranked result submission failed.';
+  } finally {
+    context.rankedResultInFlight = false;
+    if (onlineMatchContext === context && appPhase === 'match_over') {
+      const winner = context.winnerAccountId === context.localAccountId
+        ? context.localPlayerId
+        : context.remotePlayerId;
+      renderOnlineMatchOverScreen(context, winner, p1RoundWins, p2RoundWins);
+    }
+  }
+}
+
 function toRankedViewState(ticket: QueueTicketView | null, session: MatchSessionView | null): OnlineRankedViewState {
   if (!ticket) {
     return {
       headline: 'Not queued',
       detail: 'Press "Join Ranked Queue" to start matchmaking.',
+      hint: getRankedQueueHint(ticket, session),
     };
   }
   if (ticket.status === 'queued') {
@@ -605,6 +1183,7 @@ function toRankedViewState(ticket: QueueTicketView | null, session: MatchSession
     return {
       headline: 'Searching for match',
       detail: `Ticket: ${ticket.ticketId}\nQueue: ${ticket.queueType}\nWait: ${waitLabel}`,
+      hint: getRankedQueueHint(ticket, session),
     };
   }
   if (ticket.status === 'matched') {
@@ -616,13 +1195,25 @@ function toRankedViewState(ticket: QueueTicketView | null, session: MatchSession
       ? `Band: ${diagnostics.skillTrack ?? 'n/a'} | Gap: ${diagnostics.matchedGap ?? 'n/a'} / ${diagnostics.expectedGap ?? 'n/a'}`
       : 'Band: pending';
     return {
-      headline: 'Match found',
-      detail: `Ticket: ${ticket.ticketId}\nSession: ${ticket.matchStart?.sessionId ?? session?.sessionId ?? 'pending'}\n${participantLine}\n${diagnosticsLine}`,
+      headline: 'Match found (session created)',
+      detail: [
+        `Ticket: ${ticket.ticketId}`,
+        participantLine,
+        diagnosticsLine,
+        getOnlineRuntimeStatusDetail(
+          ticket.matchStart?.sessionId ?? session?.sessionId ?? null,
+          session?.status ?? null,
+        ),
+      ].join('\n'),
+      tone: onlineRuntimeEnabled ? 'success' : 'warning',
+      hint: getRankedQueueHint(ticket, session),
     };
   }
   return {
     headline: 'Queue closed',
     detail: `Ticket: ${ticket.ticketId}\nReason: ${ticket.closedReason ?? 'closed'}`,
+    tone: 'warning',
+    hint: getRankedQueueHint(ticket, session),
   };
 }
 
@@ -632,14 +1223,20 @@ function toRoomViewState(room: RoomView | null, fallbackRoomCode?: string): Onli
       headline: 'No room loaded',
       detail: 'Create a room or enter a code to join one.',
       roomCode: fallbackRoomCode ?? null,
+      hint: getRoomStateHint(room),
     };
   }
   const players = room.participants.filter((item) => item.role === 'player').length;
   const spectators = room.participants.filter((item) => item.role === 'spectator').length;
+  const sessionDetail = room.activeSession
+    ? getOnlineRuntimeStatusDetail(room.activeSession.sessionId, room.activeSession.phase)
+    : 'Session: none';
   return {
     headline: `Room ${room.roomCode} (${room.status})`,
-    detail: `Host: ${room.hostAccountId}\nPlayers: ${players}\nSpectators: ${spectators}\nSession: ${room.activeSession?.sessionId ?? 'none'}`,
+    detail: `Host: ${room.hostAccountId}\nPlayers: ${players}\nSpectators: ${spectators}\n${sessionDetail}`,
     roomCode: room.roomCode,
+    tone: room.activeSession ? 'success' : room.status === 'closed' ? 'warning' : 'neutral',
+    hint: getRoomStateHint(room),
   };
 }
 
@@ -654,6 +1251,7 @@ async function joinRankedQueue(): Promise<OnlineRankedViewState> {
       regionPreferences: ['us-east', 'us-west', 'eu-west'],
       buildVersion: '0.1.0-web',
       platform: 'web',
+      characterId: selectedLoadout.P1,
     },
   );
   if (playerRankedTicket.matchStart?.sessionId) {
@@ -662,6 +1260,7 @@ async function joinRankedQueue(): Promise<OnlineRankedViewState> {
       `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
       accountId,
     );
+    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue');
   } else {
     playerRankedSession = null;
   }
@@ -684,6 +1283,7 @@ async function refreshRankedQueue(): Promise<OnlineRankedViewState> {
       `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
       accountId,
     );
+    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue');
   } else {
     playerRankedSession = null;
   }
@@ -765,6 +1365,10 @@ async function refreshReplayArchive(): Promise<ReplayArchiveViewState> {
       ? `Loaded ${playerReplayItems.length} replay(s)`
       : 'No replays found',
     detail: formatReplayArchiveDetail(playerReplayItems),
+    tone: playerReplayItems.length > 0 ? 'success' : 'warning',
+    hint: playerReplayItems.length > 0
+      ? 'Open the latest replay to review the newest archived session.'
+      : 'Finish an online match and wait for replay persistence before refreshing again.',
   };
 }
 
@@ -777,6 +1381,8 @@ async function openLatestReplay(): Promise<ReplayArchiveViewState> {
     return {
       headline: 'No replay available',
       detail: 'No replay records available to open.',
+      tone: 'warning',
+      hint: 'Refresh replay archive after a completed online session to fetch the newest replay.',
     };
   }
   const accountId = getOnlineAccountIdOrThrow();
@@ -792,6 +1398,8 @@ async function openLatestReplay(): Promise<ReplayArchiveViewState> {
   return {
     headline: `Opened replay ${payloadResponse.replayId}`,
     detail: formatReplayArchiveDetail(playerReplayItems),
+    tone: 'success',
+    hint: 'Replay review is now active. Exit replay review to return to the menu.',
   };
 }
 
@@ -965,6 +1573,8 @@ function toRankedSnapshotViewState(snapshot: RankedProgressionView | null, sourc
     return {
       headline: 'No ranked data',
       detail: 'No ranked progression data is available yet.',
+      tone: 'warning',
+      hint: 'Complete a ranked session, then refresh again after result submission finishes.',
     };
   }
   const sourceLabel = source === 'api' ? 'Ranked API' : 'Profile fallback';
@@ -980,6 +1590,10 @@ function toRankedSnapshotViewState(snapshot: RankedProgressionView | null, sourc
   return {
     headline: `${snapshot.leagueTier ?? 'Placement'} | Rating ${snapshot.rating ?? 'n/a'}`,
     detail: `Source: ${sourceLabel}\nSeason: ${snapshot.seasonId ?? 'current'}\n${statusLine}\n${placementLine}\nLeague Points: ${snapshot.leaguePoints ?? 'n/a'}\nMR Points: ${snapshot.mrPoints ?? 'n/a'}\n${promotionLine}\n${trendLine}\nUpdated: ${snapshot.updatedAt ?? 'unknown'}`,
+    tone: source === 'api' ? 'success' : 'neutral',
+    hint: source === 'api'
+      ? 'Snapshot is current from the ranking service.'
+      : 'This snapshot came from stored profile data and may lag behind the latest match.',
   };
 }
 
@@ -1002,7 +1616,39 @@ async function refreshRankedSnapshot(): Promise<RankedSnapshotViewState> {
   return toRankedSnapshotViewState(playerRankedSnapshot, playerRankedSnapshot ? 'profile' : 'none');
 }
 
+function scheduleRankedQueueAutoRefresh(elapsedSeconds: number): void {
+  if (
+    !playerRankedTicket
+    || playerRankedTicket.status !== 'queued'
+    || appPhase !== 'home'
+    || onlineMatchContext !== null
+    || onlineBootstrapState !== null
+  ) {
+    rankedQueueAutoPollAccumulatorSeconds = 0;
+    return;
+  }
+  if (rankedQueueAutoPollInFlight) {
+    return;
+  }
+  rankedQueueAutoPollAccumulatorSeconds += elapsedSeconds;
+  if (rankedQueueAutoPollAccumulatorSeconds < 1) {
+    return;
+  }
+  rankedQueueAutoPollAccumulatorSeconds = 0;
+  rankedQueueAutoPollInFlight = true;
+  void refreshRankedQueue()
+    .catch((error) => {
+      if (runtimeConfig.features.debugToolsEnabled) {
+        console.warn('[online] ranked queue auto-refresh failed', error);
+      }
+    })
+    .finally(() => {
+      rankedQueueAutoPollInFlight = false;
+    });
+}
+
 const startMenu = createStartMenu({
+  onlineMenuEnabled: publicOnlineEntryEnabled,
   initialMode: selectedMode,
   initialMenuThemeId: selectedMenuThemeId,
   availableMenuThemes: MENU_THEME_OPTIONS,
@@ -1014,7 +1660,7 @@ const startMenu = createStartMenu({
   enabledModes,
   initialAccountSummary: 'Guest Account',
   onStartMode: (mode, loadout, aiDifficulty, arcadeSettings) => {
-    beginMode(mode, loadout, aiDifficulty, arcadeSettings);
+    beginUserInitiatedMode(mode, loadout, aiDifficulty, arcadeSettings);
   },
   onOpenWebAuth: platform.kind === 'web'
     ? async (action: WebAuthMenuAction, request?: WebAuthMenuRequest) => {
@@ -1025,7 +1671,7 @@ const startMenu = createStartMenu({
     returnToHome();
   },
   onPlayAgain: () => {
-    beginMode(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
+    beginUserInitiatedMode(selectedMode, selectedLoadout, selectedAiDifficulty, selectedArcadeSettings);
   },
   onJoinRankedQueue: async () => {
     return await joinRankedQueue();
@@ -1099,7 +1745,6 @@ let pauseToggleLockUntil = 0;
 let frameDataToggleButtonWasDown = false;
 let frameDataToggleLockUntil = 0;
 let trainingFrameDataVisible = selectedMode === 'training';
-let sessionAccountId: string | null = null;
 let replayReviewData: ReplayReviewData | null = null;
 let replayReviewSourceLabel = '';
 let replayFrameIndex = 0;
@@ -1107,6 +1752,10 @@ let replayAccumulator = 0;
 let replayPaused = true;
 const replaySpeedOptions = [0.25, 0.5, 1, 2, 4];
 let replaySpeedIndex = 2;
+let rankedQueueAutoPollAccumulatorSeconds = 0;
+let rankedQueueAutoPollInFlight = false;
+let onlineLifecycleDisconnectedSessionId: string | null = null;
+let onlineLifecycleReconnectInFlight = false;
 let playerRankedTicket: QueueTicketView | null = null;
 let playerRankedSession: MatchSessionView | null = null;
 let playerRoom: RoomView | null = null;
@@ -1143,7 +1792,15 @@ function formatAccountSummary(session: PlatformAuthSession): string {
 }
 
 function getEnabledModes(): GameMode[] {
-  return ['endless', 'best_of_3', 'arcade', 'training'];
+  const enabledModes: GameMode[] = ['endless', 'best_of_3'];
+  if (runtimeConfig.features.arcadeModeEnabled) {
+    enabledModes.push('arcade');
+  }
+  if (runtimeConfig.features.trainingModeEnabled) {
+    enabledModes.push('training');
+  }
+  enabledModes.push('cpu_vs_cpu');
+  return enabledModes;
 }
 
 function getRulesForMode(mode: GameMode): { allowDunkWin: boolean } {
@@ -1234,7 +1891,7 @@ function loadSettings(): LoadedSettings {
   const fallback: LoadedSettings = {
     mode: fallbackMode,
     menuThemeId: DEFAULT_MENU_THEME_ID,
-    stageAtmosphereId: DEFAULT_STAGE_ATMOSPHERE_ID,
+      stageAtmosphereId: 'wormhole_depths_v1',
     loadout: {
       P1: DEFAULT_CHARACTER_LOADOUT.P1,
       P2: DEFAULT_CHARACTER_LOADOUT.P2,
@@ -1645,38 +2302,74 @@ function createTrainingTelemetryForCurrentSelection(): TrainingTelemetryTracker 
   });
 }
 
+function shouldShowLiveInputHistory(): boolean {
+  return appPhase === 'playing' && (selectedMode === 'training' || selectedMode === 'cpu_vs_cpu');
+}
+
+function shouldShowLiveMatchTelemetry(): boolean {
+  return appPhase === 'playing' && (selectedMode === 'training' || selectedMode === 'cpu_vs_cpu');
+}
+
+function buildOfflineAiControllersForCurrentMode(): Partial<Record<PlayerId, AiControllerState>> {
+  if (selectedMode === 'training' || onlineMatchContext !== null) {
+    return {};
+  }
+
+  const profileId = resolveAiDifficultyForCurrentMatch();
+  if (selectedMode === 'cpu_vs_cpu') {
+    return {
+      P1: createAiController({
+        seed: selectedMatchSeed ^ 0x517cc1b7,
+        profileId,
+      }),
+      P2: createAiController({
+        seed: selectedMatchSeed ^ 0x9e3779b9,
+        profileId,
+      }),
+    };
+  }
+
+  return {
+    P2: createAiController({
+      seed: selectedMatchSeed ^ 0x9e3779b9,
+      profileId,
+    }),
+  };
+}
+
 function resetRoundState(): void {
   persistRollbackDiagnostics('round_reset');
   const tuning = state.tuning;
-  const matchLoadout = resolveLoadoutForCurrentMatch();
+  const matchLoadout = onlineMatchContext ? onlineMatchContext.matchLoadout : resolveLoadoutForCurrentMatch();
   state = createInitialState({
     loadout: matchLoadout,
     seed: selectedMatchSeed,
     rules: getRulesForMode(selectedMode),
   });
   state.tuning = { ...tuning };
+  matchTelemetry = createMatchTelemetryTracker(state);
   sceneContext.cameraPlayerTracks.P1.set(state.players.P1.pos.x, state.players.P1.pos.y);
   sceneContext.cameraPlayerTracks.P2.set(state.players.P2.pos.x, state.players.P2.pos.y);
   sceneContext.launchCameraActive = false;
   inputTimeline.clear();
   simulationFrame = 0;
   rollbackSession = enableRollbackScaffold
+    || onlineMatchContext !== null
     ? new RollbackSession({
       initialState: state,
-      localPlayerId: 'P1',
+      localPlayerId: onlineMatchContext?.localPlayerId ?? 'P1',
       fixedDt,
       maxHistoryFrames: 60 * 20,
     })
     : null;
-  aiController = selectedMode === 'training'
-    ? null
-    : createAiController({
-      seed: selectedMatchSeed ^ 0x9e3779b9,
-      profileId: resolveAiDifficultyForCurrentMatch(),
-    });
-  const showDebugDiagnostics = runtimeConfig.features.debugToolsEnabled;
+  aiControllers = buildOfflineAiControllersForCurrentMode();
+  const showDebugDiagnostics = debugHudEnabled;
   hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
+  hud.setInputHistoryVisible(shouldShowLiveInputHistory());
+  hud.setMatchTelemetryVisible(shouldShowLiveMatchTelemetry());
   hud.updateRollbackDiagnostics(showDebugDiagnostics && rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null);
+  hud.updateInputHistory(null);
+  hud.updateMatchTelemetry(shouldShowLiveMatchTelemetry() ? matchTelemetry.toSummary() : null);
   const roundStartCallout = voiceCalloutSystem.trigger({
     playerId: 'P1',
     characterId: state.players.P1.characterId,
@@ -1703,6 +2396,7 @@ function beginMode(
   aiDifficulty?: AiDifficultyId,
   arcadeSettings?: ArcadeMenuSettings,
 ): void {
+  clearOnlineBootstrapState();
   const resolvedMode = resolveStoredMode(mode);
   if (loadout) {
     selectedLoadout = {
@@ -1741,8 +2435,10 @@ function beginMode(
   resetRoundState();
   appPhase = 'playing';
   setTrainingFrameDataVisibility(selectedMode === 'training');
-  persistSettings();
-  if (sessionAccountId) {
+  if (!onlineMatchContext) {
+    persistSettings();
+  }
+  if (sessionAccountId && !onlineMatchContext) {
     void platform.profile.saveProfile(sessionAccountId, {
       settings: buildFullProfileSettingsPayload(profileSettingsCache, arcadeHistory),
     }).then((savedProfile) => {
@@ -1764,7 +2460,10 @@ function beginMode(
 }
 
 function returnToHome(): void {
+  startupMenuGuardArmed = false;
   persistRollbackDiagnostics('return_home');
+  clearOnlineBootstrapState();
+  clearOnlineMatchContext();
   if (selectedMode === 'training') {
     trainingTelemetry.endRound('mode_exit');
   }
@@ -1779,14 +2478,407 @@ function returnToHome(): void {
   startMenu.showHome();
   replayViewer.hide();
   hudRoot.style.visibility = 'hidden';
+  hud.setInputHistoryVisible(false);
+  hud.setMatchTelemetryVisible(false);
+  hud.updateInputHistory(null);
+  hud.updateMatchTelemetry(null);
   syncTrainingFrameDataVisibility();
   accumulator = 0;
+}
+
+function beginUserInitiatedMode(
+  mode: GameMode,
+  loadout?: PlayersById<CharacterId>,
+  aiDifficulty?: AiDifficultyId,
+  arcadeSettings?: ArcadeMenuSettings,
+): void {
+  startupMenuGuardArmed = false;
+  clearOnlineBootstrapState();
+  clearOnlineMatchContext();
+  beginMode(mode, loadout, aiDifficulty, arcadeSettings);
+}
+
+function ensureDevOpenMenuButton(): void {
+  if (!localRecoveryUiEnabled || devOpenMenuButton) {
+    return;
+  }
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'dev-open-menu-button';
+  button.textContent = 'Open Menu';
+  button.addEventListener('click', () => {
+    returnToHome();
+  });
+  document.body.appendChild(button);
+  devOpenMenuButton = button;
+}
+
+function ensureDevDebugPanel(): void {
+  if (!localRecoveryUiEnabled || devDebugPanel) {
+    return;
+  }
+  const panel = document.createElement('div');
+  panel.className = 'dev-debug-panel';
+
+  const title = document.createElement('div');
+  title.className = 'dev-debug-title';
+  title.textContent = 'Local Debug';
+
+  const phaseLabel = document.createElement('div');
+  phaseLabel.className = 'dev-debug-phase';
+  phaseLabel.textContent = `Phase: ${appPhase}`;
+
+  const homeButton = document.createElement('button');
+  homeButton.type = 'button';
+  homeButton.className = 'dev-debug-action';
+  homeButton.textContent = 'Force Home Menu';
+  homeButton.addEventListener('click', () => {
+    returnToHome();
+  });
+
+  panel.append(title, phaseLabel, homeButton);
+  document.body.appendChild(panel);
+  devDebugPanel = panel;
+  devDebugPhaseLabel = phaseLabel;
+}
+
+function ensureOnlineBootstrapPanel(): void {
+  if (onlineBootstrapPanel) {
+    return;
+  }
+  const panel = document.createElement('div');
+  panel.className = 'online-bootstrap-panel';
+  panel.hidden = true;
+
+  const title = document.createElement('div');
+  title.className = 'online-bootstrap-title';
+  title.textContent = 'Connecting Online Match';
+
+  const detail = document.createElement('pre');
+  detail.className = 'online-bootstrap-detail';
+  detail.textContent = '';
+
+  const actions = document.createElement('div');
+  actions.className = 'online-bootstrap-actions';
+
+  const returnHomeButton = document.createElement('button');
+  returnHomeButton.type = 'button';
+  returnHomeButton.className = 'online-bootstrap-action';
+  returnHomeButton.textContent = 'Cancel To Home';
+  returnHomeButton.addEventListener('click', () => {
+    returnToHome();
+  });
+
+  actions.appendChild(returnHomeButton);
+  panel.append(title, detail, actions);
+  document.body.appendChild(panel);
+
+  onlineBootstrapPanel = panel;
+  onlineBootstrapTitle = title;
+  onlineBootstrapDetail = detail;
+}
+
+function renderOnlineBootstrapPanel(): void {
+  ensureOnlineBootstrapPanel();
+  if (!onlineBootstrapPanel || !onlineBootstrapTitle || !onlineBootstrapDetail) {
+    return;
+  }
+  if (appPhase !== 'online_bootstrap' || !onlineBootstrapState) {
+    onlineBootstrapPanel.hidden = true;
+    onlineBootstrapDetail.textContent = '';
+    return;
+  }
+  onlineBootstrapTitle.textContent = 'Connecting Online Match';
+  const iceConfig = onlineBootstrapState.iceConfig;
+  const iceLine = iceConfig
+    ? `ICE servers: ${iceConfig.iceServers.length} | Direct timeout: ${iceConfig.directConnectTimeoutMs}ms`
+    : 'ICE servers: unavailable';
+  const statusLabel = getBootstrapStatusLabel(onlineBootstrapState.status);
+  const nextStep = getBootstrapNextStep(onlineBootstrapState);
+  onlineBootstrapDetail.textContent = [
+    `Current Step: ${statusLabel}`,
+    `Next: ${nextStep}`,
+    '',
+    `Queue: ${onlineBootstrapState.queueType}`,
+    `Region: ${onlineBootstrapState.region}`,
+    `Session: ${onlineBootstrapState.sessionId}`,
+    `Players: ${onlineBootstrapState.localAccountId} vs ${onlineBootstrapState.peerAccountId ?? 'pending'}`,
+    `Transport path: ${onlineBootstrapState.connectionPath}`,
+    iceLine,
+    `Token expires: ${onlineBootstrapState.sessionTokenExpiresAt ?? 'unknown'}`,
+    onlineBootstrapState.diagnosticsLine,
+    '',
+    onlineBootstrapState.statusDetail,
+  ].join('\n');
+  onlineBootstrapPanel.hidden = false;
+}
+
+function clearOnlineBootstrapState(): void {
+  onlineBootstrapState = null;
+  onlineRelayFallbackController = null;
+  if (onlineBootstrapPanel) {
+    onlineBootstrapPanel.hidden = true;
+  }
+}
+
+function clearOnlineMatchContext(): void {
+  if (onlineMatchContext) {
+    selectedMode = onlineMatchContext.restoreMode;
+    selectedLoadout = {
+      P1: onlineMatchContext.restoreLoadout.P1,
+      P2: onlineMatchContext.restoreLoadout.P2,
+    };
+  }
+  onlineMatchContext = null;
+  onlineLifecycleDisconnectedSessionId = null;
+  onlineLifecycleReconnectInFlight = false;
+}
+
+function createReconnectAttemptId(): string {
+  const runtimeCrypto = globalThis.crypto as { randomUUID?: () => string } | undefined;
+  if (runtimeCrypto && typeof runtimeCrypto.randomUUID === 'function') {
+    return `resume-${runtimeCrypto.randomUUID()}`;
+  }
+  const timestamp = Date.now().toString(36);
+  const random = Math.floor(Math.random() * 0xFFFFFF).toString(36);
+  return `resume-${timestamp}-${random}`;
+}
+
+function canLifecycleManageOnlineSession(): boolean {
+  return Boolean(
+    onlineMatchContext
+    && (appPhase === 'playing' || appPhase === 'round_transition'),
+  );
+}
+
+async function markOnlineSessionDisconnected(source: 'visibility_hidden' | 'pagehide'): Promise<void> {
+  const context = onlineMatchContext;
+  if (!context || !canLifecycleManageOnlineSession()) {
+    return;
+  }
+  if (onlineLifecycleDisconnectedSessionId === context.sessionId) {
+    return;
+  }
+  try {
+    await requestOnlineJson<MatchSessionView>(
+      'POST',
+      '/matchmaking/sessions/disconnect',
+      context.localAccountId,
+      { sessionId: context.sessionId },
+      { keepalive: source === 'pagehide' },
+    );
+    onlineLifecycleDisconnectedSessionId = context.sessionId;
+    context.statusText = `Session suspended (${source}). Reconnect will be requested when focus returns.`;
+  } catch (error) {
+    context.statusText = error instanceof Error
+      ? `Disconnect notice failed: ${error.message}`
+      : 'Disconnect notice failed.';
+  }
+}
+
+async function reconnectOnlineSessionAfterResume(source: 'visibility_visible'): Promise<void> {
+  const context = onlineMatchContext;
+  if (!context || !canLifecycleManageOnlineSession()) {
+    onlineLifecycleDisconnectedSessionId = null;
+    return;
+  }
+  if (onlineLifecycleDisconnectedSessionId !== context.sessionId || onlineLifecycleReconnectInFlight) {
+    return;
+  }
+  onlineLifecycleReconnectInFlight = true;
+  context.statusText = 'Requesting session reconnect after returning to the match.';
+  try {
+    await requestOnlineJson<MatchSessionView>(
+      'POST',
+      '/matchmaking/sessions/reconnect',
+      context.localAccountId,
+      {
+        sessionId: context.sessionId,
+        sessionToken: context.sessionToken,
+        reconnectAttemptId: createReconnectAttemptId(),
+      },
+    );
+    onlineLifecycleDisconnectedSessionId = null;
+    context.statusText = `Reconnect requested (${source}). Online relay resumed.`;
+  } catch (error) {
+    handleOnlineTransportError(context, 'reconnect', error);
+  } finally {
+    onlineLifecycleReconnectInFlight = false;
+  }
+}
+
+async function completeOnlineSession(context: OnlineMatchContext): Promise<void> {
+  if (context.sessionCompletionInFlight || context.sessionCompletionStatus === 'completed') {
+    return;
+  }
+  context.sessionCompletionInFlight = true;
+  context.sessionCompletionStatus = 'completing';
+  try {
+    await requestOnlineJson<MatchSessionView>(
+      'POST',
+      '/matchmaking/sessions/complete',
+      context.localAccountId,
+      {
+        sessionId: context.sessionId,
+        sessionToken: context.sessionToken,
+      },
+    );
+    context.sessionCompletionStatus = 'completed';
+    context.statusText = 'Online session closed cleanly.';
+  } catch (error) {
+    if (error instanceof OnlineRequestError && error.code === 'session_resolved') {
+      context.sessionCompletionStatus = 'completed';
+      context.statusText = 'Online session was already closed.';
+      return;
+    }
+    context.sessionCompletionStatus = 'failed';
+    context.statusText = error instanceof Error
+      ? `Session close failed: ${error.message}`
+      : 'Session close failed.';
+  } finally {
+    context.sessionCompletionInFlight = false;
+  }
+}
+
+function beginOnlineMatch(matchStart: MatchStartPayload): void {
+  const localPlayerId = matchStart.localPlayer.side;
+  const remotePlayerId = matchStart.peer.side;
+  const localCharacterId = isCharacterId(matchStart.localPlayer.selectedCharacterId)
+    ? matchStart.localPlayer.selectedCharacterId
+    : selectedLoadout.P1;
+  const remoteCharacterId = isCharacterId(matchStart.peer.selectedCharacterId)
+    ? matchStart.peer.selectedCharacterId
+    : selectedLoadout.P2;
+  const restoreMode = selectedMode;
+  const restoreLoadout = {
+    P1: selectedLoadout.P1,
+    P2: selectedLoadout.P2,
+  };
+  const matchLoadout = localPlayerId === 'P1'
+    ? { P1: localCharacterId, P2: remoteCharacterId }
+    : { P1: remoteCharacterId, P2: localCharacterId };
+
+  selectedMode = 'best_of_3';
+  selectedMatchSeed = hashSeedFromString(matchStart.sessionId);
+  onlineMatchContext = {
+    sessionId: matchStart.sessionId,
+    sessionToken: matchStart.sessionToken,
+    queueType: matchStart.queueType,
+    region: matchStart.region,
+    matchLoadout,
+    restoreMode,
+    restoreLoadout,
+    localPlayerId,
+    remotePlayerId,
+    localAccountId: matchStart.localPlayer.accountId,
+    remoteAccountId: matchStart.peer.accountId,
+    statusText: 'Connected via authenticated session relay.',
+    connectionPath: 'server',
+    lastRemoteFrame: -1,
+    outgoingFrames: [],
+    pendingRemoteInputs: new Map<number, PlayerFrameInput>(),
+    sendAccumulatorSeconds: 0,
+    pollAccumulatorSeconds: 0,
+    sendInFlight: false,
+    pollInFlight: false,
+    finalOutcome: null,
+    winnerAccountId: null,
+    rankedResultStatus: 'idle',
+    rankedResultDetail: 'Awaiting match completion.',
+    rankedResultSubmissionId: null,
+    rankedResultInFlight: false,
+    sessionCompletionInFlight: false,
+    sessionCompletionStatus: 'idle',
+  };
+  clearOnlineBootstrapState();
+  beginMode('best_of_3', undefined, selectedAiDifficulty, selectedArcadeSettings);
+}
+
+async function beginRankedSessionBootstrap(
+  ticket: QueueTicketView,
+  session: MatchSessionView | null,
+  source: 'ranked_queue',
+): Promise<void> {
+  if (!onlineRuntimeEnabled || !ticket.matchStart) {
+    return;
+  }
+
+  const accountId = sessionAccountId ?? ticket.accountId;
+  const matchStart = ticket.matchStart;
+  onlineRelayFallbackController = null;
+  onlineBootstrapState = {
+    source,
+    sessionId: matchStart.sessionId,
+    queueType: matchStart.queueType,
+    region: matchStart.region,
+    localAccountId: matchStart.localPlayer.accountId ?? accountId,
+    peerAccountId: matchStart.peer.accountId ?? null,
+    sessionToken: matchStart.sessionToken ?? null,
+    sessionTokenExpiresAt: matchStart.sessionTokenExpiresAt ?? null,
+    connectionPath: 'direct',
+    status: 'preparing',
+    diagnosticsLine: `Participants: ${matchStart.localPlayer.accountId} vs ${matchStart.peer.accountId}`,
+    statusDetail: 'Matched session accepted. Preparing online runtime bootstrap.',
+    iceConfig: null,
+  };
+  appPhase = 'online_bootstrap';
+  void platform.presence.setStatus('online_dev');
+  pauseMenu.setPaused(false);
+  pauseMenu.setCanRestartTraining(false);
+  startMenu.hideHome();
+  startMenu.hideRoundBanner();
+  replayViewer.hide();
+  onlineDevMenu?.hide();
+  hudRoot.style.visibility = 'hidden';
+  syncTrainingFrameDataVisibility();
+  accumulator = 0;
+  onlineDiagnosticsUpdate = {
+    ...onlineDiagnosticsUpdate,
+    ticketId: ticket.ticketId,
+    sessionId: matchStart.sessionId,
+    queueType: matchStart.queueType,
+    region: matchStart.region,
+    participantAccountIds: [matchStart.localPlayer.accountId, matchStart.peer.accountId],
+    queueWaitMs: getQueueWaitMs(ticket.queuedAt),
+    connectionPath: 'unknown',
+  };
+  renderOnlineBootstrapPanel();
+
+  const iceConfig = await fetchMatchmakingIceConfig(matchmakingApiBase, false);
+  if (!onlineBootstrapState || onlineBootstrapState.sessionId !== matchStart.sessionId) {
+    return;
+  }
+  if (iceConfig) {
+    onlineRelayFallbackController = new RelayFallbackController({
+      directConnectTimeoutMs: iceConfig.directConnectTimeoutMs,
+    });
+    onlineRelayFallbackController.startDirectAttempt(Date.now());
+    buildRtcConfiguration(iceConfig, 'direct');
+  }
+
+  onlineBootstrapState = {
+    ...onlineBootstrapState,
+    status: 'awaiting_signaling',
+    connectionPath: iceConfig ? 'direct' : 'server',
+    statusDetail: iceConfig
+      ? 'Session relay is ready now, and RTC configuration has also been prepared for a future direct path.'
+      : 'Session relay is ready. ICE config was unavailable, so the runtime will use server relay only.',
+    iceConfig,
+  };
+  onlineDiagnosticsUpdate = {
+    ...onlineDiagnosticsUpdate,
+    connectionPath: iceConfig ? 'direct' : 'relay',
+  };
+  renderOnlineBootstrapPanel();
+  beginOnlineMatch(matchStart);
 }
 
 function openOnlineDevMenu(section?: OnlineDevMenuTarget): void {
   if (!onlineDevMenu) {
     return;
   }
+  clearOnlineBootstrapState();
+  clearOnlineMatchContext();
   const sectionId: OnlineDevSectionId | undefined = section
     ? ({
       matchmaking: 'matchmaking',
@@ -1904,6 +2996,52 @@ function exportTrainingTelemetrySession(): string {
   }
 
   return `Training telemetry exported: ${fileName}`;
+}
+
+function exportAiMatchTelemetrySession(): string {
+  const exportedAt = new Date().toISOString();
+  const summary = matchTelemetry.toSummary();
+  const snapshot = getRenderSnapshot(state);
+  const payload: StoredAiMatchTelemetryEntry = {
+    exportedAt,
+    mode: 'cpu_vs_cpu',
+    rulesetVersion: activeRulesetVersion,
+    balanceProfileId: activeBalanceProfile.id,
+    aiDifficulty: selectedAiDifficulty,
+    menuThemeId: selectedMenuThemeId,
+    stageAtmosphereId: selectedStageAtmosphereId,
+    seed: selectedMatchSeed,
+    loadout: {
+      P1: selectedLoadout.P1,
+      P2: selectedLoadout.P2,
+    },
+    score: {
+      p1Rounds: p1RoundWins,
+      p2Rounds: p2RoundWins,
+    },
+    winner: state.winner,
+    statusText: snapshot.statusText,
+    summary,
+  };
+
+  const timestamp = exportedAt.replace(/[:.]/g, '-');
+  const fileName = `gravity-well-ai-match-telemetry-${timestamp}.json`;
+  const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+
+  const writeResult = platform.persistence.writeJson(AI_MATCH_TELEMETRY_STORAGE_KEY, payload);
+  if (!writeResult.ok && runtimeConfig.features.debugToolsEnabled) {
+    console.warn('[persistence] ai match telemetry write skipped', writeResult);
+  }
+
+  return `AI match telemetry exported: ${fileName}`;
 }
 
 function restartTrainingRound(reason: TrainingRoundEndReason = 'manual_restart'): void {
@@ -2051,8 +3189,25 @@ function updateMatchInfo(): void {
     return;
   }
 
+  if (appPhase === 'online_bootstrap') {
+    const status = onlineBootstrapState?.status ?? 'preparing';
+    const path = onlineBootstrapState?.connectionPath ?? 'direct';
+    matchInfo.textContent = `Online Bootstrap | ${status} | ${path}`;
+    return;
+  }
+
+  if (onlineMatchContext && (appPhase === 'playing' || appPhase === 'round_transition' || appPhase === 'match_over')) {
+    matchInfo.textContent = `Online ${onlineMatchContext.queueType} | ${onlineMatchContext.region} | ${onlineMatchContext.connectionPath} relay | ${getRoundScoreText()}`;
+    return;
+  }
+
   if (selectedMode === 'endless') {
     matchInfo.textContent = 'Mode: Endless Dev';
+    return;
+  }
+
+  if (selectedMode === 'cpu_vs_cpu') {
+    matchInfo.textContent = `Mode: AI vs AI | ${getRoundScoreText()} | ${selectedAiDifficulty}`;
     return;
   }
 
@@ -2074,7 +3229,7 @@ function updateMatchInfo(): void {
 }
 
 function resolveAdaptiveMusicState(phase: AppPhase, snapshot: RenderSnapshot): MusicState {
-  if (phase === 'home' || phase === 'online_dev') {
+  if (phase === 'home' || phase === 'online_dev' || phase === 'online_bootstrap') {
     return 'menu';
   }
   if (phase === 'match_over' || snapshot.winner) {
@@ -2352,7 +3507,19 @@ function onRoundWin(winner: PlayerId): void {
       hud.showVoiceSubtitle(matchWinCallout.text);
     }
     void platform.presence.setStatus('match_over');
-    startMenu.showMatchOver(winner, p1RoundWins, p2RoundWins);
+    if (onlineMatchContext) {
+      onlineMatchContext.finalOutcome = winner === 'P1' ? 'p1_win' : 'p2_win';
+      onlineMatchContext.winnerAccountId = winner === onlineMatchContext.localPlayerId
+        ? onlineMatchContext.localAccountId
+        : onlineMatchContext.remoteAccountId;
+      renderOnlineMatchOverScreen(onlineMatchContext, winner, p1RoundWins, p2RoundWins);
+      void completeOnlineSession(onlineMatchContext);
+      if (onlineMatchContext.queueType === 'ranked') {
+        void submitOnlineRankedResult(onlineMatchContext);
+      }
+    } else {
+      startMenu.showMatchOver(winner, p1RoundWins, p2RoundWins);
+    }
     hudRoot.style.visibility = 'hidden';
     return;
   }
@@ -2388,6 +3555,14 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
+  if (appPhase === 'online_bootstrap') {
+    if (key === 'escape') {
+      event.preventDefault();
+      returnToHome();
+    }
+    return;
+  }
+
   if (selectedMode === 'training' && appPhase === 'playing' && key === 'n') {
     event.preventDefault();
     restartTrainingRound();
@@ -2407,6 +3582,15 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault();
     pauseMenu.toggle();
     accumulator = 0;
+  }
+
+  if (
+    runtimeConfig.features.debugToolsEnabled
+    && key === 'm'
+    && (appPhase === 'playing' || appPhase === 'round_transition')
+  ) {
+    event.preventDefault();
+    returnToHome();
   }
 });
 
@@ -2450,37 +3634,92 @@ function tick(nowMs: number): void {
   if (!pauseMenu.isPaused() && appPhase === 'playing') {
     while (accumulator >= fixedDt) {
       const frameInputRaw = input.getFrameInput();
-      let frameInput = frameInputRaw;
-      if (aiController) {
-        const aiTick = tickAiController(state, 'P2', aiController);
-        aiController = aiTick.next;
-        frameInput = buildFrameInputWithAi(frameInputRaw.p1, aiTick.input, 'P2');
-      }
-      inputTimeline.setLocalInput(simulationFrame, 'P1', frameInput.p1);
-      inputTimeline.setLocalInput(simulationFrame, 'P2', frameInput.p2);
-      if (rollbackSession) {
-        const rollbackResult = rollbackSession.advanceFrame({
-          localInput: frameInput.p1,
-          remoteAuthoritativeInput: frameInput.p2,
+      if (onlineMatchContext) {
+        const localInput = cloneOnlinePlayerInput(frameInputRaw.p1);
+        const resolvedOnlineFrameInput = onlineMatchContext.localPlayerId === 'P1'
+          ? { p1: localInput, p2: createEmptyPlayerInput() }
+          : { p1: createEmptyPlayerInput(), p2: localInput };
+        onlineMatchContext.outgoingFrames.push({
+          frame: simulationFrame,
+          input: localInput,
         });
-        if (runtimeConfig.features.debugToolsEnabled && rollbackResult.rollbackFrames > 0) {
-          console.info('[rollback] correction', {
-            frame: rollbackResult.frame,
-            rollbackFrames: rollbackResult.rollbackFrames,
+        const remoteInput = onlineMatchContext.pendingRemoteInputs.get(simulationFrame) ?? null;
+        if (remoteInput) {
+          onlineMatchContext.pendingRemoteInputs.delete(simulationFrame);
+        }
+        if (rollbackSession) {
+          const rollbackResult = rollbackSession.advanceFrame({
+            localInput,
+            remoteAuthoritativeInput: remoteInput,
           });
-        }
-        if (runtimeConfig.features.debugToolsEnabled) {
-          const desyncEvents = rollbackSession.drainPendingDesyncEvents();
-          for (const event of desyncEvents) {
-            console.warn('[rollback] desync event', event);
+          if (runtimeConfig.features.debugToolsEnabled && rollbackResult.rollbackFrames > 0) {
+            console.info('[rollback] online correction', {
+              frame: rollbackResult.frame,
+              rollbackFrames: rollbackResult.rollbackFrames,
+            });
           }
+          if (runtimeConfig.features.debugToolsEnabled) {
+            const desyncEvents = rollbackSession.drainPendingDesyncEvents();
+            for (const event of desyncEvents) {
+              console.warn('[rollback] online desync event', event);
+            }
+          }
+          state = rollbackSession.getStateSnapshot();
+        } else {
+          step(state, resolvedOnlineFrameInput, fixedDt);
         }
-        state = rollbackSession.getStateSnapshot();
+        matchTelemetry.recordFrame(resolvedOnlineFrameInput, state, fixedDt);
       } else {
-        step(state, frameInput, fixedDt);
-      }
-      if (selectedMode === 'training') {
-        trainingTelemetry.recordFrame(frameInput, state, fixedDt);
+        let frameInput = frameInputRaw;
+        const p1AiController = aiControllers.P1;
+        const p2AiController = aiControllers.P2;
+        if (p1AiController || p2AiController) {
+          const p1Input = p1AiController
+            ? (() => {
+              const aiTick = tickAiController(state, 'P1', p1AiController);
+              aiControllers.P1 = aiTick.next;
+              return aiTick.input;
+            })()
+            : frameInputRaw.p1;
+          const p2Input = p2AiController
+            ? (() => {
+              const aiTick = tickAiController(state, 'P2', p2AiController);
+              aiControllers.P2 = aiTick.next;
+              return aiTick.input;
+            })()
+            : frameInputRaw.p2;
+          frameInput = {
+            p1: p1Input,
+            p2: p2Input,
+          };
+        }
+        inputTimeline.setLocalInput(simulationFrame, 'P1', frameInput.p1);
+        inputTimeline.setLocalInput(simulationFrame, 'P2', frameInput.p2);
+        if (rollbackSession) {
+          const rollbackResult = rollbackSession.advanceFrame({
+            localInput: frameInput.p1,
+            remoteAuthoritativeInput: frameInput.p2,
+          });
+          if (runtimeConfig.features.debugToolsEnabled && rollbackResult.rollbackFrames > 0) {
+            console.info('[rollback] correction', {
+              frame: rollbackResult.frame,
+              rollbackFrames: rollbackResult.rollbackFrames,
+            });
+          }
+          if (runtimeConfig.features.debugToolsEnabled) {
+            const desyncEvents = rollbackSession.drainPendingDesyncEvents();
+            for (const event of desyncEvents) {
+              console.warn('[rollback] desync event', event);
+            }
+          }
+          state = rollbackSession.getStateSnapshot();
+        } else {
+          step(state, frameInput, fixedDt);
+        }
+        matchTelemetry.recordFrame(frameInput, state, fixedDt);
+        if (selectedMode === 'training') {
+          trainingTelemetry.recordFrame(frameInput, state, fixedDt);
+        }
       }
       simulationFrame += 1;
       accumulator -= fixedDt;
@@ -2499,6 +3738,8 @@ function tick(nowMs: number): void {
       appPhase = 'playing';
     }
   }
+
+  scheduleRankedQueueAutoRefresh(elapsedSeconds);
 
   if (appPhase === 'replay_review' && replayReviewData) {
     if (!replayPaused) {
@@ -2519,6 +3760,40 @@ function tick(nowMs: number): void {
     replayViewer.updatePlayback(replayFrameIndex, replayPaused, replaySpeedOptions[replaySpeedIndex] ?? 1);
   } else {
     replayAccumulator = 0;
+  }
+
+  if (onlineMatchContext && appPhase === 'playing') {
+    onlineMatchContext.sendAccumulatorSeconds += elapsedSeconds;
+    onlineMatchContext.pollAccumulatorSeconds += elapsedSeconds;
+    if (onlineMatchContext.sendAccumulatorSeconds >= 0.05 || onlineMatchContext.outgoingFrames.length >= 4) {
+      onlineMatchContext.sendAccumulatorSeconds = 0;
+      flushOnlineTransport(onlineMatchContext);
+    } else if (onlineMatchContext.pollAccumulatorSeconds >= 0.05) {
+      flushOnlineTransport(onlineMatchContext);
+    }
+    if (onlineMatchContext.pollAccumulatorSeconds >= 0.05) {
+      onlineMatchContext.pollAccumulatorSeconds = 0;
+    }
+  }
+
+  if (
+    appPhase === 'online_bootstrap'
+    && onlineBootstrapState
+    && onlineBootstrapState.iceConfig
+    && onlineRelayFallbackController
+    && onlineRelayFallbackController.shouldFallbackToRelay(nowMs)
+  ) {
+    onlineRelayFallbackController.applyRelayFallback();
+    buildRtcConfiguration(onlineBootstrapState.iceConfig, 'relay');
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      connectionPath: 'relay',
+      statusDetail: 'Direct connect timed out. Relay fallback is prepared. The remaining missing layer is signaling/datachannel exchange.',
+    };
+    onlineDiagnosticsUpdate = {
+      ...onlineDiagnosticsUpdate,
+      connectionPath: 'relay',
+    };
   }
 
   const snapshot = appPhase === 'replay_review' && replayReviewData
@@ -2542,36 +3817,75 @@ function tick(nowMs: number): void {
   audioSystem.setBusVolume('voice', audioSettings.voiceVolume * dynamicRange.voice);
 
   renderFrame(sceneContext, snapshot);
-  const memoryDiagnostics = runtimeConfig.features.debugToolsEnabled
+  const memoryDiagnostics = debugHudEnabled
     ? getRuntimeMemoryDiagnosticsView(snapshot)
     : null;
 
   if (appPhase === 'replay_review') {
     hud.setRollbackDiagnosticsVisible(false);
     hud.updateRollbackDiagnostics(null);
-  } else if (runtimeConfig.features.debugToolsEnabled) {
+  } else if (debugHudEnabled) {
     hud.setRollbackDiagnosticsVisible(true);
     hud.updateRollbackDiagnostics(rollbackSession ? getRollbackDiagnosticsView(rollbackSession) : null, memoryDiagnostics);
   } else {
     hud.setRollbackDiagnosticsVisible(false);
     hud.updateRollbackDiagnostics(null);
   }
+  const showInputHistory = shouldShowLiveInputHistory();
+  const showMatchTelemetry = shouldShowLiveMatchTelemetry();
+  hud.setInputHistoryVisible(showInputHistory);
+  hud.setMatchTelemetryVisible(showMatchTelemetry);
+  hud.updateInputHistory(showInputHistory ? buildInputHistoryView(inputTimeline, 10) : null);
+  hud.updateMatchTelemetry(showMatchTelemetry ? matchTelemetry.toSummary() : null);
   hud.update(snapshot);
   updateMatchInfo();
   updateOnlineDiagnosticsOverlay();
+  renderOnlineBootstrapPanel();
+  if (devDebugPhaseLabel) {
+    devDebugPhaseLabel.textContent = `Phase: ${appPhase}`;
+  }
 
   requestAnimationFrame(tick);
 }
 
 hudRoot.style.visibility = 'hidden';
 syncTrainingFrameDataVisibility();
+ensureDevOpenMenuButton();
+ensureDevDebugPanel();
 void bootstrapPlatformProfile();
 void platform.presence.setStatus('home');
 startMenu.showHome();
+if (runtimeConfig.features.debugToolsEnabled) {
+  window.setTimeout(() => {
+    if (!startupMenuGuardArmed) {
+      return;
+    }
+    if (appPhase !== 'home') {
+      returnToHome();
+      return;
+    }
+    startMenu.showHome();
+    hudRoot.style.visibility = 'hidden';
+  }, 250);
+}
 requestAnimationFrame(tick);
 
 window.addEventListener('resize', () => {
   resizeScene(sceneContext);
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    void markOnlineSessionDisconnected('visibility_hidden');
+    return;
+  }
+  if (document.visibilityState === 'visible') {
+    void reconnectOnlineSessionAfterResume('visibility_visible');
+  }
+});
+
+window.addEventListener('pagehide', () => {
+  void markOnlineSessionDisconnected('pagehide');
 });
 
 window.addEventListener('beforeunload', () => {

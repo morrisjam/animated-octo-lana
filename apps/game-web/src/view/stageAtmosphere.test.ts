@@ -10,6 +10,7 @@ describe('stage atmosphere registry', () => {
   test('includes default and resolves unknown ids to default', () => {
     expect(STAGE_ATMOSPHERE_IDS.includes(DEFAULT_STAGE_ATMOSPHERE_ID)).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes('ion_storm_v1')).toBe(true);
+    expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_depths_v1')).toBe(true);
     expect(resolveStageAtmosphere(undefined).id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
     expect(resolveStageAtmosphere('').id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
     expect(resolveStageAtmosphere('missing-atmosphere').id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
@@ -27,6 +28,12 @@ describe('stage atmosphere registry', () => {
       expect(atmosphere.tokens.fogFar).toBeGreaterThan(atmosphere.tokens.fogNear);
       expect(atmosphere.tokens.backgroundImageTextureId === null || atmosphere.tokens.backgroundImageTextureId.trim().length > 0).toBe(true);
       expect(atmosphere.tokens.backgroundModelId === null || atmosphere.tokens.backgroundModelId.trim().length > 0).toBe(true);
+      expect(atmosphere.tokens.backgroundEffectId === null || atmosphere.tokens.backgroundEffectId.trim().length > 0).toBe(true);
+      expect(atmosphere.tokens.backgroundEffectTint.trim().length).toBeGreaterThan(0);
+      expect(atmosphere.tokens.backgroundEffectSecondaryTint.trim().length).toBeGreaterThan(0);
+      expect(Number.isFinite(atmosphere.tokens.backgroundEffectOpacity)).toBe(true);
+      expect(Number.isFinite(atmosphere.tokens.backgroundEffectSpeed)).toBe(true);
+      expect(Number.isFinite(atmosphere.tokens.backgroundEffectScale)).toBe(true);
     }
   });
 });

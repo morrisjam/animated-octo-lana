@@ -49,13 +49,29 @@ function collectPlayerEvents(previous: RenderSnapshot, current: RenderSnapshot, 
   const dt = Math.max(1 / 120, current.gameTime - previous.gameTime);
   const playerIds: PlayerId[] = ['P1', 'P2'];
   for (const playerId of playerIds) {
+    const opponentId: PlayerId = playerId === 'P1' ? 'P2' : 'P1';
     const previousPlayer = previous.players[playerId];
     const currentPlayer = current.players[playerId];
+    const previousOpponent = previous.players[opponentId];
+    const currentOpponent = current.players[opponentId];
     const moveDelta = subtractVec2(currentPlayer.pos, previousPlayer.pos);
     const direction = normaliseDirection(moveDelta);
 
     const launchTriggered = hasFlashRise(previousPlayer.launchFlash, currentPlayer.launchFlash);
-    if (launchTriggered) {
+    const opponentLaunchTriggered = hasFlashRise(previousOpponent.launchFlash, currentOpponent.launchFlash);
+    const clashTriggered = launchTriggered
+      && opponentLaunchTriggered
+      && currentPlayer.helpless <= 0
+      && currentOpponent.helpless <= 0;
+    if (clashTriggered) {
+      addPlayerEvent(
+        events,
+        'clash',
+        playerId,
+        current,
+        normaliseDirection(subtractVec2(currentPlayer.pos, currentOpponent.pos)),
+      );
+    } else if (launchTriggered) {
       addPlayerEvent(events, 'launch', playerId, current, direction);
     }
 
@@ -71,9 +87,12 @@ function collectPlayerEvents(previous: RenderSnapshot, current: RenderSnapshot, 
 
     const specialTriggered = hasFlashRise(previousPlayer.specialFlash, currentPlayer.specialFlash);
     const breakTriggered = hasFlashRise(previousPlayer.breakFlash, currentPlayer.breakFlash);
+    if (breakTriggered) {
+      addPlayerEvent(events, 'break', playerId, current, direction);
+    }
     const fuelSpent = previousPlayer.fuel - currentPlayer.fuel;
     const frameSpeed = Math.hypot(moveDelta.x, moveDelta.y) / dt;
-    const combatActionResolved = launchTriggered || parryTriggered || dunkTriggered || specialTriggered || breakTriggered;
+    const combatActionResolved = launchTriggered || clashTriggered || parryTriggered || dunkTriggered || specialTriggered || breakTriggered;
     const inBoostEligibleState = currentPlayer.helpless <= 0 && currentPlayer.recovering <= 0 && currentPlayer.parry <= 0;
     const boostTriggered = !combatActionResolved
       && inBoostEligibleState

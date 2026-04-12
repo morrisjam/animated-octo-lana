@@ -1,5 +1,7 @@
 import type { RenderSnapshot } from '../sim/types';
+import type { MatchTelemetrySummary } from '../sim/matchTelemetry';
 import { buildTrainingFrameDataModel } from './trainingFrameData';
+import type { InputHistoryView } from './inputHistory';
 
 interface HudElements {
   root: HTMLDivElement;
@@ -10,6 +12,9 @@ interface HudElements {
   status: HTMLDivElement;
   frameData: HTMLDivElement;
   rollbackDiagnostics: HTMLDivElement;
+  p1InputHistory: HTMLDivElement;
+  p2InputHistory: HTMLDivElement;
+  matchTelemetry: HTMLDivElement;
   voiceSubtitle: HTMLDivElement;
 }
 
@@ -39,8 +44,12 @@ export interface HudController {
   update(snapshot: RenderSnapshot): void;
   setTrainingFrameDataVisible(visible: boolean): void;
   setRollbackDiagnosticsVisible(visible: boolean): void;
+  setInputHistoryVisible(visible: boolean): void;
+  setMatchTelemetryVisible(visible: boolean): void;
   setVoiceSubtitlesEnabled(enabled: boolean): void;
   showVoiceSubtitle(text: string): void;
+  updateInputHistory(view: InputHistoryView | null): void;
+  updateMatchTelemetry(summary: MatchTelemetrySummary | null): void;
   updateRollbackDiagnostics(
     diagnostics: RollbackDiagnosticsView | null,
     memoryDiagnostics?: RuntimeMemoryDiagnosticsView | null,
@@ -77,6 +86,21 @@ function getRequiredElement<T extends Element>(selector: string): T {
 
 export function createHud(): HudController {
   const root = getRequiredElement<HTMLDivElement>('#hud');
+  const p1InputHistory = document.createElement('div');
+  p1InputHistory.className = 'input-history-panel p1';
+  p1InputHistory.hidden = true;
+  root.appendChild(p1InputHistory);
+
+  const p2InputHistory = document.createElement('div');
+  p2InputHistory.className = 'input-history-panel p2';
+  p2InputHistory.hidden = true;
+  root.appendChild(p2InputHistory);
+
+  const matchTelemetry = document.createElement('div');
+  matchTelemetry.className = 'match-telemetry-panel';
+  matchTelemetry.hidden = true;
+  root.appendChild(matchTelemetry);
+
   const voiceSubtitle = document.createElement('div');
   voiceSubtitle.className = 'voice-subtitle';
   voiceSubtitle.hidden = true;
@@ -90,6 +114,9 @@ export function createHud(): HudController {
     status: getRequiredElement<HTMLDivElement>('#status'),
     frameData: getRequiredElement<HTMLDivElement>('#frameData'),
     rollbackDiagnostics: getRequiredElement<HTMLDivElement>('#rollbackDiagnostics'),
+    p1InputHistory,
+    p2InputHistory,
+    matchTelemetry,
     voiceSubtitle,
   };
   elements.frameData.hidden = true;
@@ -98,6 +125,20 @@ export function createHud(): HudController {
   let voiceSubtitlesEnabled = true;
   let subtitleHideAtSeconds = 0;
   let frameDataCharacterSignature = '';
+
+  function renderInputHistoryPanel(
+    element: HTMLDivElement,
+    title: string,
+    rows: InputHistoryView['P1'],
+  ): void {
+    const rowsHtml = rows.length > 0
+      ? rows.map((row) => `<div class="input-history-row"><span class="frame">F${row.frame}</span><span class="value">${row.text}</span></div>`).join('')
+      : '<div class="input-history-empty">No inputs yet.</div>';
+    element.innerHTML = `
+      <div class="title">${title}</div>
+      <div class="input-history-body">${rowsHtml}</div>
+    `;
+  }
 
   function renderTrainingFrameData(snapshot: RenderSnapshot): void {
     const signature = `${snapshot.players.P1.characterId}|${snapshot.players.P2.characterId}`;
@@ -126,6 +167,13 @@ export function createHud(): HudController {
     setRollbackDiagnosticsVisible(visible: boolean): void {
       elements.rollbackDiagnostics.hidden = !visible;
     },
+    setInputHistoryVisible(visible: boolean): void {
+      elements.p1InputHistory.hidden = !visible;
+      elements.p2InputHistory.hidden = !visible;
+    },
+    setMatchTelemetryVisible(visible: boolean): void {
+      elements.matchTelemetry.hidden = !visible;
+    },
     setVoiceSubtitlesEnabled(enabled: boolean): void {
       voiceSubtitlesEnabled = enabled;
       if (!enabled) {
@@ -139,6 +187,46 @@ export function createHud(): HudController {
       elements.voiceSubtitle.textContent = text;
       elements.voiceSubtitle.hidden = false;
       subtitleHideAtSeconds = performance.now() / 1000 + 2.4;
+    },
+    updateInputHistory(view: InputHistoryView | null): void {
+      if (!view) {
+        elements.p1InputHistory.innerHTML = '';
+        elements.p2InputHistory.innerHTML = '';
+        return;
+      }
+      renderInputHistoryPanel(elements.p1InputHistory, 'P1 Inputs', view.P1);
+      renderInputHistoryPanel(elements.p2InputHistory, 'P2 Inputs', view.P2);
+    },
+    updateMatchTelemetry(summary: MatchTelemetrySummary | null): void {
+      if (!summary) {
+        elements.matchTelemetry.innerHTML = '';
+        return;
+      }
+
+      const playerRows = (label: 'P1' | 'P2', accentClass: 'p1' | 'p2') => {
+        const player = summary.players[label];
+        return `
+          <div class="match-telemetry-column ${accentClass}">
+            <div class="player-title">${label}</div>
+            <div class="row">L ${player.launchPresses}/${player.launchHits} | Dk ${player.dunkPresses}/${player.dunkHits}</div>
+            <div class="row">Acc ${player.launchAccuracy.toFixed(2)} | DkConv ${player.dunkConversionRate.toFixed(2)} | Clash ${player.clashCount}</div>
+            <div class="row">SP ${player.specialPresses}/${player.specialResolves} | P ${player.parryPresses}</div>
+            <div class="row">Br ${player.breakPresses}/${player.breakEscapes} @ ${player.averageBreakReactionSeconds.toFixed(2)}s</div>
+            <div class="row">Boost ${player.boostFrames} | SB ${player.superBoostFrames}</div>
+            <div class="row">Projectiles ${player.projectilesSpawned}</div>
+          </div>
+        `;
+      };
+
+      elements.matchTelemetry.innerHTML = `
+        <div class="title">Match Telemetry</div>
+        <div class="row hint">Frames ${summary.framesSimulated} | Time ${summary.elapsedSeconds.toFixed(2)}s | Avg dist ${summary.spacing.averageDistance.toFixed(2)}</div>
+        <div class="row hint">Point blank ${summary.spacing.pointBlankSeconds.toFixed(2)}s | Pressure ${summary.spacing.pressureBandSeconds.toFixed(2)}s | Closest ${summary.spacing.closestDistance.toFixed(2)}</div>
+        <div class="match-telemetry-grid">
+          ${playerRows('P1', 'p1')}
+          ${playerRows('P2', 'p2')}
+        </div>
+      `;
     },
     updateRollbackDiagnostics(
       diagnostics: RollbackDiagnosticsView | null,

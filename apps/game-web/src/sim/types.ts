@@ -65,6 +65,9 @@ export interface PlayerState {
   characterId: CharacterId;
   pos: Vec2;
   vel: Vec2;
+  boostActive: boolean;
+  boostDir: Vec2;
+  boostHeldTime: number;
   radius: number;
   maxFuel: number;
   fuel: number;

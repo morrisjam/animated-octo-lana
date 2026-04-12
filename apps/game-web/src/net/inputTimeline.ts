@@ -156,6 +156,14 @@ export class InputTimelineBuffer {
     return this.getPlayerInput(frame, playerId) !== null;
   }
 
+  getRecentFrames(limit: number): TimelineFrameView[] {
+    const safeLimit = Math.max(1, Math.floor(limit));
+    const frames = [...this.frames.keys()]
+      .sort((a, b) => b - a)
+      .slice(0, safeLimit);
+    return frames.map((frame) => this.getFrame(frame));
+  }
+
   private upsert(
     frame: number,
     playerId: PlayerId,

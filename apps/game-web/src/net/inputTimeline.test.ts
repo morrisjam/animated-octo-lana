@@ -76,4 +76,17 @@ describe('input timeline buffer', () => {
     expect(final?.source).toBe('remote_authoritative');
     expect(final?.input.moveY).toBe(1);
   });
+
+  test('returns recent frames newest first for HUD history views', () => {
+    const timeline = createInputTimelineBuffer();
+    timeline.setLocalInput(2, 'P1', { ...neutralInput(), launch: true });
+    timeline.setLocalInput(5, 'P1', { ...neutralInput(), special: true });
+    timeline.setLocalInput(4, 'P1', { ...neutralInput(), parry: true });
+
+    const recent = timeline.getRecentFrames(2);
+
+    expect(recent).toHaveLength(2);
+    expect(recent[0]?.frame).toBe(5);
+    expect(recent[1]?.frame).toBe(4);
+  });
 });

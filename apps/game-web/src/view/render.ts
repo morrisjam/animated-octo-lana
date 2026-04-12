@@ -17,6 +17,52 @@ import {
 
 const LIVE_PROJECTILE_IDS = new Set<number>();
 
+function updateWormholeBackdrop(context: SceneContext, snapshot: RenderSnapshot): void {
+  const backdrop = context.wormholeBackdrop;
+  if (!backdrop.group.visible) {
+    return;
+  }
+
+  const effectSpeed = typeof backdrop.group.userData.effectSpeed === 'number'
+    ? backdrop.group.userData.effectSpeed as number
+    : 1;
+  const effectOpacity = typeof backdrop.group.userData.effectOpacity === 'number'
+    ? backdrop.group.userData.effectOpacity as number
+    : 0.8;
+  const time = snapshot.gameTime * effectSpeed;
+
+  backdrop.group.rotation.set(0, 0, 0);
+  backdrop.group.position.set(0, 0, 0);
+
+  backdrop.core.rotation.z = 0;
+  const corePulse = 1 + Math.sin(time * 1.25) * 0.03;
+  backdrop.core.scale.setScalar(corePulse);
+  const coreMaterial = backdrop.core.material as THREE.MeshBasicMaterial;
+  coreMaterial.opacity = effectOpacity * (0.08 + Math.abs(Math.sin(time * 1.25)) * 0.03);
+
+  backdrop.rings.forEach((ring, index) => {
+    const baseScale = ring.userData.baseScale as number;
+    const scalePulse = 1 + Math.sin(time * (0.55 + index * 0.025) + index * 0.35) * 0.015;
+    ring.rotation.z = 0;
+    ring.scale.setScalar(baseScale * scalePulse);
+    const material = ring.material as THREE.MeshBasicMaterial;
+    material.opacity = effectOpacity * (0.03 + (backdrop.rings.length - index) * 0.01 + Math.abs(Math.sin(time * 0.8 + index)) * 0.01);
+  });
+
+  backdrop.spiralArms.forEach((arm, index) => {
+    const baseRotation = arm.userData.baseRotation as number;
+    const rotationSpeed = arm.userData.rotationSpeed as number;
+    arm.rotation.z = baseRotation + time * rotationSpeed;
+    const material = arm.material as THREE.MeshBasicMaterial;
+    material.opacity = effectOpacity * (0.06 + (backdrop.spiralArms.length - index) * 0.012 + Math.abs(Math.sin(time * 0.9 + index)) * 0.025);
+  });
+
+  backdrop.particles.rotation.z = time * 0.02;
+  backdrop.particles.rotation.y = 0;
+  const particleMaterial = backdrop.particles.material as THREE.PointsMaterial;
+  particleMaterial.opacity = effectOpacity * (0.28 + Math.abs(Math.sin(time * 0.7)) * 0.08);
+}
+
 function ensurePlayerVisual(
   context: SceneContext,
   playerId: PlayerId,
@@ -278,12 +324,19 @@ export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): vo
   updateCombatVfxRuntime(context.combatVfxRuntime, snapshot.gameTime);
   context.lastRenderSnapshot = snapshot;
 
-  context.gravityWell.rotation.y = snapshot.gameTime * 0.8;
-  context.ring.rotation.z = snapshot.gameTime * 0.65;
+  context.gravityWell.rotation.z = 0;
+  context.ring.rotation.z = 0;
+  const ringMaterial = context.ring.material as THREE.MeshBasicMaterial;
+  ringMaterial.opacity = 0.22 + Math.abs(Math.sin(snapshot.gameTime * 0.6)) * 0.05;
+  const starsMaterial = context.stars.material as THREE.PointsMaterial;
+  const launchActive = snapshot.players.P1.helpless > 0 || snapshot.players.P2.helpless > 0;
+  starsMaterial.size = launchActive ? 0.64 : 0.52;
+  starsMaterial.opacity = launchActive ? 1 : 0.88;
 
   updatePlayerMeshes(context, snapshot);
   updatePlayerIndicators(context, snapshot);
   updateProjectileMeshes(context, snapshot);
+  updateWormholeBackdrop(context, snapshot);
   updateCamera(context, snapshot);
 
   context.renderer.render(context.scene, context.camera);
@@ -324,6 +377,20 @@ export function cleanupRender(context: SceneContext): void {
   context.scene.remove(context.stageBackgroundModel);
   context.stageBackgroundModel.geometry.dispose();
   (context.stageBackgroundModel.material as THREE.Material).dispose();
+
+  context.scene.remove(context.wormholeBackdrop.group);
+  context.wormholeBackdrop.core.geometry.dispose();
+  (context.wormholeBackdrop.core.material as THREE.Material).dispose();
+  for (const ring of context.wormholeBackdrop.rings) {
+    ring.geometry.dispose();
+    (ring.material as THREE.Material).dispose();
+  }
+  for (const arm of context.wormholeBackdrop.spiralArms) {
+    arm.geometry.dispose();
+    (arm.material as THREE.Material).dispose();
+  }
+  context.wormholeBackdrop.particles.geometry.dispose();
+  (context.wormholeBackdrop.particles.material as THREE.Material).dispose();
 
   context.scene.remove(context.stars);
   context.stars.geometry.dispose();

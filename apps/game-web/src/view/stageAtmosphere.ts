@@ -29,6 +29,12 @@ export interface StageAtmosphereTokens {
   backgroundModelId: string | null;
   backgroundModelTint: string;
   backgroundModelOpacity: number;
+  backgroundEffectId: string | null;
+  backgroundEffectTint: string;
+  backgroundEffectSecondaryTint: string;
+  backgroundEffectOpacity: number;
+  backgroundEffectSpeed: number;
+  backgroundEffectScale: number;
 }
 
 export interface StageAtmospherePreset {
@@ -71,6 +77,12 @@ const DEFAULT_STAGE_ATMOSPHERE_TOKENS: StageAtmosphereTokens = {
   backgroundModelId: null,
   backgroundModelTint: '#9fb7ff',
   backgroundModelOpacity: 0.5,
+  backgroundEffectId: null,
+  backgroundEffectTint: '#8fb7ff',
+  backgroundEffectSecondaryTint: '#7f66ff',
+  backgroundEffectOpacity: 0.6,
+  backgroundEffectSpeed: 1,
+  backgroundEffectScale: 1,
 };
 
 function mergeTokens(overrides: StageAtmospherePresetTokenOverrides): StageAtmosphereTokens {

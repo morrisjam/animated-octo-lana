@@ -145,8 +145,7 @@ const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
 const onlineRuntimeEnabled = platform.kind === 'web' && runtimeConfig.features.onlineMatchRuntimeEnabled;
 const publicOnlineEntryEnabled = platform.kind === 'web'
-  && runtimeConfig.features.onlineEnabled
-  && runtimeConfig.features.onlineMatchRuntimeEnabled;
+  && runtimeConfig.features.onlineEnabled;
 const DEFAULT_ARCADE_MENU_SETTINGS: ArcadeMenuSettings = {
   continues: 2,
   retryEnabled: true,
@@ -664,7 +663,13 @@ const diagnosticsBuildId = (
   || 'dev-local'
 );
 const diagnosticsRulesetVersion = activeRulesetVersion;
-const diagnosticsEnabled = platform.kind === 'web' && diagnosticsQueryOverride === '1';
+const diagnosticsEnabled = platform.kind === 'web' && (
+  diagnosticsQueryOverride === '1'
+  || (
+    diagnosticsQueryOverride !== '0'
+    && runtimeConfig.features.onlineDiagnosticsEnabled
+  )
+);
 let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   ticketId: null,
   sessionId: null,
@@ -1787,7 +1792,15 @@ function formatAccountSummary(session: PlatformAuthSession): string {
 }
 
 function getEnabledModes(): GameMode[] {
-  return ['endless', 'best_of_3', 'arcade', 'training', 'cpu_vs_cpu'];
+  const enabledModes: GameMode[] = ['endless', 'best_of_3'];
+  if (runtimeConfig.features.arcadeModeEnabled) {
+    enabledModes.push('arcade');
+  }
+  if (runtimeConfig.features.trainingModeEnabled) {
+    enabledModes.push('training');
+  }
+  enabledModes.push('cpu_vs_cpu');
+  return enabledModes;
 }
 
 function getRulesForMode(mode: GameMode): { allowDunkWin: boolean } {

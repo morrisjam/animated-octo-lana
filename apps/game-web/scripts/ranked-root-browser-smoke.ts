@@ -176,6 +176,8 @@ async function createBrowserClient(
 ): Promise<BrowserClient> {
   let browser: Browser | null = null;
   let context: BrowserContext | null = null;
+  const consoleMessages: string[] = [];
+  const pageErrors: string[] = [];
   try {
     browser = await chromium.launch({
       executablePath,
@@ -184,21 +186,24 @@ async function createBrowserClient(
     });
     context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
     const page = await context.newPage();
-    const consoleMessages: string[] = [];
-    const pageErrors: string[] = [];
     page.on('console', (message) => recordConsoleMessage(consoleMessages, message));
     page.on('pageerror', (error) => pageErrors.push(error.stack ?? error.message));
     await page.goto(rootUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     await page.waitForFunction(
       () => Boolean(window.__gravityWellLocalRankedRootSmoke),
       undefined,
-      { timeout: Math.min(timeoutMs, 15_000) },
+      { timeout: Math.min(timeoutMs, 30_000) },
     );
     return { browser, context, page, consoleMessages, pageErrors };
   } catch (error) {
     await context?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
-    throw error;
+    const reason = error instanceof Error ? error.stack ?? error.message : String(error);
+    const diagnostics = [
+      consoleMessages.length > 0 ? `Console:\n${consoleMessages.join('\n')}` : null,
+      pageErrors.length > 0 ? `Page errors:\n${pageErrors.join('\n')}` : null,
+    ].filter((entry): entry is string => entry !== null);
+    throw new Error([reason, ...diagnostics].join('\n'));
   }
 }
 
@@ -731,11 +736,25 @@ async function run(): Promise<void> {
 
   try {
     await assertSafeSmokeTarget(apiBaseUrl, 'Ranked root browser smoke');
-    const createdClients = await Promise.all([
+    const startupResults = await Promise.allSettled([
       createBrowserClient(executablePath, rootUrl.toString(), timeoutMs),
       createBrowserClient(executablePath, rootUrl.toString(), timeoutMs),
     ]);
-    clients.push(...createdClients);
+    for (const result of startupResults) {
+      if (result.status === 'fulfilled') {
+        clients.push(result.value);
+      }
+    }
+    const startupFailures = startupResults.flatMap((result, index) => (
+      result.status === 'rejected'
+        ? [`client ${index + 1}: ${result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason)}`]
+        : []
+    ));
+    if (startupFailures.length > 0) {
+      throw new Error(`Ranked root browser startup failed:\n${startupFailures.join('\n')}`);
+    }
 
     await waitForSnapshots(
       clients,

@@ -26,5 +26,9 @@ test('continues to coordinate stateful matchmaking and ranked result routes', ()
     true,
   );
   assert.equal(requestUsesMatchmakingRuntime('/ranked/results/session-id'), true);
+  assert.equal(requestUsesMatchmakingRuntime('/replays/ingest'), true);
+  assert.equal(requestUsesMatchmakingRuntime('/replays/ingest?source=match-client'), true);
+  assert.equal(requestUsesMatchmakingRuntime('/replays/ingest/'), true);
+  assert.equal(requestUsesMatchmakingRuntime('/replays/search'), false);
   assert.equal(requestUsesMatchmakingRuntime('/health'), false);
 });

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +109,7 @@ const ADMIN_KEY = 'local-multi-instance-admin-key-0123456789';
 const BUILD_VERSION = 'prototype-2026.02';
 const RULESET_VERSION = 'prototype-2026.02';
 const BALANCE_PROFILE_ID = 'default';
+const AUTH_RATE_LIMIT_SECRET = randomBytes(32).toString('hex');
 const accessTokenByAccountId = new Map<string, string>();
 
 function parsePort(value: string | undefined, fallback: number, label: string): number {
@@ -198,6 +200,7 @@ async function startApi(
         PORT: String(port),
         NODE_ENV: 'test',
         AUTH_SESSION_SECRET: process.env.AUTH_SESSION_SECRET ?? AUTH_SECRET,
+        AUTH_RATE_LIMIT_SECRET,
         MATCHMAKING_ACCESS_MODE: 'open',
         MATCHMAKING_RECONNECT_GRACE_SECONDS: '60',
         MATCHMAKING_SNAPSHOT_INTERVAL_MS: '250',

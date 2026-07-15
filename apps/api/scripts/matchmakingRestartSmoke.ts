@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -66,6 +67,7 @@ const SMOKE_BUILD_VERSION = 'prototype-2026.02';
 const SMOKE_RULESET_VERSION = 'prototype-2026.02';
 const SMOKE_BALANCE_PROFILE_ID = 'default';
 const AUTH_SECRET = 'local-restart-smoke-auth-secret-0123456789-abcdefghijklmnopqrstuvwxyz';
+const AUTH_RATE_LIMIT_SECRET = randomBytes(32).toString('hex');
 const accessTokenByAccountId = new Map<string, string>();
 
 function parsePort(value: string | undefined): number {
@@ -143,6 +145,7 @@ async function startApi(
         PORT: String(port),
         NODE_ENV: 'test',
         AUTH_SESSION_SECRET: process.env.AUTH_SESSION_SECRET ?? AUTH_SECRET,
+        AUTH_RATE_LIMIT_SECRET,
         MATCHMAKING_ACCESS_MODE: 'open',
         MATCHMAKING_RECONNECT_GRACE_SECONDS:
           process.env.MATCHMAKING_RECONNECT_GRACE_SECONDS ?? '60',

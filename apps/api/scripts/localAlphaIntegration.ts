@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
@@ -16,6 +16,11 @@ const artifactDir = path.resolve(repositoryRoot, 'apps/api/build-artifacts/local
 const latestReportPath = path.join(artifactDir, 'report.json');
 const MAX_CAPTURED_LOG_BYTES = 1_000_000;
 const LOCAL_COTURN_IMAGE = 'coturn/coturn:4.6.3';
+const LOCAL_RANKED_ROOT_SMOKE_BUILD_SCHEMA = 'gw.local-ranked-root-smoke-build.v1';
+const localRankedRootSmokeBuildPath = path.resolve(
+  repositoryRoot,
+  'apps/game-web/dist/local-ranked-root-smoke-build.json',
+);
 
 interface StepResult {
   name: string;
@@ -62,6 +67,33 @@ function parsePort(name: string, fallback: number): number {
     throw new Error(`${name} must be an integer between 1024 and 65535.`);
   }
   return parsed;
+}
+
+function assertLocalRankedRootSmokeBuild(expectedApiBaseUrl: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(localRankedRootSmokeBuildPath, 'utf8'));
+  } catch {
+    throw new Error(
+      'The production bundle is not an attested local ranked-root smoke build. '
+      + 'Rerun without LOCAL_ALPHA_SKIP_BUILD=1.',
+    );
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('The local ranked-root smoke build attestation is malformed.');
+  }
+  const attestation = parsed as Record<string, unknown>;
+  if (
+    attestation.schemaVersion !== LOCAL_RANKED_ROOT_SMOKE_BUILD_SCHEMA
+    || attestation.enabled !== true
+    || attestation.buildId !== 'local-ranked-root-smoke'
+    || attestation.apiBaseUrl !== expectedApiBaseUrl
+  ) {
+    throw new Error(
+      `The local ranked-root smoke build attestation does not match ${expectedApiBaseUrl}. `
+      + 'Rerun without LOCAL_ALPHA_SKIP_BUILD=1.',
+    );
+  }
 }
 
 function appendCapturedLog(current: string, chunk: Buffer | string): string {
@@ -506,6 +538,9 @@ async function run(): Promise<void> {
         },
       ));
     }
+    await recordStep(steps, 'verify ranked root smoke build attestation', async () => {
+      assertLocalRankedRootSmokeBuild(apiBaseUrl);
+    });
 
     startedPostgres = await recordStep(
       steps,
@@ -638,7 +673,7 @@ async function run(): Promise<void> {
           API_BASE_URL: apiBaseUrl,
           AUTHORITATIVE_FORFEIT_SMOKE_TIMEOUT_MS: '30000',
         },
-        timeoutMs: 30_000,
+        timeoutMs: 120_000,
       },
     ));
     await recordStep(steps, options.withCoturn

@@ -1,5 +1,6 @@
 import process from 'node:process';
 import { Pool } from 'pg';
+import { deriveLivenessResolutionTimeoutMs } from '../src/ops/authoritativeForfeitSmokeTiming';
 import { assertSafeSmokeTarget } from './smokeTargetGuard';
 
 const BUILD_VERSION = 'prototype-2026.02';
@@ -19,6 +20,7 @@ interface QueueTicketResponse {
     sessionToken: string;
     heartbeatIntervalSeconds: number;
     heartbeatTimeoutSeconds: number;
+    reconnectGraceSeconds: number;
   };
 }
 
@@ -349,7 +351,10 @@ async function waitForDurableResult(
 
 async function run(): Promise<void> {
   const baseUrl = String(process.env.API_BASE_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
-  const timeoutMs = Math.max(2_000, Number(process.env.AUTHORITATIVE_FORFEIT_SMOKE_TIMEOUT_MS ?? '10000'));
+  const configuredMinimumTimeoutMs = Math.max(
+    2_000,
+    Number(process.env.AUTHORITATIVE_FORFEIT_SMOKE_TIMEOUT_MS ?? '10000'),
+  );
   await assertSafeSmokeTarget(baseUrl, 'Ranked authoritative-forfeit smoke');
   const p1 = await createAccount(baseUrl);
   const p2 = await createAccount(baseUrl);
@@ -368,6 +373,7 @@ async function run(): Promise<void> {
   if (
     p1Ticket.matchStart.heartbeatIntervalSeconds < 1
     || p1Ticket.matchStart.heartbeatTimeoutSeconds < p1Ticket.matchStart.heartbeatIntervalSeconds * 3
+    || p1Ticket.matchStart.reconnectGraceSeconds < 1
   ) {
     throw new Error('Match start did not publish a safe heartbeat schedule.');
   }
@@ -393,6 +399,13 @@ async function run(): Promise<void> {
   const forfeitTrigger = process.env.AUTHORITATIVE_FORFEIT_TRIGGER === 'heartbeat_timeout'
     ? 'heartbeat_timeout'
     : 'explicit_disconnect';
+  const forfeitResolutionTimeoutMs = deriveLivenessResolutionTimeoutMs({
+    configuredMinimumMs: configuredMinimumTimeoutMs,
+    heartbeatTimeoutSeconds: forfeitTrigger === 'heartbeat_timeout'
+      ? p1Ticket.matchStart.heartbeatTimeoutSeconds
+      : 0,
+    reconnectGraceSeconds: p1Ticket.matchStart.reconnectGraceSeconds,
+  });
   let session: SessionResponse;
   if (forfeitTrigger === 'heartbeat_timeout') {
     session = await waitForSilentPeerTimeout(
@@ -402,7 +415,7 @@ async function run(): Promise<void> {
       sessionId,
       p1Ticket.matchStart.sessionToken,
       p2Ticket.matchStart.sessionToken,
-      timeoutMs,
+      forfeitResolutionTimeoutMs,
     );
   } else {
     const firstDisconnect = await disconnect(baseUrl, p2, sessionId);
@@ -420,7 +433,7 @@ async function run(): Promise<void> {
       throw new Error('Repeated disconnect extended the reconnect grace deadline.');
     }
 
-    const deadlineAt = Date.now() + timeoutMs;
+    const deadlineAt = Date.now() + forfeitResolutionTimeoutMs;
     session = repeatedDisconnect;
     while (session.status !== 'resolved' && Date.now() < deadlineAt) {
       await sleep(200);
@@ -532,11 +545,16 @@ async function run(): Promise<void> {
   if (noContestP2Ticket.matchStart.sessionId !== noContestSessionId) {
     throw new Error('No-contest smoke peers disagree on session id.');
   }
+  const noContestResolutionTimeoutMs = deriveLivenessResolutionTimeoutMs({
+    configuredMinimumMs: configuredMinimumTimeoutMs,
+    heartbeatTimeoutSeconds: noContestP1Ticket.matchStart.heartbeatTimeoutSeconds,
+    reconnectGraceSeconds: noContestP1Ticket.matchStart.reconnectGraceSeconds,
+  });
   const noContestSession = await waitForDoubleSilence(
     baseUrl,
     noContestP1,
     noContestSessionId,
-    timeoutMs,
+    noContestResolutionTimeoutMs,
   );
   if (
     noContestSession.status !== 'resolved'
@@ -550,7 +568,7 @@ async function run(): Promise<void> {
     noContestP1,
     noContestSessionId,
     'no_contest',
-    timeoutMs,
+    configuredMinimumTimeoutMs,
   );
   const noContestOutsiderRead = await readResult(baseUrl, outsider, noContestSessionId);
   if (
@@ -591,6 +609,11 @@ async function run(): Promise<void> {
     forfeitingAccountId: p2.id,
     reason: session.resolvedReason,
     forfeitTrigger,
+    timeoutBudgetMs: {
+      configuredMinimum: configuredMinimumTimeoutMs,
+      forfeitResolution: forfeitResolutionTimeoutMs,
+      noContestResolution: noContestResolutionTimeoutMs,
+    },
     heartbeat: {
       intervalSeconds: p1Ticket.matchStart.heartbeatIntervalSeconds,
       timeoutSeconds: p1Ticket.matchStart.heartbeatTimeoutSeconds,

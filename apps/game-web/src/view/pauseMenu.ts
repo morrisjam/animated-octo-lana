@@ -17,6 +17,10 @@ import {
   type AiControllerRoles,
 } from '../sim/aiControllerRoles';
 import type { BalanceProfile } from '../sim/balanceProfiles';
+import type {
+  BalanceCandidatePreset,
+  BalanceCandidatePresetId,
+} from '../sim/balanceCandidatePresets';
 import {
   resolveBalanceScenario,
   type BalanceScenario,
@@ -101,6 +105,7 @@ export interface PauseMenuOptions {
   ): void;
   onRestartTraining?(): void;
   balanceProfiles?: readonly BalanceProfile[];
+  balanceCandidatePresets?: readonly BalanceCandidatePreset[];
   balanceScenarios?: readonly BalanceScenario[];
   balanceTestRecipes?: readonly BalanceTestRecipe[];
   getBalanceProfileId?(): string;
@@ -108,6 +113,7 @@ export interface PauseMenuOptions {
   getActiveBalanceTuning?(): GameTuning;
   getActiveBalanceTuningFingerprint?(): string;
   onApplyBalanceProfile?(profileId: string): void;
+  onApplyBalanceCandidatePreset?(presetId: BalanceCandidatePresetId): void;
   getBalanceTelemetry?(): MatchTelemetrySummary;
   getAiDecisionTelemetry?(): AiDecisionTelemetrySummary;
   getBalanceScenarioIdentity?(): BalanceLabScenarioIdentity;
@@ -957,6 +963,54 @@ export class PauseMenu {
     tab.appendChild(testRecipeDescription);
     this.balanceTestRecipeSelect = testRecipeSelect;
     this.balanceTestRecipeDescription = testRecipeDescription;
+
+    const candidatePresets = this.options.balanceCandidatePresets ?? [];
+    if (candidatePresets.length > 0 && this.options.onApplyBalanceCandidatePreset) {
+      const candidateLibrary = document.createElement('section');
+      candidateLibrary.className = 'balance-candidate-library';
+      const candidateHeading = document.createElement('h4');
+      candidateHeading.textContent = 'Local candidate library';
+      const candidateIntro = document.createElement('p');
+      candidateIntro.textContent = 'Stage an evidence-backed experiment without changing package defaults, Arcade, Online, or Ranked.';
+      candidateLibrary.append(candidateHeading, candidateIntro);
+
+      for (const preset of candidatePresets) {
+        const card = document.createElement('article');
+        card.className = 'balance-candidate-card';
+        card.dataset.balanceCandidatePresetId = preset.id;
+        const title = document.createElement('strong');
+        title.textContent = preset.label;
+        const description = document.createElement('p');
+        description.textContent = preset.description;
+        const evidence = document.createElement('p');
+        evidence.className = 'balance-candidate-evidence';
+        evidence.textContent = preset.evidence;
+        const rules = document.createElement('ul');
+        for (const rule of preset.rules) {
+          const item = document.createElement('li');
+          item.textContent = rule.label;
+          rules.appendChild(item);
+        }
+        const question = document.createElement('p');
+        question.className = 'balance-candidate-question';
+        question.textContent = preset.designerQuestion;
+        const applyButton = document.createElement('button');
+        applyButton.type = 'button';
+        applyButton.className = 'pause-action balance-candidate-apply';
+        applyButton.textContent = `Stage ${preset.label}`;
+        applyButton.addEventListener('click', () => {
+          this.options.onApplyBalanceCandidatePreset?.(preset.id);
+          this.syncInputsFromTuning();
+          this.syncBalanceLab();
+          if (this.copyStatus) {
+            this.copyStatus.textContent = `${preset.label} staged locally. Apply + Restart to test it from frame zero.`;
+          }
+        });
+        card.append(title, description, evidence, rules, question, applyButton);
+        candidateLibrary.appendChild(card);
+      }
+      tab.appendChild(candidateLibrary);
+    }
 
     const profileRow = document.createElement('label');
     profileRow.className = 'balance-lab-profile';

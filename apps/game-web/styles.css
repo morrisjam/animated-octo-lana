@@ -1650,6 +1650,75 @@ html, body {
   color: #d6b987;
 }
 
+.balance-candidate-library {
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(255, 190, 96, 0.26);
+  border-radius: 11px;
+  padding: 11px 12px;
+  background:
+    linear-gradient(120deg, rgba(116, 67, 24, 0.22), transparent 62%),
+    rgba(16, 12, 22, 0.78);
+}
+
+.balance-candidate-library > h4,
+.balance-candidate-library > p,
+.balance-candidate-card > p {
+  margin: 0;
+}
+
+.balance-candidate-library > h4 {
+  color: #ffe2ad;
+  font-size: 12px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.balance-candidate-library > p {
+  color: #c5a879;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.balance-candidate-card {
+  display: grid;
+  gap: 7px;
+  border: 1px solid rgba(255, 205, 127, 0.18);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(5, 10, 22, 0.68);
+}
+
+.balance-candidate-card > strong {
+  color: #fff2d7;
+  font-size: 12px;
+}
+
+.balance-candidate-card > p,
+.balance-candidate-card > ul {
+  color: #aebfd0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.balance-candidate-card > ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.balance-candidate-card .balance-candidate-evidence {
+  color: #83d8c9;
+}
+
+.balance-candidate-card .balance-candidate-question {
+  color: #e0c895;
+  font-style: italic;
+}
+
+.balance-candidate-apply {
+  justify-self: start;
+}
+
 .balance-controller-roles {
   display: grid;
   gap: 9px;

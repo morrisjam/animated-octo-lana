@@ -53,7 +53,7 @@ Balance Lab can replace either local AI-vs-AI controller with a deterministic te
 
 The adaptive controller still advances its deterministic state underneath a scripted role, so switching roles does not introduce an unrelated random-stream implementation. The selected per-side roles are frozen at round reset, shown in decision traces and replay labels, and included in scenario and telemetry fingerprints. The feature is local-only and does not enter arcade, matchmaking, rollback, online, or ranked input generation.
 
-The Balance Lab **Gameplay probe** selector packages common role/scenario combinations around explicit questions: full-loop rhythm, offense into a passive target, commitment into defense, pursuit against escape, post-clash reset, and zero-fuel finish. A direct scenario or role edit becomes a Custom setup. This keeps a manual test repeatable without turning its result into an automatic class score.
+The Balance Lab **Gameplay probe** selector packages common role/scenario combinations around explicit questions: full-loop rhythm, offense into a passive target, commitment into defense, launch-break agency, pursuit against escape, post-clash reset, AI or human post-control agency, and zero-fuel finish. A direct scenario or role edit becomes a Custom setup. This keeps a manual test repeatable without turning its result into an automatic class score.
 
 Run the same seed matrix locally without changing source:
 

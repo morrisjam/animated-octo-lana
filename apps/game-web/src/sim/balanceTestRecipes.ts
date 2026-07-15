@@ -15,6 +15,7 @@ export const BALANCE_TEST_RECIPE_IDS = [
   'open_ai_mirror',
   'offense_vs_passive',
   'commitment_vs_defense',
+  'launch_break_agency',
   'pursuit_vs_escape',
   'post_clash_reset',
   'post_control_agency',
@@ -63,6 +64,15 @@ export const BALANCE_TEST_RECIPES: readonly BalanceTestRecipe[] = [
     designerQuestion: 'Are commitments readable and punishable, and do defensive successes create a meaningful reset instead of immediate contact?',
     suggestedDurationSeconds: 25,
     scenarioId: 'close_pressure',
+    roles: { P1: 'adaptive', P2: 'defensive' },
+  },
+  {
+    id: 'launch_break_agency',
+    label: 'Launch-break agency',
+    description: 'Start defensive P2 already launched with one break available while adaptive P1 is committed to the chase.',
+    designerQuestion: 'Does spending the launch break create one readable defensive decision before P1 can re-establish pressure?',
+    suggestedDurationSeconds: 20,
+    scenarioId: 'launch_break_decision',
     roles: { P1: 'adaptive', P2: 'defensive' },
   },
   {

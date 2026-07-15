@@ -115,6 +115,10 @@ import {
   resolveBalanceProfile,
 } from './sim/balanceProfiles';
 import {
+  applyBalanceCandidatePreset,
+  BALANCE_CANDIDATE_PRESETS,
+} from './sim/balanceCandidatePresets';
+import {
   evaluateBalanceLabSampleStop,
   fingerprintBalanceTuning,
   isLocalAiTuningMode,
@@ -1015,6 +1019,7 @@ const pauseMenu = createLazyPauseMenu({
     restartTrainingRound();
   },
   balanceProfiles: BALANCE_PROFILES,
+  balanceCandidatePresets: BALANCE_CANDIDATE_PRESETS,
   balanceScenarios: BALANCE_SCENARIOS,
   balanceTestRecipes: BALANCE_TEST_RECIPES,
   getBalanceProfileId: () => localBalanceProfileId,
@@ -1026,6 +1031,33 @@ const pauseMenu = createLazyPauseMenu({
     localBalanceTuningDraft = { ...profile.tuning };
     localBalanceProfileId = profile.id;
     balanceTuningDirty = fingerprintBalanceTuning(localBalanceTuningDraft) !== roundTuningFingerprint;
+  },
+  onApplyBalanceCandidatePreset: (presetId) => {
+    const applied = applyBalanceCandidatePreset(
+      presetId,
+      localBalanceTuningDraft,
+      localCharacterBalanceOverrides,
+      localAiBehaviorTuning,
+    );
+    localBalanceTuningDraft = applied.tuning;
+    localCharacterBalanceOverrides = applied.characterBalanceOverrides;
+    localAiBehaviorTuning = applied.aiBehaviorTuning;
+    localBalanceProfileId = 'custom_local';
+    balanceTuningDirty = fingerprintBalanceTuning(localBalanceTuningDraft) !== roundTuningFingerprint;
+    const eligibleCharacterOverrides = selectLocalCharacterBalanceOverrides(
+      selectedMode,
+      onlineMatchContext !== null,
+      localCharacterBalanceOverrides,
+    );
+    characterBalanceDirty = fingerprintCharacterBalanceOverrides(eligibleCharacterOverrides)
+      !== roundCharacterBalanceFingerprint;
+    const eligibleAiBehavior = selectLocalAiBehaviorTuning(
+      selectedMode,
+      onlineMatchContext !== null,
+      localAiBehaviorTuning,
+    );
+    aiBehaviorDirty = fingerprintAiBehaviorTuning(eligibleAiBehavior)
+      !== roundAiBehaviorFingerprint;
   },
   getBalanceTelemetry: () => matchTelemetry.toSummary(),
   getAiDecisionTelemetry: () => aiDecisionTelemetry.toSummary(),

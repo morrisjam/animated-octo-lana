@@ -15,6 +15,7 @@ const EXPECTED_RECIPE_IDS: BalanceTestRecipeId[] = [
   'open_ai_mirror',
   'offense_vs_passive',
   'commitment_vs_defense',
+  'launch_break_agency',
   'pursuit_vs_escape',
   'post_clash_reset',
   'post_control_agency',

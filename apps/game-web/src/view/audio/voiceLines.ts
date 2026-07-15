@@ -112,7 +112,11 @@ function resolveVoiceLinesByProfile(profileId: string, locale: string): VoiceLin
   return pack[resolvedLocale] ?? [];
 }
 
-function getVoiceProfileId(characterId: CharacterId): string {
+export function hasVoiceProfile(profileId: string): boolean {
+  return Boolean(VOICE_PACKS[profileId]);
+}
+
+function getVoiceProfileId(characterId: CharacterId): string | null {
   return CHARACTER_BY_ID[characterId].audio.voiceProfileId;
 }
 
@@ -156,7 +160,7 @@ export function createVoiceCalloutSystem(options: VoiceCalloutSystemOptions): Vo
     },
     trigger(callout: VoiceCalloutTrigger): VoiceCalloutResult | null {
       const voiceProfileId = getVoiceProfileId(callout.characterId);
-      const candidateLines = resolveVoiceLinesByProfile(voiceProfileId, locale)
+      const candidateLines = (voiceProfileId ? resolveVoiceLinesByProfile(voiceProfileId, locale) : [])
         .filter((line) => line.event === callout.event);
       if (candidateLines.length === 0) {
         return null;

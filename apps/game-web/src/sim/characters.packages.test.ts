@@ -2,14 +2,14 @@ import { describe, expect, test } from 'vitest';
 import {
   CHARACTER_BY_ID,
   CHARACTER_IDS,
+  CHARACTER_PACKAGE_VERSION_BY_ID,
+  CHARACTER_REGISTRY_FINGERPRINT,
   DEFAULT_CHARACTER_LOADOUT,
   isCharacterId,
 } from './characters';
 import { computeStateChecksum } from './checksum';
 import { createInitialState, step } from './sim';
 import type { FrameInput } from './types';
-
-const CORE_CHARACTER_IDS = new Set(['vanguard', 'duelist', 'ace', 'warden']);
 
 function neutralInput(): FrameInput {
   return {
@@ -57,9 +57,15 @@ function scriptedInputForFrame(frame: number): FrameInput {
 
 describe('character package integration', () => {
   test('loads validated packaged character definitions into runtime registry', () => {
-    expect(CHARACTER_BY_ID.vanguard_pkg).toBeDefined();
-    expect(CHARACTER_BY_ID.vanguard_pkg.displayName).toBe('Vanguard');
-    expect(CHARACTER_IDS.includes('vanguard_pkg')).toBe(true);
+    expect(CHARACTER_IDS.slice(0, 4)).toEqual(['vanguard', 'duelist', 'ace', 'warden']);
+    expect(CHARACTER_BY_ID.vanguard.package?.version).toBe('0.3.3');
+    expect(CHARACTER_BY_ID.duelist.package?.version).toBe('0.3.2');
+    expect(CHARACTER_BY_ID.vanguard.moves.dunk.startupPursuitSpeed).toBe(70);
+    expect(CHARACTER_BY_ID.vanguard.moves.special.behaviorId).toBe('special.block_guard.v1');
+    expect(CHARACTER_BY_ID.duelist.moves.special.behaviorId).toBe('special.movement_dash.v1');
+    expect(CHARACTER_BY_ID.vanguard_pkg).toBeUndefined();
+    expect(CHARACTER_PACKAGE_VERSION_BY_ID.vanguard).toBe('0.3.3');
+    expect(CHARACTER_REGISTRY_FINGERPRINT).toMatch(/^gw\.character-registry\.v1:[0-9a-f]{8}$/);
   });
 
   test('default loadout always points at valid registered characters', () => {
@@ -68,7 +74,7 @@ describe('character package integration', () => {
   });
 
   test('packaged characters pass deterministic checksum smoke replay', () => {
-    const packagedCharacterIds = CHARACTER_IDS.filter((id) => !CORE_CHARACTER_IDS.has(id));
+    const packagedCharacterIds = CHARACTER_IDS.filter((id) => Boolean(CHARACTER_BY_ID[id].package));
     expect(packagedCharacterIds.length).toBeGreaterThan(0);
 
     for (const characterId of packagedCharacterIds) {
@@ -96,7 +102,7 @@ describe('character package integration', () => {
   });
 
   test('packaged characters stay within frame and balance QA bounds', () => {
-    const packagedCharacterIds = CHARACTER_IDS.filter((id) => !CORE_CHARACTER_IDS.has(id));
+    const packagedCharacterIds = CHARACTER_IDS.filter((id) => Boolean(CHARACTER_BY_ID[id].package));
     expect(packagedCharacterIds.length).toBeGreaterThan(0);
 
     for (const characterId of packagedCharacterIds) {
@@ -115,6 +121,10 @@ describe('character package integration', () => {
       expect(character.moves.dunk.activeFrames).toBeGreaterThanOrEqual(1);
       expect(character.moves.dunk.activeFrames).toBeLessThanOrEqual(24);
       expect(character.moves.dunk.recoveryOnWhiffFrames).toBeGreaterThanOrEqual(character.moves.dunk.recoveryOnHitFrames);
+      expect(character.moves.dunk.startupPursuitSpeed).toBeGreaterThanOrEqual(0);
+      expect(character.moves.dunk.startupPursuitSpeed).toBeLessThanOrEqual(200);
+      expect(character.moves.dunk.startupTracking).toBeGreaterThanOrEqual(0);
+      expect(character.moves.dunk.startupTracking).toBeLessThanOrEqual(1);
       expect(character.moves.special.fuelCost).toBeGreaterThanOrEqual(0);
       expect(character.moves.special.fuelCost).toBeLessThanOrEqual(30);
       expect(character.moves.special.timing.cooldownFrames).toBeGreaterThanOrEqual(0);

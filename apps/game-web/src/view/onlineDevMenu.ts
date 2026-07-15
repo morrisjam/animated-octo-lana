@@ -15,9 +15,14 @@ export interface OnlineDiagnosticsUpdate {
   participantAccountIds: string[];
 }
 
-interface OnlineDevMenuOptions {
+export interface OnlineDevMenuOptions {
   apiBase: string;
+  buildVersion: string;
+  rulesetVersion: string;
+  balanceProfileId: string;
+  getCharacterId(): string;
   getAccountId(): string | null;
+  getAccessToken?(): string | null;
   onOpenReplayPayload(options: { replayId: string; payload: unknown }): Promise<void> | void;
   onDiagnosticsUpdate?(update: OnlineDiagnosticsUpdate): void;
   onClose(): void;
@@ -511,7 +516,9 @@ export class OnlineDevMenu {
     web: null,
     steam: null,
   };
-  private readonly buildVersion = '0.1.0-web';
+  private get buildVersion(): string {
+    return this.options.buildVersion;
+  }
 
   private readonly keydownHandler = (event: KeyboardEvent): void => {
     if (this.root.hidden) {
@@ -2505,9 +2512,13 @@ export class OnlineDevMenu {
       throw new Error('Missing VITE_MATCHMAKING_API_BASE or VITE_PROFILE_API_BASE for Online Dev API panel.');
     }
 
-    const headers: Record<string, string> = {
-      'x-account-id': accountId,
-    };
+    const headers: Record<string, string> = {};
+    const accessToken = this.options.getAccessToken?.() ?? null;
+    if (accessToken) {
+      headers.authorization = `Bearer ${accessToken}`;
+    } else {
+      headers['x-account-id'] = accountId;
+    }
     let payload: string | undefined;
     if (body !== undefined) {
       headers['content-type'] = 'application/json';
@@ -2559,7 +2570,10 @@ export class OnlineDevMenu {
           queueType,
           regionPreferences,
           buildVersion: this.buildVersion,
+          rulesetVersion: this.options.rulesetVersion,
+          balanceProfileId: this.options.balanceProfileId,
           platform: 'web',
+          characterId: this.options.getCharacterId(),
         },
       );
       this.ticket = joined;

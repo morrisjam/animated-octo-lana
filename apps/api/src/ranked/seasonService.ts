@@ -23,8 +23,20 @@ interface Queryable {
   query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number | null }>;
 }
 
+interface ReleasableQueryable extends Queryable {
+  release: () => void;
+}
+
+interface ConnectableQueryable extends Queryable {
+  connect: () => Promise<ReleasableQueryable>;
+}
+
 const DEFAULT_RANKED_SEASON_DURATION_DAYS = 90;
 const SEASON_LOCK_ID = 903_001;
+
+function isConnectableQueryable(db: Queryable): db is ConnectableQueryable {
+  return 'connect' in db && typeof (db as Partial<ConnectableQueryable>).connect === 'function';
+}
 
 function toIsoString(value: unknown): string {
   const date = value instanceof Date ? value : new Date(String(value ?? ''));
@@ -104,11 +116,94 @@ export async function createActiveSeason(db: Queryable, startAt: Date, durationD
     `
       INSERT INTO ranked_seasons(season_id, starts_at, ends_at, state, activated_at)
       VALUES ($1, $2, $3, 'active', NOW())
+      ON CONFLICT DO NOTHING
       RETURNING season_id, starts_at, ends_at, state, activated_at, archived_at
     `,
     [seasonId, startAt.toISOString(), endsAt.toISOString()],
   );
-  return mapSeasonRow(result.rows[0] as Record<string, unknown>);
+  if (result.rows.length > 0) {
+    return mapSeasonRow(result.rows[0] as Record<string, unknown>);
+  }
+
+  const concurrentSeason = await getActiveSeasonAt(db, startAt);
+  if (concurrentSeason) {
+    return concurrentSeason;
+  }
+  throw new Error(`Active ranked season creation conflicted without a season at ${startAt.toISOString()}.`);
+}
+
+async function createSeasonContainingNow(
+  db: Queryable,
+  now: Date,
+  durationDays: number,
+): Promise<RankedSeasonView> {
+  let current = await getActiveSeasonAt(db, now);
+  if (current) {
+    return current;
+  }
+
+  while (true) {
+    const transition = await archiveOldestExpiredSeason(db, now, durationDays);
+    if (transition.status === 'archived') {
+      current = await getActiveSeasonAt(db, now);
+      if (current) {
+        return current;
+      }
+      continue;
+    }
+
+    const latestSeason = await db.query(
+      `
+        SELECT season_id, starts_at, ends_at, state, activated_at, archived_at
+        FROM ranked_seasons
+        WHERE ends_at <= $1
+        ORDER BY ends_at DESC, starts_at DESC
+        LIMIT 1
+      `,
+      [now.toISOString()],
+    );
+    const nextStart = latestSeason.rowCount
+      ? new Date(toIsoString((latestSeason.rows[0] as Record<string, unknown>).ends_at))
+      : now;
+    const nextSeason = await createActiveSeason(db, nextStart, durationDays);
+    const nextEnd = new Date(nextSeason.endsAt);
+    if (nextEnd.getTime() <= nextStart.getTime()) {
+      throw new Error(`Ranked season catch-up did not advance beyond ${nextStart.toISOString()}.`);
+    }
+    if (nextEnd.getTime() > now.getTime()) {
+      return nextSeason;
+    }
+    // The next loop snapshots this elapsed window before advancing again.
+  }
+}
+
+async function createSeasonWithLock(
+  db: Queryable,
+  now: Date,
+  durationDays: number,
+): Promise<RankedSeasonView> {
+  if (!isConnectableQueryable(db)) {
+    await db.query('SELECT pg_advisory_xact_lock($1)', [SEASON_LOCK_ID]);
+    return createSeasonContainingNow(db, now, durationDays);
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [SEASON_LOCK_ID]);
+    const season = await createSeasonContainingNow(client, now, durationDays);
+    await client.query('COMMIT');
+    return season;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // Preserve the creation error if the connection also failed during rollback.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function ensureActiveSeason(db: Queryable, now: Date, durationDays: number): Promise<RankedSeasonView> {
@@ -116,34 +211,23 @@ export async function ensureActiveSeason(db: Queryable, now: Date, durationDays:
   if (current) {
     return current;
   }
-
-  const latestSeason = await db.query(
-    `
-      SELECT season_id, starts_at, ends_at, state, activated_at, archived_at
-      FROM ranked_seasons
-      ORDER BY ends_at DESC
-      LIMIT 1
-    `,
-  );
-  if (latestSeason.rowCount) {
-    const row = latestSeason.rows[0] as Record<string, unknown>;
-    const nextStart = new Date(toIsoString(row.ends_at));
-    return createActiveSeason(db, nextStart, durationDays);
-  }
-  return createActiveSeason(db, now, durationDays);
+  return createSeasonWithLock(db, now, durationDays);
 }
 
-export async function runRankedSeasonReset(
+export async function ensureActiveSeasonForSettlement(
+  db: Queryable,
+  now: Date,
+  durationDays: number,
+): Promise<RankedSeasonView> {
+  await db.query('SELECT pg_advisory_xact_lock($1)', [SEASON_LOCK_ID]);
+  return createSeasonContainingNow(db, now, durationDays);
+}
+
+async function archiveOldestExpiredSeason(
   db: Queryable,
   now: Date,
   durationDays: number,
 ): Promise<RankedSeasonResetResult> {
-  const lockResult = await db.query('SELECT pg_try_advisory_xact_lock($1) AS locked', [SEASON_LOCK_ID]);
-  const lockRow = lockResult.rows[0] as { locked?: boolean } | undefined;
-  if (!lockRow?.locked) {
-    return { status: 'locked' };
-  }
-
   const expired = await db.query(
     `
       SELECT season_id, starts_at, ends_at, state, activated_at, archived_at
@@ -212,26 +296,30 @@ export async function runRankedSeasonReset(
   const masterSnapshot = await db.query(
     `
       INSERT INTO ranked_master_season_standings(
-        season_id, account_id, rank_position, mr_points,
+        season_id, account_id, region, rank_position, mr_points,
         matches_played, wins, losses, draws, forfeits, entered_at, captured_at
       )
       SELECT
-        season_id,
-        account_id,
+        m.season_id,
+        m.account_id,
+        COALESCE(s.region, 'global') AS region,
         ROW_NUMBER() OVER (
-          ORDER BY mr_points DESC, wins DESC, matches_played DESC, account_id ASC
+          ORDER BY m.mr_points DESC, m.wins DESC, m.matches_played DESC, m.account_id ASC
         ) AS rank_position,
-        mr_points,
-        matches_played,
-        wins,
-        losses,
-        draws,
-        forfeits,
-        entered_at,
+        m.mr_points,
+        m.matches_played,
+        m.wins,
+        m.losses,
+        m.draws,
+        m.forfeits,
+        m.entered_at,
         NOW() AS captured_at
-      FROM ranked_master_ratings
-      WHERE season_id = $1
+      FROM ranked_master_ratings m
+      LEFT JOIN ranked_season_standings s
+        ON s.season_id = m.season_id AND s.account_id = m.account_id
+      WHERE m.season_id = $1
       ON CONFLICT (season_id, account_id) DO UPDATE SET
+        region = EXCLUDED.region,
         rank_position = EXCLUDED.rank_position,
         mr_points = EXCLUDED.mr_points,
         matches_played = EXCLUDED.matches_played,
@@ -283,4 +371,17 @@ export async function runRankedSeasonReset(
     snapshotCount,
     masterSnapshotCount,
   };
+}
+
+export async function runRankedSeasonReset(
+  db: Queryable,
+  now: Date,
+  durationDays: number,
+): Promise<RankedSeasonResetResult> {
+  const lockResult = await db.query('SELECT pg_try_advisory_xact_lock($1) AS locked', [SEASON_LOCK_ID]);
+  const lockRow = lockResult.rows[0] as { locked?: boolean } | undefined;
+  if (!lockRow?.locked) {
+    return { status: 'locked' };
+  }
+  return archiveOldestExpiredSeason(db, now, durationDays);
 }

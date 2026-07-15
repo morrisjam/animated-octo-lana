@@ -17,17 +17,29 @@ async function run(): Promise<void> {
   const pool = new Pool({ connectionString });
   try {
     const client = await pool.connect();
+    let transactionOpen = false;
     try {
       await client.query('BEGIN');
+      transactionOpen = true;
       const result = await runRankedSeasonReset(
         client,
         new Date(),
         resolveRankedSeasonDurationDays(process.env),
       );
+      if (result.status === 'locked') {
+        throw new Error('Ranked season reset is already in progress; retry this job.');
+      }
       await client.query('COMMIT');
+      transactionOpen = false;
       console.log(JSON.stringify(result));
     } catch (error) {
-      await client.query('ROLLBACK');
+      if (transactionOpen) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // Preserve the reset error if the connection also fails during rollback.
+        }
+      }
       throw error;
     } finally {
       client.release();

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { evaluateRankedResultSubmission } from './resultValidation';
+import { evaluateRankedResultConsensus, evaluateRankedResultSubmission } from './resultValidation';
 
 const ACCOUNT_1 = '11111111-1111-4111-8111-111111111111';
 const ACCOUNT_2 = '22222222-2222-4222-8222-222222222222';
@@ -79,4 +79,31 @@ test('flags submissions where caller omits themselves from payload participants'
   assert.equal(evaluation.suspicious, true);
   assert.ok(evaluation.reasons.includes('participants_mismatch'));
   assert.ok(evaluation.reasons.includes('submitter_not_in_payload'));
+});
+
+test('requires both ranked participants to report the same result', () => {
+  assert.deepEqual(
+    evaluateRankedResultConsensus(
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1 },
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1 },
+    ),
+    { suspicious: false, reasons: [] },
+  );
+  assert.deepEqual(
+    evaluateRankedResultConsensus(
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1 },
+      { outcome: 'p2_win', winnerAccountId: ACCOUNT_2 },
+    ),
+    { suspicious: true, reasons: ['peer_result_mismatch'] },
+  );
+});
+
+test('flags peers that submit different verified proof timelines for the same result', () => {
+  assert.deepEqual(
+    evaluateRankedResultConsensus(
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: 'proof-a' },
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: 'proof-b' },
+    ),
+    { suspicious: true, reasons: ['peer_proof_mismatch'] },
+  );
 });

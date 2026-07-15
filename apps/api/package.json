@@ -5,18 +5,33 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/server.ts",
+    "local": "tsx scripts/runLocal.ts",
     "migrate": "tsx scripts/migrate.ts",
     "migrations:compat": "tsx scripts/checkMigrationCompatibility.ts",
     "season:reset": "tsx scripts/rankedSeasonReset.ts",
     "slo:report": "tsx scripts/sloWeeklyReport.ts",
     "smoke:ranked-online": "tsx scripts/rankedOnlineSmoke.ts",
+    "smoke:ranked-season-transition": "tsx scripts/rankedSeasonTransitionSmoke.ts",
+    "smoke:archived-master-leaderboard": "tsx scripts/archivedMasterLeaderboardSmoke.ts",
+    "smoke:ranked-authoritative-forfeit": "tsx scripts/rankedAuthoritativeForfeitSmoke.ts",
+    "smoke:matchmaking-restart": "tsx scripts/matchmakingRestartSmoke.ts",
+    "smoke:matchmaking-multi-instance": "tsx scripts/matchmakingMultiInstanceSmoke.ts",
+    "smoke:auth-rate-limit": "tsx scripts/authRateLimitSmoke.ts",
+    "smoke:auth-security": "tsx scripts/authSecuritySmoke.ts",
+    "smoke:database-interruption": "tsx scripts/databaseInterruptionSmoke.ts",
+    "smoke:rollback-schema-compatibility": "tsx scripts/rollbackSchemaCompatibilitySmoke.ts",
+    "smoke:local-alpha-integration": "tsx scripts/localAlphaIntegration.ts",
+    "smoke:local-alpha-turn-integration": "tsx scripts/localAlphaIntegration.ts --with-coturn",
+    "deploy:drain-gate": "tsx scripts/deploymentDrainGate.ts",
     "deploy:health-gate": "tsx scripts/deploymentHealthGate.ts",
-    "test": "node --test --import tsx src/**/*.test.ts"
+    "alpha:config-audit": "tsx scripts/alphaProviderConfigAudit.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --import tsx \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
     "dotenv": "16.6.1",
-    "fastify": "5.7.4",
+    "fastify": "^5.10.0",
     "pg": "8.16.3"
   },
   "devDependencies": {

@@ -103,14 +103,10 @@ class WebAudioEventSink implements AudioEventSink {
     oscillator.connect(gain);
     const targetBus = route.bus === 'master' ? this.masterGain : this.busGains[route.bus];
     const pan = event.pan ?? 0;
-    if ('createStereoPanner' in context) {
-      const stereoPanner = context.createStereoPanner();
-      stereoPanner.pan.value = THREE.MathUtils.clamp(pan, -1, 1);
-      gain.connect(stereoPanner);
-      stereoPanner.connect(targetBus ?? context.destination);
-    } else {
-      gain.connect(targetBus ?? context.destination);
-    }
+    const stereoPanner = context.createStereoPanner();
+    stereoPanner.pan.value = THREE.MathUtils.clamp(pan, -1, 1);
+    gain.connect(stereoPanner);
+    stereoPanner.connect(targetBus ?? context.destination);
     oscillator.start(now);
     oscillator.stop(now + duration);
   }
@@ -142,7 +138,10 @@ class WebAudioEventSink implements AudioEventSink {
     if (this.context && this.masterGain) {
       return this.context;
     }
-    const globalWindow = globalThis as Window & { webkitAudioContext?: typeof AudioContext };
+    const globalWindow = globalThis as unknown as {
+      AudioContext?: typeof AudioContext;
+      webkitAudioContext?: typeof AudioContext;
+    };
     const AudioContextCtor = globalWindow.AudioContext ?? globalWindow.webkitAudioContext;
     if (!AudioContextCtor) {
       return null;

@@ -2,28 +2,135 @@ import { createCombinedInput } from './input/combined';
 import { createEmptyPlayerInput } from './input/frame';
 import { createGamepadInput } from './input/gamepad';
 import { createKeyboardInput } from './input/keyboard';
-import { loadRuntimeConfig } from './config/features';
+import { loadRuntimeConfig, shouldEnableOnlineDiagnostics } from './config/features';
+import {
+  fetchLocalFlowReviewCatalog,
+  fetchLocalFlowReviewReplay,
+  type LocalFlowReviewCase,
+} from './dev/localFlowReviewCatalog';
+import {
+  installLocalRankedRootSmokeBridge,
+  LOCAL_RANKED_ROOT_SMOKE_SCHEMA_VERSION,
+  resolveLocalRankedRootSmokeConfig,
+  type LocalRankedRootSmokeSnapshot,
+} from './dev/localRankedRootSmoke';
+import type {
+  LocalRankedRecoverySmokeController,
+  LocalRankedRecoverySmokeObservation,
+} from './dev/localRankedRecoverySmoke';
+import type { LocalRankedSmokeInputDriver } from './dev/localRankedSmokeInputDriver';
+import type { LocalRankedSmokeFrameTransport } from './dev/localRankedSmokeTransport';
 import { fetchMatchmakingIceConfig } from './net/connectivityApi';
 import { createInputTimelineBuffer } from './net/inputTimeline';
+import {
+  pollOnlineTerminalSession,
+  resolveOnlineTerminalResolution,
+  type OnlineTerminalResolution,
+} from './net/onlineTerminalResolution';
+import { reconcileOnlineCompletionConsensus } from './net/onlineCompletionConsensus';
+import {
+  decideMatchedTicketBootstrap,
+  installOnlineSessionLifecycleListeners,
+  ONLINE_PAUSE_BLOCKED_MESSAGE,
+  OnlineSessionLifecycleController,
+  resolveGameplayPauseRequest,
+  shouldRecoverForPeerPresence,
+  type OnlineSessionLifecycleError,
+  type OnlineSessionLifecycleEvent,
+  type OnlineSessionLifecycleTarget,
+} from './net/onlineSessionLifecycle';
+import {
+  OnlineFrameProtocolError,
+  OnlineInputPump,
+  type OnlineFrameEnvelope,
+  type OnlineFrameSubmission,
+} from './net/onlineInputPump';
+import { applyPendingRemoteInputs } from './net/onlineRemoteInputBuffer';
+import {
+  buildRankedLeaderboardSummary,
+  parseRankedLeaderboard,
+  type RankedLeaderboardView,
+} from './net/rankedLeaderboardView';
+import {
+  RecoverableWebRtcTransport,
+  type WebRtcRecoverySnapshot,
+} from './net/recoverableWebRtcTransport';
 import {
   RollbackSession,
   type RollbackDiagnosticsSnapshot,
 } from './net/rollbackSession';
 import {
   buildRtcConfiguration,
-  RelayFallbackController,
   type ConnectionPath,
   type MatchmakingIceConfig,
 } from './net/transport';
-import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT, isCharacterId, type CharacterId } from './sim/characters';
-import { createPlatformServices, type PlatformAuthSession } from './platform';
-import { validateReplayPayload } from './sim/replay';
-import { buildReplayReviewData, type ReplayReviewData } from './sim/replayReview';
-import { createInitialState, getRenderSnapshot, step } from './sim/sim';
 import {
+  WebRtcFrameAckTimeoutError,
+  WebRtcFrameTransportClosedError,
+} from './net/webRtcFrameTransport';
+import {
+  exchangeWebRtcRecoveryCheckpoint,
+  type WebRtcRecoveryCheckpoint,
+} from './net/webRtcRecoveryCheckpoint';
+import {
+  connectWebRtcSession,
+  type WebRtcSignalEnvelope,
+  type WebRtcSignalType,
+} from './net/webRtcSession';
+import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT, isCharacterId, type CharacterId } from './sim/characters';
+import { computeStateChecksum } from './sim/checksum';
+import { fingerprintDeterministicValue } from './sim/fingerprint';
+import { LocalRoundReplayRecorder } from './sim/localRoundReplayRecorder';
+import {
+  OnlineMatchReplayRecorder,
+  resolveSynchronizedReplayFrameLimit,
+} from './sim/onlineMatchReplayRecorder';
+import { deriveOfflineAiSeed, deriveOfflineRoundSeed } from './sim/offlineRoundSeed';
+import { sanitiseSeed } from './sim/rng';
+import {
+  RankedMatchProofRecorder,
+  rankedSeedFromSessionId,
+  type RankedMatchProof,
+} from './sim/rankedProof';
+import { createPlatformServices, type PlatformAuthSession } from './platform';
+import {
+  findFirstChecksumMismatch,
+  LOCAL_AI_REPLAY_SCHEMA_VERSION,
+  runReplay,
+  validateReplayPayload,
+  type ReplayLocalAiProvenance,
+  type ReplayPayload,
+  type ReplayReviewFocus,
+} from './sim/replay';
+import type { ReplayReviewData } from './sim/replayReview';
+import {
+  createInitialState,
+  getRenderSnapshot,
+  step,
+  type SimulationActionStart,
+} from './sim/sim';
+import {
+  BALANCE_PROFILES,
   DEFAULT_BALANCE_PROFILE_ID,
   resolveBalanceProfile,
 } from './sim/balanceProfiles';
+import {
+  evaluateBalanceLabSampleStop,
+  fingerprintBalanceTuning,
+  isLocalAiTuningMode,
+  isLocalBalanceLabMode,
+  selectLocalAiBehaviorTuning,
+  selectLocalAiControllerRoles,
+  selectLocalBalanceTuning,
+  selectLocalCharacterBalanceOverrides,
+} from './sim/balanceLabRuntime';
+import type { BalanceLabFlowModel, BalanceLabScenarioIdentity } from './sim/balanceLab';
+import {
+  cloneCharacterBalanceOverrides,
+  fingerprintCharacterBalanceOverrides,
+  sanitiseCharacterBalanceOverrides,
+  type CharacterBalanceOverrides,
+} from './sim/characterBalance';
 import {
   createTrainingTelemetryTracker,
   type TrainingRoundEndReason,
@@ -34,16 +141,50 @@ import {
   createMatchTelemetryTracker,
   type MatchTelemetryTracker,
 } from './sim/matchTelemetry';
+import {
+  applyBalanceScenario,
+  BALANCE_SCENARIOS,
+  BALANCE_SCENARIO_SCHEMA_VERSION,
+  DEFAULT_BALANCE_SCENARIO_ID,
+  resolveBalanceScenario,
+  type BalanceScenarioId,
+} from './sim/balanceScenarios';
+import {
+  createAiDecisionTelemetryTracker,
+  type AiDecisionTelemetryTracker,
+} from './sim/aiDecisionTelemetry';
 import { sanitiseTuning } from './sim/tuning';
-import type { PlayerFrameInput, PlayerId, PlayersById, RenderSnapshot } from './sim/types';
+import type { GameTuning, PlayerFrameInput, PlayerId, PlayersById, RenderSnapshot } from './sim/types';
 import {
   AI_DIFFICULTY_ORDER,
+  createDefaultAiBehaviorTuning,
   createAiController,
-  tickAiController,
+  fingerprintAiBehaviorTuning,
+  sanitiseAiBehaviorTuning,
+  type AiBehaviorTuning,
   type AiControllerState,
+  type AiDecisionTrace,
   type AiDifficultyId,
   DEFAULT_AI_DIFFICULTY,
 } from './sim/ai';
+import {
+  AI_CONTROLLER_ROLE_SCHEMA_VERSION,
+  createDefaultAiControllerRoles,
+  fingerprintAiControllerRoles,
+  resolveAiControllerRole,
+  sanitiseAiControllerRoles,
+  tickAiControllerWithRole,
+  type AiControllerRoleId,
+  type AiControllerRoles,
+} from './sim/aiControllerRoles';
+import {
+  BALANCE_TEST_RECIPES,
+  BALANCE_TEST_RECIPE_SCHEMA_VERSION,
+  DEFAULT_BALANCE_TEST_RECIPE_ID,
+  findBalanceTestRecipeForSetup,
+  getBalanceTestRecipeSelectionId,
+  getBalanceTestRecipeSetup,
+} from './sim/balanceTestRecipes';
 import {
   applyArcadeLossAction,
   createArcadeRun,
@@ -70,10 +211,14 @@ import {
 import { buildAssetBudgetReport, DEFAULT_ASSET_BUDGET_LIMITS } from './view/assets/budget';
 import { DEFAULT_ASSET_MANIFEST } from './view/assets/defaultManifest';
 import { preloadAssetManifest } from './view/assets/loader';
-import { createPauseMenu } from './view/pauseMenu';
-import { createOnlineDevMenu, type OnlineDiagnosticsUpdate, type OnlineDevSectionId } from './view/onlineDevMenu';
+import type { OnlineDiagnosticsUpdate, OnlineDevSectionId } from './view/onlineDevMenu';
 import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay';
-import { createReplayViewer } from './view/replayViewer';
+import {
+  createLazyOnlineDevMenu,
+  createLazyPauseMenu,
+  createLazyReplayViewer,
+  type LazyUiSurface,
+} from './view/lazyUiControllers';
 import { renderFrame } from './view/render';
 import { applyStageAtmospherePreset, createScene, resizeScene } from './view/scene';
 import { buildInputHistoryView } from './view/inputHistory';
@@ -106,11 +251,13 @@ import {
 } from './view/menuThemes';
 import {
   DEFAULT_STAGE_ATMOSPHERE_ID,
+  ONLINE_ALPHA_STAGE_ATMOSPHERE_ID,
   resolveStageAtmosphere,
   STAGE_ATMOSPHERE_OPTIONS,
 } from './view/stageAtmosphere';
 
 type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev' | 'online_bootstrap';
+type ReplayReturnPhase = 'home' | 'playing' | 'round_transition';
 interface StoredSettings {
   mode?: string;
   menuThemeId?: string;
@@ -141,8 +288,11 @@ const ARCADE_HISTORY_STORAGE_KEY = 'gravity_well.arcade_history.v1';
 const ROLLBACK_DIAGNOSTICS_STORAGE_KEY = 'gravity_well.rollback_diagnostics.v1';
 const TRAINING_TELEMETRY_STORAGE_KEY = 'gravity_well.training_telemetry.v1';
 const AI_MATCH_TELEMETRY_STORAGE_KEY = 'gravity_well.ai_match_telemetry.v1';
+const LOCAL_RANKED_PROOF_REVIEW_STORAGE_KEY = 'gravity_well.ranked_proof_review.v1';
 const platform = createPlatformServices();
 const runtimeConfig = loadRuntimeConfig();
+const localFlowReviewToolsEnabled = import.meta.env.DEV
+  && runtimeConfig.features.debugToolsEnabled;
 const onlineRuntimeEnabled = platform.kind === 'web' && runtimeConfig.features.onlineMatchRuntimeEnabled;
 const publicOnlineEntryEnabled = platform.kind === 'web'
   && runtimeConfig.features.onlineEnabled;
@@ -273,20 +423,58 @@ let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
 let arcadeHistory: ArcadeRunHistory = loadArcadeHistory();
 let profileSettingsCache: Record<string, unknown> = {};
 const urlParams = new URLSearchParams(window.location.search);
+const localRankedRootSmokeConfig = resolveLocalRankedRootSmokeConfig({
+  buildEnabled: (import.meta.env.VITE_LOCAL_RANKED_ROOT_SMOKE ?? 'false').toLowerCase() === 'true',
+  url: window.location.href,
+});
+let localRankedSmokeInputDriverModule: typeof import('./dev/localRankedSmokeInputDriver') | null = null;
+let localRankedSmokeTransportModule: typeof import('./dev/localRankedSmokeTransport') | null = null;
+let localRankedRecoverySmokeModule: typeof import('./dev/localRankedRecoverySmoke') | null = null;
+const localRankedSmokeRuntimeModulePromise = localRankedRootSmokeConfig.enabled
+  ? Promise.all([
+    import('./dev/localRankedSmokeInputDriver'),
+    import('./dev/localRankedSmokeTransport'),
+    import('./dev/localRankedRecoverySmoke'),
+  ]).then(([inputDriverModule, transportModule, recoverySmokeModule]) => {
+    localRankedSmokeInputDriverModule = inputDriverModule;
+    localRankedSmokeTransportModule = transportModule;
+    localRankedRecoverySmokeModule = recoverySmokeModule;
+  })
+  : null;
 const seedParam = urlParams.get('seed');
 const localRecoveryUiEnabled = urlParams.get('localDebug') === '1';
 const diagnosticsQueryOverride = urlParams.get('diagnostics');
 const debugHudEnabled = urlParams.get('debugHud') === '1';
 const forcedSeed = seedParam !== null ? Number(seedParam) : undefined;
 let selectedMatchSeed = Number.isFinite(forcedSeed) ? (forcedSeed as number) : 1;
+const fixedDt = 1 / 60;
 let selectedMode: GameMode = loadedSettings.mode;
 const configuredBalanceProfileId = (import.meta.env.VITE_BALANCE_PROFILE_ID as string | undefined)?.trim();
 const activeBalanceProfile = resolveBalanceProfile(configuredBalanceProfileId);
+let runtimeBalanceProfileId = activeBalanceProfile.id;
+let localBalanceProfileId = activeBalanceProfile.id;
+let localBalanceTuningDraft: GameTuning = { ...activeBalanceProfile.tuning };
+let localAiBehaviorTuning: AiBehaviorTuning = createDefaultAiBehaviorTuning();
+let activeAiBehaviorTuning: AiBehaviorTuning = createDefaultAiBehaviorTuning();
+let localAiControllerRoles: AiControllerRoles = createDefaultAiControllerRoles();
+let activeAiControllerRoles: AiControllerRoles = createDefaultAiControllerRoles();
+let localBalanceScenarioId: BalanceScenarioId = DEFAULT_BALANCE_SCENARIO_ID;
+let activeBalanceScenarioId: BalanceScenarioId = DEFAULT_BALANCE_SCENARIO_ID;
 const runtimeRulesetVersion = (
   (import.meta.env.VITE_RULESET_VERSION as string | undefined)?.trim()
   || 'prototype-2026.02'
 );
-const activeRulesetVersion = `${runtimeRulesetVersion}${activeBalanceProfile.id === DEFAULT_BALANCE_PROFILE_ID ? '' : `+${activeBalanceProfile.id}`}`;
+function buildRulesetVersion(balanceProfileId: string): string {
+  return `${runtimeRulesetVersion}${balanceProfileId === DEFAULT_BALANCE_PROFILE_ID ? '' : `+${balanceProfileId}`}`;
+}
+function getRuntimeRulesetVersion(): string {
+  return buildRulesetVersion(runtimeBalanceProfileId);
+}
+function getOnlineRulesetVersion(): string {
+  return buildRulesetVersion(activeBalanceProfile.id);
+}
+const initialRulesetVersion = getRuntimeRulesetVersion();
+let localCharacterBalanceOverrides: CharacterBalanceOverrides = {};
 if (
   configuredBalanceProfileId
   && configuredBalanceProfileId.length > 0
@@ -305,12 +493,23 @@ let state = createInitialState({
 });
 state.tuning = { ...activeBalanceProfile.tuning };
 let trainingTelemetry: TrainingTelemetryTracker = createTrainingTelemetryTracker({
-  balanceProfileId: activeBalanceProfile.id,
-  rulesetVersion: activeRulesetVersion,
+  balanceProfileId: runtimeBalanceProfileId,
+  rulesetVersion: getRuntimeRulesetVersion(),
   playerCharacterId: selectedLoadout.P1,
   opponentCharacterId: selectedLoadout.P2,
 });
 let matchTelemetry: MatchTelemetryTracker = createMatchTelemetryTracker(state);
+let aiDecisionTelemetry: AiDecisionTelemetryTracker = createAiDecisionTelemetryTracker();
+let roundTuningFingerprint = fingerprintBalanceTuning(state.tuning);
+let balanceTuningDirty = false;
+let roundCharacterBalanceFingerprint = fingerprintCharacterBalanceOverrides(
+  state.characterBalanceOverrides,
+);
+let characterBalanceDirty = false;
+let roundAiBehaviorFingerprint = fingerprintAiBehaviorTuning(activeAiBehaviorTuning);
+let aiBehaviorDirty = false;
+let roundAiControllerRolesFingerprint = fingerprintAiControllerRoles(activeAiControllerRoles);
+let aiControllerRolesDirty = false;
 const assetBudgetReport = buildAssetBudgetReport(DEFAULT_ASSET_MANIFEST, DEFAULT_ASSET_BUDGET_LIMITS);
 let assetPreloadBytesLoaded = 0;
 let appPhase: AppPhase = 'home';
@@ -318,13 +517,19 @@ let startupMenuGuardArmed = true;
 let p1RoundWins = 0;
 let p2RoundWins = 0;
 let roundTransitionRemaining = 0;
+let offlineRoundIndex = 0;
 let simulationFrame = 0;
+let liveAiRoundReplayRecorder: LocalRoundReplayRecorder | null = null;
+let latestAiRoundReplayPayload: ReplayPayload | null = null;
+let balanceLabSampleSequence = 0;
+let balanceLabSampleTargetFrames: number | null = null;
 let aiControllers: Partial<Record<PlayerId, AiControllerState>> = {};
 let arcadeRun: ArcadeRunState | null = null;
 let arcadePendingLossState: ArcadePendingLossState | null = null;
 const inputTimeline = createInputTimelineBuffer({ maxFrames: 60 * 20 });
 const enableRollbackScaffold = (import.meta.env.VITE_FEATURE_ROLLBACK_SCAFFOLD ?? 'false').toLowerCase() === 'true';
 let rollbackSession: RollbackSession | null = null;
+let localRankedSmokeInputDriver: LocalRankedSmokeInputDriver | null = null;
 const musicStateController = createMusicStateController({
   fadeSeconds: 0.35,
   gainByState: {
@@ -351,21 +556,68 @@ interface StoredRollbackDiagnosticsEntry {
 }
 
 interface StoredTrainingTelemetryEntry {
+  schemaVersion: 'gw.training-telemetry-export.v3';
   exportedAt: string;
   rulesetVersion: string;
   balanceProfileId: string;
+  tuningFingerprint: string;
+  roundStartTuningFingerprint: string;
+  tuningChangedDuringRun: boolean;
+  balanceTuningPending: boolean;
+  tuning: GameTuning;
+  pendingBalanceProfileId: string;
+  pendingTuningFingerprint: string;
+  pendingTuning: GameTuning;
+  characterBalanceFingerprint: string;
+  roundStartCharacterBalanceFingerprint: string;
+  characterBalanceChangedDuringRun: boolean;
+  characterBalancePending: boolean;
+  characterBalanceOverrides: CharacterBalanceOverrides;
+  pendingCharacterBalanceOverrides: CharacterBalanceOverrides;
   summary: TrainingTelemetrySummary;
 }
 
 interface StoredAiMatchTelemetryEntry {
+  schemaVersion: 'gw.ai-match-telemetry-export.v8';
   exportedAt: string;
   mode: 'cpu_vs_cpu';
   rulesetVersion: string;
   balanceProfileId: string;
+  tuningFingerprint: string;
+  roundStartTuningFingerprint: string;
+  tuningChangedDuringRun: boolean;
+  balanceTuningPending: boolean;
+  tuning: GameTuning;
+  pendingBalanceProfileId: string;
+  pendingTuningFingerprint: string;
+  pendingTuning: GameTuning;
+  characterBalanceFingerprint: string;
+  roundStartCharacterBalanceFingerprint: string;
+  characterBalanceChangedDuringRun: boolean;
+  characterBalancePending: boolean;
+  characterBalanceOverrides: CharacterBalanceOverrides;
+  pendingCharacterBalanceOverrides: CharacterBalanceOverrides;
+  aiBehaviorFingerprint: string;
+  roundStartAiBehaviorFingerprint: string;
+  aiBehaviorChangedDuringRun: boolean;
+  aiBehaviorPending: boolean;
+  aiBehaviorTuning: AiBehaviorTuning;
+  pendingAiBehaviorFingerprint: string;
+  pendingAiBehaviorTuning: AiBehaviorTuning;
+  aiControllerRoleSchemaVersion: typeof AI_CONTROLLER_ROLE_SCHEMA_VERSION;
+  aiControllerRolesFingerprint: string;
+  aiControllerRoles: AiControllerRoles;
+  aiControllerRolesPending: boolean;
+  pendingAiControllerRolesFingerprint: string;
+  pendingAiControllerRoles: AiControllerRoles;
   aiDifficulty: AiDifficultyId;
+  scenario: BalanceLabScenarioIdentity;
   menuThemeId: string;
   stageAtmosphereId: string;
   seed: number;
+  matchSeed: number;
+  roundSeed: number;
+  roundIndex: number;
   loadout: PlayersById<CharacterId>;
   score: {
     p1Rounds: number;
@@ -374,19 +626,34 @@ interface StoredAiMatchTelemetryEntry {
   winner: PlayerId | null;
   statusText: string;
   summary: ReturnType<MatchTelemetryTracker['toSummary']>;
+  aiDecisions: ReturnType<AiDecisionTelemetryTracker['toSummary']>;
+  flow: BalanceLabFlowModel;
 }
 
 type QueueType = 'unranked' | 'ranked';
 type RegionId = 'us-east' | 'us-west' | 'eu-west' | 'ap-southeast';
 
+interface MatchTransportAttemptView {
+  attemptId: string;
+  generation: number;
+  createdAt: string;
+}
+
 interface MatchStartPayload {
   sessionId: string;
   sessionToken: string;
   sessionTokenExpiresAt: string;
+  heartbeatIntervalSeconds?: number;
+  heartbeatTimeoutSeconds?: number;
+  reconnectGraceSeconds?: number;
+  buildVersion: string | null;
+  rulesetVersion: string | null;
+  balanceProfileId: string | null;
   queueType: QueueType;
   region: RegionId;
   createdAt: string;
   expiresAt?: string;
+  transportAttempt: MatchTransportAttemptView;
   localPlayer: {
     accountId: string;
     queueTicketId: string;
@@ -419,19 +686,32 @@ interface QueueTicketView {
   closedAt?: string;
   closedReason?: string;
   matchStart?: MatchStartPayload;
+  joinDisposition?: 'created' | 'existing';
 }
 
 interface MatchSessionView {
   sessionId: string;
   queueType: QueueType;
   region: RegionId;
+  buildVersion: string | null;
+  rulesetVersion: string | null;
+  balanceProfileId: string | null;
   status: 'active' | 'resolved';
+  resolvedReason?: 'session_expired' | 'reconnect_timeout' | 'peer_left' | 'completed';
+  resolvedAt?: string;
+  forfeitingAccountId?: string;
   createdAt: string;
   expiresAt?: string;
+  transportAttempt: MatchTransportAttemptView;
   participants: Array<{
     accountId: string;
     side: 'P1' | 'P2';
+    selectedCharacterId: string | null;
     connectionStatus: 'connected' | 'disconnected';
+    lastHeartbeatAt?: string;
+    completionAttestedAt?: string;
+    disconnectedAt?: string;
+    reconnectDeadlineAt?: string;
   }>;
 }
 
@@ -439,6 +719,7 @@ type OnlineBootstrapStatus = 'preparing' | 'awaiting_signaling' | 'failed';
 
 interface OnlineBootstrapState {
   source: 'ranked_queue';
+  queueTicketId: string;
   sessionId: string;
   queueType: QueueType;
   region: RegionId;
@@ -453,19 +734,28 @@ interface OnlineBootstrapState {
   iceConfig: MatchmakingIceConfig | null;
 }
 
-interface OnlineSessionFrameEntry {
-  frame: number;
-  accountId: string;
-  input: PlayerFrameInput;
-  receivedAt: string;
+interface OnlineSessionFrameResponse {
+  frames: OnlineFrameEnvelope[];
+  peerConfirmedThrough: number;
 }
 
-interface OnlineSessionFrameResponse {
-  frames: OnlineSessionFrameEntry[];
+interface OnlineSessionSignalsResponse {
+  signals: WebRtcSignalEnvelope[];
+  nextAfterSignalId: string;
 }
 
 type RankedMatchOutcome = 'p1_win' | 'p2_win' | 'draw' | 'forfeit';
-type OnlineRankedResultStatus = 'idle' | 'submitting' | 'accepted' | 'flagged_for_review' | 'already_processed' | 'failed';
+type OnlineRankedResultStatus =
+  | 'idle'
+  | 'submitting'
+  | 'awaiting_peer_confirmation'
+  | 'authoritative_pending'
+  | 'no_contest'
+  | 'accepted'
+  | 'flagged_for_review'
+  | 'already_processed'
+  | 'failed';
+type OnlineReplayStatus = 'recording' | 'ready' | 'persisting' | 'persisted' | 'failed';
 
 interface RankedResultDeltaView {
   accountId: string;
@@ -485,11 +775,45 @@ interface RankedResultDeltaView {
 interface RankedResultSubmitResponse {
   submissionId: string;
   createdAt: string;
-  status: 'accepted' | 'flagged_for_review';
+  status:
+    | 'accepted'
+    | 'flagged_for_review'
+    | 'awaiting_peer_confirmation'
+    | 'authoritative_pending'
+    | 'no_contest';
   suspicious: boolean;
   suspiciousReasons: string[];
   reviewStatus: string;
+  outcome?: RankedMatchOutcome;
+  winnerAccountId?: string | null;
+  settlementSource?: 'player_consensus' | 'server_authoritative';
+  authoritativeResolution?: {
+    reason: 'reconnect_timeout' | 'peer_left' | 'session_expired';
+    forfeitingAccountId: string | null;
+  };
+  terminalDecision?: {
+    type: 'forfeit' | 'no_contest';
+    status: 'pending' | 'processing' | 'settled' | 'superseded';
+    dueAt: string;
+    decidedAt: string;
+  };
+  proof?: {
+    digest: string;
+    simulatorVersion: string;
+    roundCount: number;
+    frameCount: number;
+    derivedOutcome: 'p1_win' | 'p2_win';
+  };
   ratingDeltas?: RankedResultDeltaView[];
+}
+
+interface ReplayIngestResponseView {
+  replayId: string;
+  matchId: string;
+  sha256: string;
+  payloadVersion: number;
+  retentionUntil: string;
+  existing?: boolean;
 }
 
 class OnlineRequestError extends Error {
@@ -505,34 +829,60 @@ class OnlineRequestError extends Error {
 }
 
 interface OnlineMatchContext {
+  queueTicketId: string;
   sessionId: string;
   sessionToken: string;
+  reconnectGraceSeconds: number;
   queueType: QueueType;
   region: RegionId;
   matchLoadout: PlayersById<CharacterId>;
   restoreMode: GameMode;
   restoreLoadout: PlayersById<CharacterId>;
+  restoreStageAtmosphereId: string;
   localPlayerId: PlayerId;
   remotePlayerId: PlayerId;
   localAccountId: string;
   remoteAccountId: string;
   statusText: string;
   connectionPath: ConnectionPath | 'server';
-  lastRemoteFrame: number;
-  outgoingFrames: Array<{ frame: number; input: PlayerFrameInput }>;
-  pendingRemoteInputs: Map<number, PlayerFrameInput>;
+  iceTransportPolicy: RTCIceTransportPolicy;
+  relayAvailable: boolean;
+  turnCredentialMode: MatchmakingIceConfig['turnCredentialMode'];
+  transportAttemptGeneration: number;
+  roundEpoch: number;
+  rankedProofRecorder: RankedMatchProofRecorder | null;
+  rankedProof: RankedMatchProof | null;
+  replayRecorder: OnlineMatchReplayRecorder;
+  replayPayload: ReplayPayload | null;
+  replayStatus: OnlineReplayStatus;
+  replayDetail: string;
+  replayId: string | null;
+  replayInFlight: boolean;
+  replayStartedAt: string;
+  inputPump: OnlineInputPump;
+  smokeFrameTransport: LocalRankedSmokeFrameTransport | null;
+  smokeRecovery: LocalRankedRecoverySmokeController | null;
+  transportRecovery: RecoverableWebRtcTransport;
+  closeTransport: () => void;
+  transportClosed: boolean;
+  pendingRoundWinner: PlayerId | null;
+  pendingRoundFinalFrame: number | null;
+  roundSyncElapsedSeconds: number;
   sendAccumulatorSeconds: number;
   pollAccumulatorSeconds: number;
-  sendInFlight: boolean;
-  pollInFlight: boolean;
   finalOutcome: RankedMatchOutcome | null;
   winnerAccountId: string | null;
   rankedResultStatus: OnlineRankedResultStatus;
   rankedResultDetail: string;
   rankedResultSubmissionId: string | null;
+  rankedResultResponse: RankedResultSubmitResponse | null;
+  rankedResultPersistedRead: boolean;
   rankedResultInFlight: boolean;
+  rollbackApplications: number;
+  rollbackFrames: number;
+  maxRollbackDepth: number;
   sessionCompletionInFlight: boolean;
-  sessionCompletionStatus: 'idle' | 'completing' | 'completed' | 'failed';
+  sessionCompletionStatus: 'idle' | 'completing' | 'awaiting_peer' | 'completed' | 'failed';
 }
 
 interface RoomView {
@@ -598,10 +948,31 @@ interface RankedProgressionView {
   updatedAt: string | null;
 }
 
-const pauseMenu = createPauseMenu({
-  getTuning: () => state.tuning,
+function reportLazyUiLoadFailure(surface: LazyUiSurface, error: Error): void {
+  const labels: Record<LazyUiSurface, string> = {
+    pause_menu: 'Pause and Balance Lab',
+    replay_viewer: 'Replay Review',
+    online_dev_menu: 'Online tools',
+  };
+  const label = labels[surface];
+  console.error(`[lazy-ui] ${label} failed to load`, error);
+  const statusElement = document.querySelector<HTMLDivElement>('#status');
+  if (statusElement) {
+    statusElement.textContent = `${label} failed to load. Retry the action or refresh.`;
+  }
+  if (surface === 'replay_viewer' && appPhase === 'replay_review') {
+    exitReplayReview();
+  } else if (surface === 'online_dev_menu' && appPhase === 'online_dev') {
+    returnToHome();
+  }
+}
+
+const pauseMenu = createLazyPauseMenu({
+  getTuning: () => localBalanceTuningDraft,
   setTuning: (tuning) => {
-    state.tuning = sanitiseTuning(tuning);
+    localBalanceTuningDraft = sanitiseTuning(tuning);
+    localBalanceProfileId = 'custom_local';
+    balanceTuningDirty = fingerprintBalanceTuning(localBalanceTuningDraft) !== roundTuningFingerprint;
   },
   getAudioSettings: () => audioSettings,
   setAudioSettings: (settings) => {
@@ -624,13 +995,137 @@ const pauseMenu = createPauseMenu({
     }
     return exportAiMatchTelemetrySession();
   },
+  canReviewAiRound: () => (
+    isLocalAiRoundReviewMode(selectedMode)
+    && onlineMatchContext === null
+    && (appPhase === 'playing' || appPhase === 'round_transition')
+    && ((liveAiRoundReplayRecorder?.frameCount ?? 0) > 0 || latestAiRoundReplayPayload !== null)
+  ),
+  onReviewAiRound: (request) => {
+    void reviewCurrentAiRound(request);
+  },
+  getAiRoundReplay: () => (
+    liveAiRoundReplayRecorder?.buildPayload() ?? latestAiRoundReplayPayload
+  ),
+  getBalanceSampleSequence: () => balanceLabSampleSequence,
+  onReviewAiReplaySample: (payload, request, label) => {
+    void reviewCapturedAiReplaySample(payload, request, label);
+  },
   onRestartTraining: () => {
     restartTrainingRound();
   },
+  balanceProfiles: BALANCE_PROFILES,
+  balanceScenarios: BALANCE_SCENARIOS,
+  balanceTestRecipes: BALANCE_TEST_RECIPES,
+  getBalanceProfileId: () => localBalanceProfileId,
+  isBalanceTuningDirty: () => balanceTuningDirty,
+  getActiveBalanceTuning: () => ({ ...state.tuning }),
+  getActiveBalanceTuningFingerprint: () => roundTuningFingerprint,
+  onApplyBalanceProfile: (profileId) => {
+    const profile = resolveBalanceProfile(profileId);
+    localBalanceTuningDraft = { ...profile.tuning };
+    localBalanceProfileId = profile.id;
+    balanceTuningDirty = fingerprintBalanceTuning(localBalanceTuningDraft) !== roundTuningFingerprint;
+  },
+  getBalanceTelemetry: () => matchTelemetry.toSummary(),
+  getAiDecisionTelemetry: () => aiDecisionTelemetry.toSummary(),
+  getBalanceScenarioIdentity: () => getCurrentBalanceScenarioIdentity(),
+  getBalanceScenarioId: () => localBalanceScenarioId,
+  getActiveBalanceScenarioId: () => activeBalanceScenarioId,
+  setBalanceScenarioId: (scenarioId) => {
+    localBalanceScenarioId = resolveBalanceScenario(scenarioId).id;
+  },
+  onApplyBalanceTestRecipe: (recipeId) => {
+    const setup = getBalanceTestRecipeSetup(recipeId);
+    localBalanceScenarioId = setup.scenarioId;
+    localAiControllerRoles = selectLocalAiControllerRoles(
+      selectedMode,
+      onlineMatchContext !== null,
+      setup.roles,
+    );
+    aiControllerRolesDirty = isLocalAiTuningMode(selectedMode)
+      && onlineMatchContext === null
+      && fingerprintAiControllerRoles(localAiControllerRoles) !== roundAiControllerRolesFingerprint;
+  },
+  getBalanceLoadout: () => ({
+    P1: state.players.P1.characterId,
+    P2: state.players.P2.characterId,
+  }),
+  getCharacterBalanceOverrides: () => cloneCharacterBalanceOverrides(localCharacterBalanceOverrides),
+  getActiveCharacterBalanceOverrides: () => cloneCharacterBalanceOverrides(
+    state.characterBalanceOverrides,
+  ),
+  getActiveCharacterBalanceFingerprint: () => fingerprintCharacterBalanceOverrides(
+    state.characterBalanceOverrides,
+  ),
+  setCharacterBalanceOverrides: (overrides) => {
+    localCharacterBalanceOverrides = sanitiseCharacterBalanceOverrides(overrides);
+    const eligibleOverrides = selectLocalCharacterBalanceOverrides(
+      selectedMode,
+      onlineMatchContext !== null,
+      localCharacterBalanceOverrides,
+    );
+    characterBalanceDirty = fingerprintCharacterBalanceOverrides(eligibleOverrides)
+      !== roundCharacterBalanceFingerprint;
+  },
+  isCharacterBalanceDirty: () => characterBalanceDirty,
+  canTuneAiBehavior: () => isLocalAiTuningMode(selectedMode) && onlineMatchContext === null,
+  getAiBehaviorTuning: () => sanitiseAiBehaviorTuning(localAiBehaviorTuning),
+  getActiveAiBehaviorTuning: () => sanitiseAiBehaviorTuning(activeAiBehaviorTuning),
+  getActiveAiBehaviorFingerprint: () => roundAiBehaviorFingerprint,
+  setAiBehaviorTuning: (tuning) => {
+    localAiBehaviorTuning = sanitiseAiBehaviorTuning(tuning);
+    const eligibleTuning = selectLocalAiBehaviorTuning(
+      selectedMode,
+      onlineMatchContext !== null,
+      localAiBehaviorTuning,
+    );
+    aiBehaviorDirty = fingerprintAiBehaviorTuning(eligibleTuning)
+      !== roundAiBehaviorFingerprint;
+  },
+  isAiBehaviorDirty: () => aiBehaviorDirty,
+  getAiControllerRoles: () => selectLocalAiControllerRoles(
+    selectedMode,
+    onlineMatchContext !== null,
+    localAiControllerRoles,
+  ),
+  getActiveAiControllerRoles: () => selectLocalAiControllerRoles(
+    selectedMode,
+    onlineMatchContext !== null,
+    activeAiControllerRoles,
+  ),
+  getBalanceHumanPlayerId: () => selectedMode === 'balance_sparring' ? 'P1' : null,
+  setAiControllerRole: (playerId: PlayerId, roleId: AiControllerRoleId) => {
+    if (selectedMode === 'balance_sparring' && playerId === 'P1') {
+      return;
+    }
+    localAiControllerRoles = selectLocalAiControllerRoles(
+      selectedMode,
+      onlineMatchContext !== null,
+      sanitiseAiControllerRoles({
+      ...localAiControllerRoles,
+      [playerId]: roleId,
+      }),
+    );
+    aiControllerRolesDirty = isLocalAiTuningMode(selectedMode)
+      && onlineMatchContext === null
+      && fingerprintAiControllerRoles(localAiControllerRoles) !== roundAiControllerRolesFingerprint;
+  },
+  isAiControllerRolesDirty: () => aiControllerRolesDirty,
+  canRestartBalanceLab: () => (
+    onlineMatchContext === null
+    && isLocalBalanceLabMode(selectedMode)
+  ),
+  onRestartBalanceLab: (targetFrames) => {
+    restartBalanceLabMatch(targetFrames);
+  },
+}, {
+  onLoadError: reportLazyUiLoadFailure,
 });
 pauseMenu.setCanRestartTraining(selectedMode === 'training');
+pauseMenu.setBalanceLabAvailable(selectedMode === 'balance_sparring');
 hud.setVoiceSubtitlesEnabled(audioSettings.subtitlesEnabled);
-const replayViewer = createReplayViewer({
+const replayViewer = createLazyReplayViewer({
   onTogglePause: () => {
     replayPaused = !replayPaused;
     replayAccumulator = 0;
@@ -651,6 +1146,8 @@ const replayViewer = createReplayViewer({
   onExit: () => {
     exitReplayReview();
   },
+}, {
+  onLoadError: reportLazyUiLoadFailure,
 });
 const matchmakingApiBase = (
   (import.meta.env.VITE_MATCHMAKING_API_BASE as string | undefined)?.trim()
@@ -662,14 +1159,13 @@ const diagnosticsBuildId = (
   || (import.meta.env.VITE_COMMIT_SHA as string | undefined)?.trim()
   || 'dev-local'
 );
-const diagnosticsRulesetVersion = activeRulesetVersion;
-const diagnosticsEnabled = platform.kind === 'web' && (
-  diagnosticsQueryOverride === '1'
-  || (
-    diagnosticsQueryOverride !== '0'
-    && runtimeConfig.features.onlineDiagnosticsEnabled
-  )
-);
+const diagnosticsRulesetVersion = initialRulesetVersion;
+const diagnosticsEnabled = shouldEnableOnlineDiagnostics({
+  platformKind: platform.kind,
+  configuredEnabled: runtimeConfig.features.onlineDiagnosticsEnabled,
+  queryOverride: diagnosticsQueryOverride,
+  developmentBuild: import.meta.env.DEV,
+});
 let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   ticketId: null,
   sessionId: null,
@@ -682,17 +1178,23 @@ let onlineDiagnosticsUpdate: OnlineDiagnosticsUpdate = {
   participantAccountIds: [],
 };
 let onlineBootstrapState: OnlineBootstrapState | null = null;
-let onlineRelayFallbackController: RelayFallbackController | null = null;
 let onlineMatchContext: OnlineMatchContext | null = null;
+let rankedResumeRequiredSessionId: string | null = null;
+let explicitRankedRejoinArmed = false;
 let sessionAccountId: string | null = null;
 const diagnosticsOverlay = diagnosticsEnabled ? createOnlineDiagnosticsOverlay() : null;
 const onlineDevMenuEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDevMenuEnabled;
 const onlineDevMenu = onlineDevMenuEnabled
-  ? createOnlineDevMenu({
+  ? createLazyOnlineDevMenu({
     apiBase: matchmakingApiBase,
+    buildVersion: diagnosticsBuildId,
+    rulesetVersion: getOnlineRulesetVersion(),
+    balanceProfileId: activeBalanceProfile.id,
+    getCharacterId: () => selectedLoadout.P1,
     getAccountId: () => sessionAccountId,
+    getAccessToken: () => platform.auth.getAccessToken?.() ?? null,
     onOpenReplayPayload: async ({ replayId, payload }) => {
-      const opened = beginReplayReviewFromPayload(payload, `archive:${replayId}`);
+      const opened = await beginReplayReviewFromPayload(payload, `archive:${replayId}`);
       if (!opened) {
         throw new Error(`Replay payload validation failed for ${replayId}.`);
       }
@@ -703,6 +1205,8 @@ const onlineDevMenu = onlineDevMenuEnabled
     onClose: () => {
       closeOnlineDevMenu();
     },
+  }, {
+    onLoadError: reportLazyUiLoadFailure,
   })
   : null;
 
@@ -740,7 +1244,7 @@ async function requestOnlineJson<T>(
   path: string,
   accountId: string,
   body?: unknown,
-  options?: { keepalive?: boolean },
+  options?: { keepalive?: boolean; matchSessionToken?: string; signal?: AbortSignal },
 ): Promise<T> {
   const response = await requestOnlineRaw(method, path, accountId, body, options);
   if (!response.ok) {
@@ -755,14 +1259,21 @@ async function requestOnlineRaw(
   path: string,
   accountId: string,
   body?: unknown,
-  options?: { keepalive?: boolean },
+  options?: { keepalive?: boolean; matchSessionToken?: string; signal?: AbortSignal },
 ): Promise<Response> {
   if (!matchmakingApiBase) {
     throw new Error('Missing VITE_MATCHMAKING_API_BASE or VITE_PROFILE_API_BASE.');
   }
-  const headers: Record<string, string> = {
-    'x-account-id': accountId,
-  };
+  const headers: Record<string, string> = {};
+  const accessToken = platform.auth.getAccessToken?.() ?? null;
+  if (accessToken) {
+    headers.authorization = `Bearer ${accessToken}`;
+  } else {
+    headers['x-account-id'] = accountId;
+  }
+  if (options?.matchSessionToken) {
+    headers['x-match-session-token'] = options.matchSessionToken;
+  }
   let payload: string | undefined;
   if (body !== undefined) {
     headers['content-type'] = 'application/json';
@@ -773,6 +1284,7 @@ async function requestOnlineRaw(
     headers,
     body: payload,
     keepalive: options?.keepalive ?? false,
+    signal: options?.signal,
   });
   return response;
 }
@@ -791,13 +1303,71 @@ function cloneOnlinePlayerInput(input: PlayerFrameInput): PlayerFrameInput {
   };
 }
 
-function hashSeedFromString(value: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
+function recordPendingRankedRemoteInputs(context: OnlineMatchContext, throughFrame: number): void {
+  const recorder = context.rankedProofRecorder;
+  if (!recorder) {
+    return;
   }
-  return (hash >>> 0) || 1;
+  for (const [frame, remoteInput] of context.inputPump.getPendingRemoteInputs()) {
+    if (frame <= throughFrame) {
+      recorder.recordInput(context.roundEpoch, frame, context.remotePlayerId, remoteInput);
+    }
+  }
+}
+
+function recordSynchronizedOnlineReplayFrames(
+  context: OnlineMatchContext,
+  session: RollbackSession,
+): void {
+  if (context.replayStatus !== 'recording') {
+    return;
+  }
+  const confirmedThrough = resolveSynchronizedReplayFrameLimit({
+    contiguousRemoteFrame: context.inputPump.getContiguousRemoteFrame(),
+    peerConfirmedThrough: context.inputPump.getPeerConfirmedThrough(),
+    currentFrame: session.getCurrentFrame(),
+    winningFrame: session.getWinningFrame()?.frame ?? null,
+  });
+  for (
+    let frame = context.replayRecorder.currentRoundFrameCount;
+    frame <= confirmedThrough;
+    frame += 1
+  ) {
+    const p1 = session.getTimelineEntry(frame, 'P1');
+    const p2 = session.getTimelineEntry(frame, 'P2');
+    if (!p1 || !p2 || p1.source === 'remote_predicted' || p2.source === 'remote_predicted') {
+      throw new Error(`Confirmed replay frame ${frame} is missing authoritative inputs.`);
+    }
+    const checksum = session.getCorrectedFrameChecksum(frame);
+    if (checksum === null) {
+      throw new Error(`Confirmed replay frame ${frame} expired from rollback history before archival.`);
+    }
+    context.replayRecorder.recordSynchronizedFrame({
+      epoch: context.roundEpoch,
+      frame,
+      confirmedThrough,
+      checksum,
+      players: {
+        P1: {
+          input: p1.input,
+          source: p1.source === 'local' ? 'local' : 'remote_authoritative',
+        },
+        P2: {
+          input: p2.input,
+          source: p2.source === 'local' ? 'local' : 'remote_authoritative',
+        },
+      },
+    });
+  }
+}
+
+function recordOnlineRollbackEvidence(context: OnlineMatchContext, rollbackFrames: number): void {
+  if (rollbackFrames <= 0) {
+    return;
+  }
+  context.rollbackApplications += 1;
+  context.rollbackFrames += rollbackFrames;
+  context.maxRollbackDepth = Math.max(context.maxRollbackDepth, rollbackFrames);
 }
 
 function getQueueWaitMs(queuedAt: string | undefined): number | null {
@@ -818,7 +1388,7 @@ function getOnlineRuntimeStatusDetail(sessionId: string | null, phase?: string |
     sessionLine,
     phaseLine,
     onlineRuntimeEnabled
-      ? 'Runtime: live relay-backed online flow enabled for this build.'
+      ? 'Runtime: authenticated WebRTC rollback flow enabled for this build.'
       : 'Runtime: public online match entry is hidden for this build.',
   ]
     .filter((line): line is string => Boolean(line))
@@ -885,18 +1455,19 @@ function getBootstrapNextStep(state: OnlineBootstrapState): string {
 
 async function submitOnlineSessionFrames(
   context: OnlineMatchContext,
-  frames: Array<{ frame: number; input: PlayerFrameInput }>,
-): Promise<void> {
+  frames: OnlineFrameSubmission[],
+): Promise<{ acceptedFrames: number }> {
   if (frames.length === 0) {
-    return;
+    return { acceptedFrames: 0 };
   }
-  await requestOnlineJson<{ acceptedFrames: number }>(
+  return await requestOnlineJson<{ acceptedFrames: number }>(
     'POST',
     `/matchmaking/sessions/${context.sessionId}/frames`,
     context.localAccountId,
     {
       sessionToken: context.sessionToken,
       frames: frames.map((entry) => ({
+        epoch: entry.epoch,
         frame: entry.frame,
         input: cloneOnlinePlayerInput(entry.input),
       })),
@@ -904,18 +1475,137 @@ async function submitOnlineSessionFrames(
   );
 }
 
-async function pollOnlineSessionFrames(context: OnlineMatchContext): Promise<void> {
-  const response = await requestOnlineJson<OnlineSessionFrameResponse>(
+async function pollOnlineSessionFrames(
+  context: OnlineMatchContext,
+  epoch: number,
+  sinceFrame: number,
+): Promise<OnlineSessionFrameResponse> {
+  return await requestOnlineJson<OnlineSessionFrameResponse>(
     'GET',
-    `/matchmaking/sessions/${context.sessionId}/frames?sessionToken=${encodeURIComponent(context.sessionToken)}&sinceFrame=${context.lastRemoteFrame}`,
+    `/matchmaking/sessions/${context.sessionId}/frames?epoch=${epoch}&sinceFrame=${sinceFrame}`,
     context.localAccountId,
+    undefined,
+    { matchSessionToken: context.sessionToken },
   );
-  for (const entry of response.frames) {
-    context.pendingRemoteInputs.set(entry.frame, cloneOnlinePlayerInput(entry.input));
-    if (entry.frame > context.lastRemoteFrame) {
-      context.lastRemoteFrame = entry.frame;
-    }
+}
+
+async function confirmOnlineSessionFrames(
+  context: OnlineMatchContext,
+  epoch: number,
+  confirmedThrough: number,
+): Promise<{ confirmedThrough: number }> {
+  return await requestOnlineJson<{ confirmedThrough: number }>(
+    'POST',
+    `/matchmaking/sessions/${context.sessionId}/frames/confirm`,
+    context.localAccountId,
+    {
+      sessionToken: context.sessionToken,
+      epoch,
+      confirmedThrough,
+    },
+  );
+}
+
+async function publishOnlineSessionSignal(
+  matchStart: MatchStartPayload,
+  transportAttemptId: string,
+  signal: {
+    clientMessageId: string;
+    signalType: WebRtcSignalType;
+    payload: unknown;
+  },
+): Promise<{ signalId: string }> {
+  return await requestOnlineJson<{ signalId: string }>(
+    'POST',
+    `/matchmaking/sessions/${matchStart.sessionId}/signals`,
+    matchStart.localPlayer.accountId,
+    {
+      sessionToken: matchStart.sessionToken,
+      transportAttemptId,
+      clientMessageId: signal.clientMessageId,
+      signalType: signal.signalType,
+      payload: signal.payload,
+    },
+  );
+}
+
+async function pollOnlineSessionSignals(
+  matchStart: MatchStartPayload,
+  transportAttemptId: string,
+  afterSignalId: string,
+): Promise<OnlineSessionSignalsResponse> {
+  const query = new URLSearchParams({
+    transportAttemptId,
+    afterSignalId,
+    limit: '100',
+  });
+  return await requestOnlineJson<OnlineSessionSignalsResponse>(
+    'GET',
+    `/matchmaking/sessions/${matchStart.sessionId}/signals?${query.toString()}`,
+    matchStart.localPlayer.accountId,
+    undefined,
+    { matchSessionToken: matchStart.sessionToken },
+  );
+}
+
+async function prepareNextOnlineTransportAttempt(
+  matchStart: MatchStartPayload,
+  currentAttempt: MatchTransportAttemptView,
+): Promise<MatchTransportAttemptView> {
+  const session = await requestOnlineJson<MatchSessionView>(
+    'POST',
+    `/matchmaking/sessions/${matchStart.sessionId}/transport-attempts`,
+    matchStart.localPlayer.accountId,
+    {
+      sessionToken: matchStart.sessionToken,
+      expectedGeneration: currentAttempt.generation,
+    },
+  );
+  if (session.transportAttempt.generation <= currentAttempt.generation) {
+    throw new Error('Server did not advance the WebRTC transport attempt.');
   }
+  return session.transportAttempt;
+}
+
+function createLocalRankedRecoveryObservation(
+  context: OnlineMatchContext,
+): LocalRankedRecoverySmokeObservation {
+  return {
+    roundEpoch: context.roundEpoch,
+    simulationFrame,
+    outboundFrames: context.inputPump.getOutboundFrameCount(),
+    mutuallyConfirmedThrough: context.inputPump.getMutuallyConfirmedThrough(),
+    attemptGeneration: context.transportAttemptGeneration,
+    connectionPath: context.connectionPath,
+    relayAvailable: context.relayAvailable,
+  };
+}
+
+function createOnlineRecoveryCheckpoint(
+  context: OnlineMatchContext,
+  transportAttemptId: string,
+): WebRtcRecoveryCheckpoint {
+  if (appPhase !== 'playing' && appPhase !== 'round_transition') {
+    throw new Error(`Online recovery cannot resume from app phase ${appPhase}.`);
+  }
+  if (!rollbackSession) {
+    throw new Error('Online recovery requires retained rollback history.');
+  }
+  const confirmedThrough = context.inputPump.getMutuallyConfirmedThrough();
+  const stateChecksum = rollbackSession.getRecoveryCheckpointChecksum(confirmedThrough);
+  if (stateChecksum === null) {
+    throw new Error(
+      `Mutually confirmed recovery frame ${confirmedThrough} is outside rollback history.`,
+    );
+  }
+  return {
+    transportAttemptId,
+    roundEpoch: context.roundEpoch,
+    confirmedThrough,
+    p1Rounds: p1RoundWins,
+    p2Rounds: p2RoundWins,
+    stateChecksum,
+  };
 }
 
 function isTerminalOnlineTransportError(error: unknown): error is OnlineRequestError {
@@ -928,9 +1618,182 @@ function isTerminalOnlineTransportError(error: unknown): error is OnlineRequestE
   return error.status === 401 || error.status === 403 || error.status === 404 || error.status === 409;
 }
 
+function closeOnlineTransport(context: OnlineMatchContext): void {
+  if (context.transportClosed) {
+    return;
+  }
+  context.transportClosed = true;
+  context.closeTransport();
+}
+
+function closeCompletedOnlineSessionNetwork(context: OnlineMatchContext): void {
+  if (onlineSessionLifecycle.getSnapshot().sessionId === context.sessionId) {
+    clearOnlineSessionHeartbeat();
+  }
+  closeOnlineTransport(context);
+}
+
+function isInterruptedOnlineScreenCurrent(context: OnlineMatchContext): boolean {
+  return onlineMatchContext === context && appPhase === 'match_over';
+}
+
+function renderResolvedOnlineInterruption(
+  context: OnlineMatchContext,
+  resolution: OnlineTerminalResolution,
+  transportReason: string,
+): void {
+  if (!isInterruptedOnlineScreenCurrent(context)) {
+    return;
+  }
+  const subtitleLines = [
+    resolution.outcomeLine,
+    `Session: ${context.sessionId}`,
+    `Queue: ${context.queueType} | Region: ${context.region}`,
+    `Transport detail: ${transportReason}`,
+  ];
+  if (context.queueType === 'ranked') {
+    subtitleLines.push(buildOnlineRankedResultDetail(context));
+  }
+  startMenu.showMatchOverScreen({
+    title: resolution.title,
+    subtitle: subtitleLines.join('\n'),
+    primaryLabel: 'Return to Home',
+    secondaryLabel: '',
+    onPrimary: () => {
+      returnToHome();
+    },
+  });
+}
+
+async function pollInterruptedRankedResult(
+  context: OnlineMatchContext,
+  resolution: OnlineTerminalResolution,
+  transportReason: string,
+): Promise<void> {
+  const maxAttempts = 8;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await waitForMilliseconds(500);
+    if (!isInterruptedOnlineScreenCurrent(context)) {
+      return;
+    }
+    try {
+      const payload = await requestOnlineJson<RankedResultSubmitResponse>(
+        'GET',
+        `/ranked/results/${context.sessionId}`,
+        context.localAccountId,
+        undefined,
+        { matchSessionToken: context.sessionToken },
+      );
+      if (await applyOnlineRankedResultResponse(context, payload)) {
+        if (payload.status === 'flagged_for_review' || payload.status === 'no_contest') {
+          renderResolvedOnlineInterruption(context, resolution, transportReason);
+        }
+        return;
+      }
+      context.rankedResultDetail = resolution.kind === 'ranked_completion_pending'
+        ? `Waiting for deterministic peer proof (${attempt}/${maxAttempts}).`
+        : `The server has attributed the forfeit; progression settlement is pending (${attempt}/${maxAttempts}).`;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'result lookup failed';
+      context.rankedResultDetail = `Authoritative result lookup ${attempt}/${maxAttempts} failed: ${detail}.`;
+    }
+    renderResolvedOnlineInterruption(context, resolution, transportReason);
+  }
+  context.rankedResultDetail = resolution.kind === 'ranked_completion_pending'
+    ? 'Deterministic proof settlement remains pending. No client-declared result was submitted.'
+    : 'The authoritative forfeit remains queued server-side. Progression will update after settlement.';
+  renderResolvedOnlineInterruption(context, resolution, transportReason);
+}
+
+async function reconcileInterruptedOnlineMatch(
+  context: OnlineMatchContext,
+  transportReason: string,
+): Promise<void> {
+  try {
+    const retryIntervalMs = 500;
+    const maxAttempts = Math.max(
+      1,
+      Math.ceil((context.reconnectGraceSeconds * 1_000) / retryIntervalMs) + 1,
+    );
+    const terminal = await pollOnlineTerminalSession({
+      read: async () => await requestOnlineJson<MatchSessionView>(
+        'GET',
+        `/matchmaking/sessions/${context.sessionId}`,
+        context.localAccountId,
+      ),
+      maxAttempts,
+      retryIntervalMs,
+      wait: waitForMilliseconds,
+      onAttempt: (attempt, attempts, session, error) => {
+        if (!isInterruptedOnlineScreenCurrent(context) || session?.status === 'resolved') {
+          return;
+        }
+        const failureDetail = error instanceof Error ? ` Last lookup: ${error.message}` : '';
+        context.statusText = `${transportReason}\nWaiting for terminal session reconciliation (${attempt}/${attempts}).${failureDetail}`;
+      },
+    });
+    if (!isInterruptedOnlineScreenCurrent(context)) {
+      return;
+    }
+    if (terminal.status === 'grace_expired') {
+      const resolution = resolveOnlineTerminalResolution({
+        queueType: context.queueType,
+        localAccountId: context.localAccountId,
+        remoteAccountId: context.remoteAccountId,
+        session: terminal.session,
+      });
+      const detail = terminal.lastError instanceof Error
+        ? ` Last lookup: ${terminal.lastError.message}`
+        : '';
+      context.rankedResultDetail = context.queueType === 'ranked'
+        ? `Terminal reconciliation grace expired without an authoritative result.${detail}`
+        : context.rankedResultDetail;
+      renderResolvedOnlineInterruption(context, resolution, transportReason);
+      return;
+    }
+    const session = terminal.session;
+    const resolution = resolveOnlineTerminalResolution({
+      queueType: context.queueType,
+      localAccountId: context.localAccountId,
+      remoteAccountId: context.remoteAccountId,
+      session,
+    });
+
+    if (resolution.kind === 'ranked_no_contest') {
+      context.finalOutcome = null;
+      context.winnerAccountId = null;
+      context.rankedResultStatus = 'no_contest';
+      context.rankedResultDetail = 'Rating, league placement, and Master Rating are unchanged.';
+    } else if (
+      resolution.kind === 'ranked_forfeit_win'
+      || resolution.kind === 'ranked_forfeit_loss'
+    ) {
+      context.finalOutcome = 'forfeit';
+      context.winnerAccountId = resolution.winnerAccountId;
+      context.rankedResultStatus = 'authoritative_pending';
+      context.rankedResultDetail = 'Server-attributed forfeit recorded. Waiting for progression settlement.';
+    } else if (resolution.kind === 'ranked_completion_pending') {
+      context.rankedResultStatus = 'awaiting_peer_confirmation';
+      context.rankedResultDetail = 'The completed session is waiting for deterministic proof settlement.';
+    }
+
+    renderResolvedOnlineInterruption(context, resolution, transportReason);
+    if (resolution.shouldPollRankedResult) {
+      await pollInterruptedRankedResult(context, resolution, transportReason);
+    }
+  } catch (error) {
+    if (!isInterruptedOnlineScreenCurrent(context)) {
+      return;
+    }
+    const detail = error instanceof Error ? error.message : 'server outcome lookup failed';
+    context.statusText = `${transportReason}\nServer outcome lookup failed: ${detail}`;
+  }
+}
+
 function interruptOnlineMatch(context: OnlineMatchContext, reason: string): void {
-  context.outgoingFrames.length = 0;
-  context.pendingRemoteInputs.clear();
+  clearOnlineSessionHeartbeat();
+  context.inputPump.clear();
+  closeOnlineTransport(context);
   context.sendAccumulatorSeconds = 0;
   context.pollAccumulatorSeconds = 0;
   context.statusText = reason;
@@ -951,7 +1814,7 @@ function interruptOnlineMatch(context: OnlineMatchContext, reason: string): void
       `Score: ${getRoundScoreText()}`,
       '',
       reason,
-      'The live relay stopped, so this match cannot continue.',
+      'The authenticated live transport stopped, so this match cannot continue.',
     ].join('\n'),
     primaryLabel: 'Return to Home',
     secondaryLabel: '',
@@ -959,19 +1822,44 @@ function interruptOnlineMatch(context: OnlineMatchContext, reason: string): void
       returnToHome();
     },
   });
+  void reconcileInterruptedOnlineMatch(context, reason);
 }
 
 function handleOnlineTransportError(
   context: OnlineMatchContext,
-  phase: 'upload' | 'poll' | 'reconnect',
+  phase: 'upload' | 'poll' | 'confirm' | 'reconnect',
   error: unknown,
 ): void {
   const prefix = phase === 'upload'
-    ? 'Frame relay upload failed'
+    ? 'Live input upload failed'
     : phase === 'poll'
-      ? 'Frame relay poll failed'
+      ? 'Live input receive failed'
+      : phase === 'confirm'
+        ? 'Live input confirmation failed'
       : 'Reconnect failed';
-  if (isTerminalOnlineTransportError(error)) {
+  if (error instanceof WebRtcFrameAckTimeoutError) {
+    const recovery = context.transportRecovery.getSnapshot();
+    if (recovery.state === 'connected') {
+      context.transportRecovery.requestRecovery(
+        new WebRtcFrameTransportClosedError(error.message),
+      );
+    }
+    return;
+  }
+  if (error instanceof WebRtcFrameTransportClosedError) {
+    const recovery = context.transportRecovery.getSnapshot();
+    if (recovery.state === 'connected') {
+      context.transportRecovery.requestRecovery(error);
+    }
+    if (recovery.state === 'failed' || recovery.state === 'closed') {
+      interruptOnlineMatch(context, `${prefix}: ${error.message}`);
+    }
+    return;
+  }
+  if (
+    error instanceof OnlineFrameProtocolError
+    || isTerminalOnlineTransportError(error)
+  ) {
     interruptOnlineMatch(context, `${prefix}: ${error.message}`);
     return;
   }
@@ -981,28 +1869,28 @@ function handleOnlineTransportError(
 }
 
 function flushOnlineTransport(context: OnlineMatchContext): void {
-  if (context.outgoingFrames.length > 0 && !context.sendInFlight) {
-    const frames = context.outgoingFrames.splice(0, context.outgoingFrames.length);
-    context.sendInFlight = true;
-    void submitOnlineSessionFrames(context, frames)
+  if (context.transportRecovery.getSnapshot().state !== 'connected') {
+    return;
+  }
+  if (context.inputPump.getOutboundFrameCount() > 0) {
+    void context.inputPump.flushOutgoing()
+      .then(() => {
+        context.smokeRecovery?.observeOutboundTail(
+          context.roundEpoch,
+          context.inputPump.getOutboundFrameCount(),
+        );
+      })
       .catch((error) => {
         handleOnlineTransportError(context, 'upload', error);
-      })
-      .finally(() => {
-        context.sendInFlight = false;
       });
   }
 
-  if (!context.pollInFlight) {
-    context.pollInFlight = true;
-    void pollOnlineSessionFrames(context)
-      .catch((error) => {
-        handleOnlineTransportError(context, 'poll', error);
-      })
-      .finally(() => {
-        context.pollInFlight = false;
-      });
-  }
+  void context.inputPump.pollIncoming().catch((error) => {
+    handleOnlineTransportError(context, 'poll', error);
+  });
+  void context.inputPump.flushConfirmation().catch((error) => {
+    handleOnlineTransportError(context, 'confirm', error);
+  });
 }
 
 function buildOnlineRankSummaryLine(snapshot: RankedProgressionView | null): string {
@@ -1021,12 +1909,17 @@ function buildOnlineRankedResultDetail(context: OnlineMatchContext): string {
   if (context.rankedResultDetail.trim().length > 0) {
     lines.push(context.rankedResultDetail.trim());
   }
+  lines.push(`Replay evidence: ${context.replayStatus.replace(/_/g, ' ')}. ${context.replayDetail}`);
   return lines.join('\n');
 }
 
 function renderOnlineMatchOverScreen(context: OnlineMatchContext, winner: PlayerId, p1Wins: number, p2Wins: number): void {
+  const authoritativeForfeit = context.finalOutcome === 'forfeit';
+  const title = authoritativeForfeit
+    ? (winner === context.localPlayerId ? 'Ranked Victory by Forfeit' : 'Ranked Defeat by Forfeit')
+    : 'Online Match Complete';
   const subtitleLines = [
-    `Winner: ${winner}`,
+    `Winner: ${winner}${authoritativeForfeit ? ' (server-attributed forfeit)' : ''}`,
     `Final rounds: P1 ${p1Wins} - ${p2Wins} P2`,
     `Session: ${context.sessionId}`,
     `Queue: ${context.queueType} | Region: ${context.region}`,
@@ -1038,12 +1931,20 @@ function renderOnlineMatchOverScreen(context: OnlineMatchContext, winner: Player
   }
 
   const secondaryLabel = context.queueType === 'ranked'
-    ? (context.rankedResultStatus === 'failed' ? 'Retry Submission' : 'Refresh Rank')
+    ? context.rankedResultStatus === 'failed'
+      ? 'Retry Submission'
+      : context.replayStatus === 'failed'
+        ? 'Retry Replay'
+        : 'Refresh Rank'
     : 'Return to Home';
   const secondaryAction = context.queueType === 'ranked'
     ? () => {
       if (context.rankedResultStatus === 'failed') {
         void submitOnlineRankedResult(context);
+        return;
+      }
+      if (context.replayStatus === 'failed') {
+        void persistOnlineMatchReplay(context);
         return;
       }
       void refreshOnlineRankedResultSummary(context);
@@ -1053,7 +1954,7 @@ function renderOnlineMatchOverScreen(context: OnlineMatchContext, winner: Player
     };
 
   startMenu.showMatchOverScreen({
-    title: 'Online Match Complete',
+    title,
     subtitle: subtitleLines.join('\n'),
     primaryLabel: 'Return to Home',
     secondaryLabel,
@@ -1093,6 +1994,235 @@ async function refreshOnlineRankedResultSummary(context: OnlineMatchContext): Pr
   }
 }
 
+function waitForMilliseconds(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, milliseconds);
+  });
+}
+
+async function applyOnlineRankedResultResponse(
+  context: OnlineMatchContext,
+  payload: RankedResultSubmitResponse,
+): Promise<boolean> {
+  context.rankedResultSubmissionId = payload.submissionId;
+  context.rankedResultResponse = payload;
+  if (context.rankedProof && payload.proof) {
+    persistLocalRankedProofReview(context.rankedProof, payload.proof);
+  }
+  const verificationDetail = payload.settlementSource === 'server_authoritative'
+    ? `Server resolution verified (${payload.authoritativeResolution?.reason?.replace(/_/g, ' ') ?? 'attributed forfeit'}).`
+    : payload.proof
+      ? `Proof ${payload.proof.digest.slice(0, 12)} verified (${payload.proof.roundCount} rounds, ${payload.proof.frameCount} frames).`
+      : 'Proof verification details unavailable.';
+  if (payload.status === 'no_contest') {
+    context.rankedResultStatus = 'no_contest';
+    context.rankedResultDetail = `${verificationDetail}\nNo rating was changed.`;
+    return true;
+  }
+  if (payload.status === 'authoritative_pending') {
+    context.rankedResultStatus = 'authoritative_pending';
+    context.rankedResultDetail = `${verificationDetail}\nProgression settlement is queued server-side.`;
+    return false;
+  }
+  if (payload.status === 'flagged_for_review') {
+    context.rankedResultStatus = 'flagged_for_review';
+    context.rankedResultDetail = `${verificationDetail}\nSubmission flagged for review${payload.suspiciousReasons.length > 0 ? `: ${payload.suspiciousReasons.join(', ')}` : '.'}`;
+    return true;
+  }
+  if (payload.status === 'awaiting_peer_confirmation') {
+    context.rankedResultStatus = 'awaiting_peer_confirmation';
+    context.rankedResultDetail = `${verificationDetail}\nWaiting for the opponent to submit the same proof.`;
+    return false;
+  }
+
+  if (payload.outcome) {
+    context.finalOutcome = payload.outcome;
+  }
+  if (payload.winnerAccountId !== undefined) {
+    context.winnerAccountId = payload.winnerAccountId;
+  }
+  context.rankedResultStatus = 'accepted';
+  const localDelta = payload.ratingDeltas?.find((entry) => entry.accountId === context.localAccountId) ?? null;
+  context.rankedResultDetail = localDelta
+    ? `${verificationDetail}\nLocal result: ${localDelta.result} | Rating ${localDelta.preRating} -> ${localDelta.postRating} (${formatSigned(localDelta.ratingDelta)})`
+    : `${verificationDetail}\nRanked result accepted.`;
+  await refreshOnlineRankedResultSummary(context);
+  return true;
+}
+
+async function pollOnlineRankedResultConsensus(context: OnlineMatchContext): Promise<void> {
+  const maxAttempts = 12;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await waitForMilliseconds(1_000);
+    if (onlineMatchContext !== context) {
+      return;
+    }
+    try {
+      const payload = await requestOnlineJson<RankedResultSubmitResponse>(
+        'GET',
+        `/ranked/results/${context.sessionId}`,
+        context.localAccountId,
+        undefined,
+        { matchSessionToken: context.sessionToken },
+      );
+      if (await applyOnlineRankedResultResponse(context, payload)) {
+        return;
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'status request failed';
+      context.rankedResultDetail = `Peer confirmation check ${attempt}/${maxAttempts} failed: ${detail}. Retrying.`;
+      continue;
+    }
+    context.rankedResultDetail = `Verified proof is waiting for the opponent (${attempt}/${maxAttempts}).`;
+  }
+  context.rankedResultDetail = 'Verified proof remains pending the peer copy. Progression will update after settlement.';
+}
+
+async function persistOnlineMatchReplay(context: OnlineMatchContext): Promise<void> {
+  if (
+    context.replayInFlight
+    || context.replayStatus === 'persisted'
+    || (context.finalOutcome !== 'p1_win' && context.finalOutcome !== 'p2_win')
+    || !context.winnerAccountId
+  ) {
+    return;
+  }
+  if (
+    context.queueType === 'ranked'
+    && context.rankedResultStatus !== 'accepted'
+    && context.rankedResultStatus !== 'flagged_for_review'
+    && context.rankedResultStatus !== 'already_processed'
+  ) {
+    return;
+  }
+
+  context.replayInFlight = true;
+  context.replayStatus = 'persisting';
+  context.replayDetail = 'Uploading canonical rollback evidence.';
+  try {
+    const payload = context.replayPayload ?? await context.replayRecorder.buildPayload();
+    context.replayPayload = payload;
+    const p1AccountId = context.localPlayerId === 'P1'
+      ? context.localAccountId
+      : context.remoteAccountId;
+    const p2AccountId = context.localPlayerId === 'P2'
+      ? context.localAccountId
+      : context.remoteAccountId;
+    const p1Won = context.finalOutcome === 'p1_win';
+    const endedAt = new Date().toISOString();
+    const ingestBody = {
+      matchId: context.sessionId,
+      queueType: context.queueType,
+      matchType: context.queueType,
+      region: context.region,
+      patchVersion: diagnosticsBuildId,
+      rulesetVersion: payload.header.rulesetVersion,
+      simBuildHash: payload.header.simBuildHash,
+      startedAt: context.replayStartedAt,
+      endedAt,
+      durationSeconds: Math.round(payload.inputTimeline.length * fixedDt),
+      outcome: context.finalOutcome,
+      winnerAccountId: context.winnerAccountId,
+      participants: [
+        {
+          accountId: p1AccountId,
+          side: 'P1' as const,
+          characterId: context.matchLoadout.P1,
+          result: p1Won ? 'win' as const : 'loss' as const,
+        },
+        {
+          accountId: p2AccountId,
+          side: 'P2' as const,
+          characterId: context.matchLoadout.P2,
+          result: p1Won ? 'loss' as const : 'win' as const,
+        },
+      ],
+      payload,
+    };
+    const maxAttempts = 3;
+    let response: ReplayIngestResponseView | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        response = await requestOnlineJson<ReplayIngestResponseView>(
+          'POST',
+          '/replays/ingest',
+          context.localAccountId,
+          ingestBody,
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+        const retryable = !(error instanceof OnlineRequestError)
+          || error.status === 429
+          || error.status >= 500;
+        if (!retryable || attempt === maxAttempts) {
+          throw error;
+        }
+        context.replayDetail = `Replay upload attempt ${attempt}/${maxAttempts} failed; retrying.`;
+        await waitForMilliseconds(attempt * 500);
+      }
+    }
+    if (!response) {
+      throw lastError instanceof Error ? lastError : new Error('Replay upload failed.');
+    }
+    context.replayId = response.replayId;
+    context.replayStatus = 'persisted';
+    context.replayDetail = response.existing
+      ? `Canonical replay ${response.replayId} already existed and matched this peer.`
+      : `Canonical replay ${response.replayId} persisted.`;
+    await refreshReplayArchive();
+  } catch (error) {
+    context.replayStatus = 'failed';
+    context.replayDetail = error instanceof Error
+      ? `Replay persistence failed: ${error.message}`
+      : 'Replay persistence failed.';
+  } finally {
+    context.replayInFlight = false;
+  }
+}
+
+async function reconcileOnlineRankedSubmission(
+  context: OnlineMatchContext,
+  submissionDetail: string,
+): Promise<boolean> {
+  const maxAttempts = 4;
+  let lastError: unknown = null;
+  context.rankedResultStatus = 'submitting';
+  context.rankedResultDetail = `${submissionDetail} Checking the authoritative server result.`;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (attempt > 1) {
+      await waitForMilliseconds(attempt * 250);
+    }
+    try {
+      const payload = await requestOnlineJson<RankedResultSubmitResponse>(
+        'GET',
+        `/ranked/results/${context.sessionId}`,
+        context.localAccountId,
+        undefined,
+        { matchSessionToken: context.sessionToken },
+      );
+      const settled = await applyOnlineRankedResultResponse(context, payload);
+      if (!settled) {
+        await pollOnlineRankedResultConsensus(context);
+      }
+      await persistOnlineMatchReplay(context);
+      return true;
+    } catch (error) {
+      lastError = error;
+      context.rankedResultDetail = `${submissionDetail} Authoritative result check ${attempt}/${maxAttempts} failed; retrying.`;
+    }
+  }
+
+  const reconciliationDetail = lastError instanceof Error
+    ? lastError.message
+    : 'authoritative result lookup failed';
+  context.rankedResultStatus = 'failed';
+  context.rankedResultDetail = `${submissionDetail} Server reconciliation failed: ${reconciliationDetail}`;
+  return false;
+}
+
 async function submitOnlineRankedResult(context: OnlineMatchContext): Promise<void> {
   if (context.queueType !== 'ranked' || !context.finalOutcome || context.rankedResultInFlight) {
     return;
@@ -1109,6 +2239,15 @@ async function submitOnlineRankedResult(context: OnlineMatchContext): Promise<vo
   }
 
   try {
+    if (
+      !context.rankedProofRecorder
+      || (context.finalOutcome !== 'p1_win' && context.finalOutcome !== 'p2_win')
+    ) {
+      throw new Error('Ranked result is missing a complete deterministic match proof.');
+    }
+    const proof = context.rankedProof
+      ?? context.rankedProofRecorder.buildProof(context.finalOutcome);
+    context.rankedProof = proof;
     const response = await requestOnlineRaw(
       'POST',
       '/ranked/results',
@@ -1120,24 +2259,17 @@ async function submitOnlineRankedResult(context: OnlineMatchContext): Promise<vo
         outcome: context.finalOutcome,
         participantAccountIds: [context.localAccountId, context.remoteAccountId],
         winnerAccountId: context.winnerAccountId,
+        proof,
       },
     );
 
     if (response.ok) {
       const payload = await response.json() as RankedResultSubmitResponse;
-      context.rankedResultSubmissionId = payload.submissionId;
-      if (payload.status === 'flagged_for_review') {
-        context.rankedResultStatus = 'flagged_for_review';
-        context.rankedResultDetail = `Submission flagged for review${payload.suspiciousReasons.length > 0 ? `: ${payload.suspiciousReasons.join(', ')}` : '.'}`;
-      } else {
-        context.rankedResultStatus = 'accepted';
-        const localDelta = payload.ratingDeltas?.find((entry) => entry.accountId === context.localAccountId) ?? null;
-        const deltaLine = localDelta
-          ? `Local result: ${localDelta.result} | Rating ${localDelta.preRating} -> ${localDelta.postRating} (${formatSigned(localDelta.ratingDelta)})`
-          : 'Ranked result accepted.';
-        context.rankedResultDetail = deltaLine;
-        await refreshOnlineRankedResultSummary(context);
+      const settled = await applyOnlineRankedResultResponse(context, payload);
+      if (!settled) {
+        await pollOnlineRankedResultConsensus(context);
       }
+      await persistOnlineMatchReplay(context);
     } else {
       const errorMessage = await parseOnlineApiError(response);
       if (
@@ -1147,17 +2279,21 @@ async function submitOnlineRankedResult(context: OnlineMatchContext): Promise<vo
           || errorMessage.includes('already submitted')
         )
       ) {
-        context.rankedResultStatus = 'already_processed';
-        context.rankedResultDetail = 'Ranked result was already processed for this session.';
-        await refreshOnlineRankedResultSummary(context);
+        await reconcileOnlineRankedSubmission(
+          context,
+          'Ranked result was already received for this session.',
+        );
       } else {
         context.rankedResultStatus = 'failed';
         context.rankedResultDetail = errorMessage;
       }
     }
   } catch (error) {
-    context.rankedResultStatus = 'failed';
-    context.rankedResultDetail = error instanceof Error ? error.message : 'Ranked result submission failed.';
+    const detail = error instanceof Error ? error.message : 'Ranked result submission failed.';
+    await reconcileOnlineRankedSubmission(
+      context,
+      `Ranked submission response was unavailable: ${detail}.`,
+    );
   } finally {
     context.rankedResultInFlight = false;
     if (onlineMatchContext === context && appPhase === 'match_over') {
@@ -1242,6 +2378,7 @@ function toRoomViewState(room: RoomView | null, fallbackRoomCode?: string): Onli
 
 async function joinRankedQueue(): Promise<OnlineRankedViewState> {
   const accountId = getOnlineAccountIdOrThrow();
+  const previousTicket = playerRankedTicket;
   playerRankedTicket = await requestOnlineJson<QueueTicketView>(
     'POST',
     '/matchmaking/queue/join',
@@ -1249,7 +2386,9 @@ async function joinRankedQueue(): Promise<OnlineRankedViewState> {
     {
       queueType: 'ranked',
       regionPreferences: ['us-east', 'us-west', 'eu-west'],
-      buildVersion: '0.1.0-web',
+      buildVersion: diagnosticsBuildId,
+      rulesetVersion: getOnlineRulesetVersion(),
+      balanceProfileId: activeBalanceProfile.id,
       platform: 'web',
       characterId: selectedLoadout.P1,
     },
@@ -1260,7 +2399,10 @@ async function joinRankedQueue(): Promise<OnlineRankedViewState> {
       `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
       accountId,
     );
-    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue');
+    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue', {
+      previousTicket,
+      serverCreatedTicket: playerRankedTicket.joinDisposition === 'created',
+    });
   } else {
     playerRankedSession = null;
   }
@@ -1272,6 +2414,7 @@ async function refreshRankedQueue(): Promise<OnlineRankedViewState> {
   if (!playerRankedTicket) {
     return toRankedViewState(null, null);
   }
+  const previousTicket = playerRankedTicket;
   playerRankedTicket = await requestOnlineJson<QueueTicketView>(
     'GET',
     `/matchmaking/queue/tickets/${playerRankedTicket.ticketId}`,
@@ -1283,7 +2426,10 @@ async function refreshRankedQueue(): Promise<OnlineRankedViewState> {
       `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
       accountId,
     );
-    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue');
+    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue', {
+      previousTicket,
+      serverCreatedTicket: false,
+    });
   } else {
     playerRankedSession = null;
   }
@@ -1391,7 +2537,7 @@ async function openLatestReplay(): Promise<ReplayArchiveViewState> {
     `/replays/${latest.replayId}/payload`,
     accountId,
   );
-  const opened = beginReplayReviewFromPayload(payloadResponse.payload, `archive:${payloadResponse.replayId}`);
+  const opened = await beginReplayReviewFromPayload(payloadResponse.payload, `archive:${payloadResponse.replayId}`);
   if (!opened) {
     throw new Error(`Replay payload validation failed for ${payloadResponse.replayId}.`);
   }
@@ -1400,6 +2546,116 @@ async function openLatestReplay(): Promise<ReplayArchiveViewState> {
     detail: formatReplayArchiveDetail(playerReplayItems),
     tone: 'success',
     hint: 'Replay review is now active. Exit replay review to return to the menu.',
+  };
+}
+
+async function openLocalReplayFile(file: File): Promise<ReplayArchiveViewState> {
+  const maximumBytes = 16 * 1024 * 1024;
+  if (file.size > maximumBytes) {
+    throw new Error(`Replay file is ${(file.size / 1024 / 1024).toFixed(1)} MB; the local review limit is 16 MB.`);
+  }
+  let payloadRaw: unknown;
+  try {
+    payloadRaw = JSON.parse(await file.text()) as unknown;
+  } catch {
+    throw new Error(`${file.name} is not valid JSON.`);
+  }
+  const opened = await beginReplayReviewFromPayload(payloadRaw, `local:${file.name}`, true);
+  if (!opened) {
+    throw new Error(`${file.name} is invalid or does not reproduce its recorded frame checksums.`);
+  }
+  return {
+    headline: `Opened ${file.name}`,
+    detail: 'The replay was validated locally and opened at its flagged gameplay-flow sequence.',
+    tone: 'success',
+    hint: 'Use frame step, speed controls, contact windows, and Gameplay Flow Review to inspect the loop.',
+  };
+}
+
+async function openLocalFlowReview(reviewCase: LocalFlowReviewCase): Promise<ReplayArchiveViewState> {
+  const payloadRaw = await fetchLocalFlowReviewReplay(reviewCase.id);
+  const opened = await beginReplayReviewFromPayload(
+    payloadRaw,
+    `local-flow:${reviewCase.label}`,
+    true,
+  );
+  if (!opened) {
+    throw new Error(
+      `${reviewCase.label} is invalid or does not reproduce its recorded frame checksums.`,
+    );
+  }
+  return {
+    headline: `Opened ${reviewCase.kind}`,
+    detail: `${reviewCase.label}\nRound seed ${reviewCase.roundSeed}; focused at frame ${reviewCase.focusFrame}.`,
+    tone: 'success',
+    hint: 'Use frame step, speed controls, contact windows, and Gameplay Flow Review to judge the sequence.',
+  };
+}
+
+function persistLocalRankedProofReview(
+  proof: RankedMatchProof,
+  verification: NonNullable<RankedResultSubmitResponse['proof']>,
+): void {
+  if (!runtimeConfig.features.debugToolsEnabled) {
+    return;
+  }
+  void import('./sim/rankedProofReview').then(({ createStoredRankedProofReview }) => {
+    const record = createStoredRankedProofReview(proof, verification);
+    window.localStorage.setItem(LOCAL_RANKED_PROOF_REVIEW_STORAGE_KEY, JSON.stringify(record));
+  }).catch((error: unknown) => {
+    console.warn('[ranked-proof] local review persistence skipped', error);
+  });
+}
+
+async function openLocalRankedProofReview(): Promise<ReplayArchiveViewState> {
+  let rawRecord: unknown;
+  try {
+    const stored = window.localStorage.getItem(LOCAL_RANKED_PROOF_REVIEW_STORAGE_KEY);
+    if (!stored) {
+      return {
+        headline: 'No local ranked proof yet',
+        detail: 'This device has not retained a server-verified ranked match proof.',
+        tone: 'warning',
+        hint: 'Complete a ranked match, wait for proof verification, then return here.',
+      };
+    }
+    rawRecord = JSON.parse(stored) as unknown;
+  } catch {
+    return {
+      headline: 'Local ranked proof unreadable',
+      detail: 'The retained proof record is not valid JSON.',
+      tone: 'warning',
+      hint: 'Complete another ranked match to replace the local record.',
+    };
+  }
+
+  const {
+    buildRankedProofReviewData,
+    parseStoredRankedProofReview,
+  } = await import('./sim/rankedProofReview');
+  const parsed = await parseStoredRankedProofReview(rawRecord);
+  if (parsed.ok === false) {
+    return {
+      headline: 'Local ranked proof rejected',
+      detail: parsed.message,
+      tone: 'warning',
+      hint: 'The replay viewer will only open a proof matching its server verification receipt.',
+    };
+  }
+
+  const review = buildRankedProofReviewData(parsed.record.proof);
+  const sourceLabel = `ranked:${parsed.record.proof.sessionId} | verified ${parsed.record.verification.digest.slice(0, 12)}`;
+  beginReplayReview(review, sourceLabel);
+  return {
+    headline: 'Opened local ranked match',
+    detail: [
+      `Saved: ${new Date(parsed.record.savedAt).toLocaleString()}`,
+      `Proof: ${parsed.record.verification.digest}`,
+      `Rounds: ${parsed.record.verification.roundCount}`,
+      `Frames: ${parsed.record.verification.frameCount}`,
+    ].join('\n'),
+    tone: 'success',
+    hint: 'Use the round selector and Gameplay Flow Review to inspect contact, spacing, resets, action variety, and exchanges.',
   };
 }
 
@@ -1568,13 +2824,26 @@ function parseRankedProgression(payload: unknown): RankedProgressionView | null 
   };
 }
 
-function toRankedSnapshotViewState(snapshot: RankedProgressionView | null, source: 'api' | 'profile' | 'none'): RankedSnapshotViewState {
+function toRankedSnapshotViewState(
+  snapshot: RankedProgressionView | null,
+  source: 'api' | 'profile' | 'none',
+  leaderboard: RankedLeaderboardView | null = null,
+  viewerAccountId = '',
+): RankedSnapshotViewState {
+  const leaderboardSummary = leaderboard
+    ? buildRankedLeaderboardSummary(leaderboard, viewerAccountId)
+    : null;
   if (!snapshot) {
     return {
       headline: 'No ranked data',
-      detail: 'No ranked progression data is available yet.',
+      detail: [
+        'No ranked progression data is available yet.',
+        leaderboardSummary?.detail,
+      ].filter(Boolean).join('\n\n'),
       tone: 'warning',
-      hint: 'Complete a ranked session, then refresh again after result submission finishes.',
+      hint: leaderboardSummary
+        ? 'Complete a ranked session to enter the leaderboard.'
+        : 'Complete a ranked session, then refresh again after result submission finishes.',
     };
   }
   const sourceLabel = source === 'api' ? 'Ranked API' : 'Profile fallback';
@@ -1587,12 +2856,18 @@ function toRankedSnapshotViewState(snapshot: RankedProgressionView | null, sourc
     : 'Calibration: n/a';
   const trendLine = buildRankedTrendLine(snapshot);
   const promotionLine = buildPromotionLine(snapshot);
+  const rankLabel = leaderboardSummary?.viewerRank ? `#${leaderboardSummary.viewerRank} | ` : '';
   return {
-    headline: `${snapshot.leagueTier ?? 'Placement'} | Rating ${snapshot.rating ?? 'n/a'}`,
-    detail: `Source: ${sourceLabel}\nSeason: ${snapshot.seasonId ?? 'current'}\n${statusLine}\n${placementLine}\nLeague Points: ${snapshot.leaguePoints ?? 'n/a'}\nMR Points: ${snapshot.mrPoints ?? 'n/a'}\n${promotionLine}\n${trendLine}\nUpdated: ${snapshot.updatedAt ?? 'unknown'}`,
+    headline: `${rankLabel}${snapshot.leagueTier ?? 'Placement'} | Rating ${snapshot.rating ?? 'n/a'}`,
+    detail: [
+      `Source: ${sourceLabel}\nSeason: ${snapshot.seasonId ?? 'current'}\n${statusLine}\n${placementLine}\nLeague Points: ${snapshot.leaguePoints ?? 'n/a'}\nMR Points: ${snapshot.mrPoints ?? 'n/a'}\n${promotionLine}\n${trendLine}\nUpdated: ${snapshot.updatedAt ?? 'unknown'}`,
+      leaderboardSummary?.detail,
+    ].filter(Boolean).join('\n\n'),
     tone: source === 'api' ? 'success' : 'neutral',
-    hint: source === 'api'
-      ? 'Snapshot is current from the ranking service.'
+    hint: source === 'api' && leaderboardSummary
+      ? 'Progression and the current top 100 leaderboard are live from the ranking service.'
+      : source === 'api'
+        ? 'Snapshot is current from the ranking service; leaderboard data is unavailable.'
       : 'This snapshot came from stored profile data and may lag behind the latest match.',
   };
 }
@@ -1603,7 +2878,25 @@ async function refreshRankedSnapshot(): Promise<RankedSnapshotViewState> {
   if (rankedResponse.ok) {
     const payload = await rankedResponse.json() as unknown;
     playerRankedSnapshot = parseRankedProgression(payload);
-    return toRankedSnapshotViewState(playerRankedSnapshot, 'api');
+    const leaderboardQuery = new URLSearchParams({ limit: '100', offset: '0' });
+    if (playerRankedSnapshot?.seasonId) {
+      leaderboardQuery.set('seasonId', playerRankedSnapshot.seasonId);
+    }
+    const leaderboardResponse = await requestOnlineRaw(
+      'GET',
+      `/ranked/leaderboard?${leaderboardQuery.toString()}`,
+      accountId,
+    );
+    let leaderboard: RankedLeaderboardView | null = null;
+    if (leaderboardResponse.ok) {
+      leaderboard = parseRankedLeaderboard(await leaderboardResponse.json() as unknown);
+      if (!leaderboard) {
+        throw new Error('Ranked leaderboard returned an invalid response.');
+      }
+    } else if (leaderboardResponse.status !== 404 && leaderboardResponse.status !== 501) {
+      throw new Error(await parseOnlineApiError(leaderboardResponse));
+    }
+    return toRankedSnapshotViewState(playerRankedSnapshot, 'api', leaderboard, accountId);
   }
   if (rankedResponse.status !== 404 && rankedResponse.status !== 501) {
     throw new Error(await parseOnlineApiError(rankedResponse));
@@ -1700,6 +2993,18 @@ const startMenu = createStartMenu({
   onOpenLatestReplay: async () => {
     return await openLatestReplay();
   },
+  onOpenLocalReplayFile: async (file: File) => {
+    return await openLocalReplayFile(file);
+  },
+  onLoadLocalFlowReviews: localFlowReviewToolsEnabled
+    ? async () => await fetchLocalFlowReviewCatalog()
+    : undefined,
+  onOpenLocalFlowReview: localFlowReviewToolsEnabled
+    ? async (reviewCase: LocalFlowReviewCase) => await openLocalFlowReview(reviewCase)
+    : undefined,
+  onOpenLocalRankedProofReview: runtimeConfig.features.debugToolsEnabled
+    ? async () => await openLocalRankedProofReview()
+    : undefined,
   onRefreshRankedSnapshot: async () => {
     return await refreshRankedSnapshot();
   },
@@ -1735,7 +3040,6 @@ void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
   console.error('[assets] preload failed', error);
 });
 
-const fixedDt = 1 / 60;
 const maxAccumulatedTime = 0.25;
 
 let accumulator = 0;
@@ -1750,12 +3054,11 @@ let replayReviewSourceLabel = '';
 let replayFrameIndex = 0;
 let replayAccumulator = 0;
 let replayPaused = true;
+let replayReturnPhase: ReplayReturnPhase = 'home';
 const replaySpeedOptions = [0.25, 0.5, 1, 2, 4];
 let replaySpeedIndex = 2;
 let rankedQueueAutoPollAccumulatorSeconds = 0;
 let rankedQueueAutoPollInFlight = false;
-let onlineLifecycleDisconnectedSessionId: string | null = null;
-let onlineLifecycleReconnectInFlight = false;
 let playerRankedTicket: QueueTicketView | null = null;
 let playerRankedSession: MatchSessionView | null = null;
 let playerRoom: RoomView | null = null;
@@ -1799,6 +3102,7 @@ function getEnabledModes(): GameMode[] {
   if (runtimeConfig.features.trainingModeEnabled) {
     enabledModes.push('training');
   }
+  enabledModes.push('balance_sparring');
   enabledModes.push('cpu_vs_cpu');
   return enabledModes;
 }
@@ -1891,7 +3195,7 @@ function loadSettings(): LoadedSettings {
   const fallback: LoadedSettings = {
     mode: fallbackMode,
     menuThemeId: DEFAULT_MENU_THEME_ID,
-      stageAtmosphereId: 'wormhole_depths_v1',
+    stageAtmosphereId: ONLINE_ALPHA_STAGE_ATMOSPHERE_ID,
     loadout: {
       P1: DEFAULT_CHARACTER_LOADOUT.P1,
       P2: DEFAULT_CHARACTER_LOADOUT.P2,
@@ -1992,6 +3296,7 @@ function buildHistorySyncProfileSettingsPayload(
 
 function applyLoadedProfileSettings(profileSettings: LoadedSettings): void {
   selectedMode = profileSettings.mode;
+  pauseMenu.setBalanceLabAvailable(selectedMode === 'balance_sparring');
   selectedMenuThemeId = profileSettings.menuThemeId;
   selectedStageAtmosphereId = profileSettings.stageAtmosphereId;
   selectedLoadout = profileSettings.loadout;
@@ -2282,6 +3587,50 @@ function resolveLoadoutForCurrentMatch(): PlayersById<CharacterId> {
   return selectedLoadout;
 }
 
+function formatAiControllerRoles(roles: AiControllerRoles): string {
+  return `P1 ${resolveAiControllerRole(roles.P1).label} / P2 ${resolveAiControllerRole(roles.P2).label}`;
+}
+
+function getCurrentBalanceScenarioIdentity(): BalanceLabScenarioIdentity {
+  const aiDifficulty = resolveAiDifficultyForCurrentMatch();
+  const startingSituation = resolveBalanceScenario(activeBalanceScenarioId);
+  const balanceSparring = selectedMode === 'balance_sparring';
+  const testRecipe = findBalanceTestRecipeForSetup(
+    activeBalanceScenarioId,
+    activeAiControllerRoles,
+  );
+  const loadout = {
+    P1: state.players.P1.characterId,
+    P2: state.players.P2.characterId,
+  };
+  const descriptor = {
+    schemaVersion: 'gw.balance-lab-scenario.v5',
+    startingSituationSchemaVersion: BALANCE_SCENARIO_SCHEMA_VERSION,
+    aiControllerRoleSchemaVersion: AI_CONTROLLER_ROLE_SCHEMA_VERSION,
+    balanceTestRecipeSchemaVersion: BALANCE_TEST_RECIPE_SCHEMA_VERSION,
+    balanceTestRecipeId: testRecipe?.id ?? 'custom',
+    humanControlledPlayerId: balanceSparring ? 'P1' : null,
+    aiControllerRoles: sanitiseAiControllerRoles(activeAiControllerRoles),
+    startingSituationId: startingSituation.id,
+    mode: selectedMode,
+    seed: state.seed,
+    aiDifficulty,
+    fixedDt,
+    rules: state.rules,
+    loadout,
+    rulesetVersion: runtimeRulesetVersion,
+  };
+  const controllerLabel = balanceSparring
+    ? `P1 Human / P2 ${resolveAiControllerRole(activeAiControllerRoles.P2).label}`
+    : formatAiControllerRoles(activeAiControllerRoles);
+  return {
+    fingerprint: fingerprintDeterministicValue(descriptor),
+    label: `${testRecipe?.label ?? 'Custom probe'} | ${startingSituation.label} | ${selectedMode} | seed ${state.seed} | ${aiDifficulty} | ${controllerLabel} | ${loadout.P1} vs ${loadout.P2}`,
+    sampleId: `local-sample-${balanceLabSampleSequence}`,
+    descriptor,
+  };
+}
+
 function resolveRecordedArcadeDifficulty(run: ArcadeRunState): AiDifficultyId {
   let maxRank = getAiDifficultyRank(selectedAiDifficulty);
   for (const record of run.records) {
@@ -2295,19 +3644,27 @@ function resolveRecordedArcadeDifficulty(run: ArcadeRunState): AiDifficultyId {
 
 function createTrainingTelemetryForCurrentSelection(): TrainingTelemetryTracker {
   return createTrainingTelemetryTracker({
-    balanceProfileId: activeBalanceProfile.id,
-    rulesetVersion: activeRulesetVersion,
+    balanceProfileId: runtimeBalanceProfileId,
+    rulesetVersion: getRuntimeRulesetVersion(),
     playerCharacterId: selectedLoadout.P1,
     opponentCharacterId: selectedLoadout.P2,
   });
 }
 
 function shouldShowLiveInputHistory(): boolean {
-  return appPhase === 'playing' && (selectedMode === 'training' || selectedMode === 'cpu_vs_cpu');
+  return appPhase === 'playing' && isLocalBalanceLabMode(selectedMode);
 }
 
 function shouldShowLiveMatchTelemetry(): boolean {
-  return appPhase === 'playing' && (selectedMode === 'training' || selectedMode === 'cpu_vs_cpu');
+  return appPhase === 'playing' && isLocalBalanceLabMode(selectedMode);
+}
+
+function isLocalAiRoundReviewMode(mode: GameMode): boolean {
+  return mode === 'endless'
+    || mode === 'best_of_3'
+    || mode === 'arcade'
+    || mode === 'balance_sparring'
+    || mode === 'cpu_vs_cpu';
 }
 
 function buildOfflineAiControllersForCurrentMode(): Partial<Record<PlayerId, AiControllerState>> {
@@ -2319,35 +3676,114 @@ function buildOfflineAiControllersForCurrentMode(): Partial<Record<PlayerId, AiC
   if (selectedMode === 'cpu_vs_cpu') {
     return {
       P1: createAiController({
-        seed: selectedMatchSeed ^ 0x517cc1b7,
+        seed: deriveOfflineAiSeed(state.seed, 'P1'),
         profileId,
+        behaviorTuning: activeAiBehaviorTuning,
       }),
       P2: createAiController({
-        seed: selectedMatchSeed ^ 0x9e3779b9,
+        seed: deriveOfflineAiSeed(state.seed, 'P2'),
         profileId,
+        behaviorTuning: activeAiBehaviorTuning,
       }),
     };
   }
 
   return {
     P2: createAiController({
-      seed: selectedMatchSeed ^ 0x9e3779b9,
+      seed: deriveOfflineAiSeed(state.seed, 'P2'),
       profileId,
+      ...(selectedMode === 'balance_sparring'
+        ? { behaviorTuning: activeAiBehaviorTuning }
+        : {}),
     }),
   };
 }
 
-function resetRoundState(): void {
+function resetRoundState(options: { advanceOfflineRound?: boolean } = {}): void {
+  const completedAiRoundReplay = liveAiRoundReplayRecorder?.buildPayload() ?? null;
+  if (completedAiRoundReplay) {
+    latestAiRoundReplayPayload = completedAiRoundReplay;
+  }
+  liveAiRoundReplayRecorder = null;
   persistRollbackDiagnostics('round_reset');
-  const tuning = state.tuning;
+  balanceLabSampleSequence += 1;
+  if (
+    options.advanceOfflineRound
+    && onlineMatchContext === null
+    && selectedMode !== 'training'
+  ) {
+    offlineRoundIndex += 1;
+  }
+  if (onlineMatchContext) {
+    onlineMatchContext.roundEpoch += 1;
+    onlineMatchContext.inputPump.startEpoch(onlineMatchContext.roundEpoch);
+  }
+  const localBalanceEligible = onlineMatchContext === null
+    && isLocalBalanceLabMode(selectedMode);
+  const tuning = selectLocalBalanceTuning(
+    selectedMode,
+    onlineMatchContext !== null,
+    activeBalanceProfile.tuning,
+    localBalanceTuningDraft,
+  );
+  runtimeBalanceProfileId = localBalanceEligible
+    ? localBalanceProfileId
+    : activeBalanceProfile.id;
+  activeBalanceScenarioId = localBalanceEligible
+    ? localBalanceScenarioId
+    : DEFAULT_BALANCE_SCENARIO_ID;
   const matchLoadout = onlineMatchContext ? onlineMatchContext.matchLoadout : resolveLoadoutForCurrentMatch();
+  const characterBalanceOverrides = selectLocalCharacterBalanceOverrides(
+    selectedMode,
+    onlineMatchContext !== null,
+    localCharacterBalanceOverrides,
+  );
+  activeAiBehaviorTuning = selectLocalAiBehaviorTuning(
+    selectedMode,
+    onlineMatchContext !== null,
+    localAiBehaviorTuning,
+  );
+  activeAiControllerRoles = selectLocalAiControllerRoles(
+    selectedMode,
+    onlineMatchContext !== null,
+    localAiControllerRoles,
+  );
+  const roundSeed = onlineMatchContext
+    ? selectedMatchSeed
+    : deriveOfflineRoundSeed(selectedMatchSeed, offlineRoundIndex);
   state = createInitialState({
     loadout: matchLoadout,
-    seed: selectedMatchSeed,
+    seed: roundSeed,
     rules: getRulesForMode(selectedMode),
+    characterBalanceOverrides,
   });
   state.tuning = { ...tuning };
+  applyBalanceScenario(state, activeBalanceScenarioId);
+  const LocalRankedSmokeInputDriverConstructor = localRankedSmokeInputDriverModule
+    ?.LocalRankedSmokeInputDriver;
+  localRankedSmokeInputDriver = LocalRankedSmokeInputDriverConstructor && onlineMatchContext
+    ? new LocalRankedSmokeInputDriverConstructor({
+      seed: state.seed,
+      loadout: state.loadout,
+      rules: state.rules,
+      tuning: state.tuning,
+      characterBalanceOverrides: state.characterBalanceOverrides,
+    })
+    : null;
+  onlineMatchContext?.rankedProofRecorder?.startRound(onlineMatchContext.roundEpoch);
+  onlineMatchContext?.replayRecorder.startRound(onlineMatchContext.roundEpoch);
   matchTelemetry = createMatchTelemetryTracker(state);
+  aiDecisionTelemetry.startRound();
+  roundTuningFingerprint = fingerprintBalanceTuning(state.tuning);
+  balanceTuningDirty = false;
+  roundCharacterBalanceFingerprint = fingerprintCharacterBalanceOverrides(
+    state.characterBalanceOverrides,
+  );
+  characterBalanceDirty = false;
+  roundAiBehaviorFingerprint = fingerprintAiBehaviorTuning(activeAiBehaviorTuning);
+  aiBehaviorDirty = false;
+  roundAiControllerRolesFingerprint = fingerprintAiControllerRoles(activeAiControllerRoles);
+  aiControllerRolesDirty = false;
   sceneContext.cameraPlayerTracks.P1.set(state.players.P1.pos.x, state.players.P1.pos.y);
   sceneContext.cameraPlayerTracks.P2.set(state.players.P2.pos.x, state.players.P2.pos.y);
   sceneContext.launchCameraActive = false;
@@ -2363,6 +3799,56 @@ function resetRoundState(): void {
     })
     : null;
   aiControllers = buildOfflineAiControllersForCurrentMode();
+  if (isLocalAiRoundReviewMode(selectedMode) && onlineMatchContext === null) {
+    const aiMirror = selectedMode === 'cpu_vs_cpu';
+    const balanceSparring = selectedMode === 'balance_sparring';
+    const testRecipe = aiMirror || balanceSparring
+      ? findBalanceTestRecipeForSetup(activeBalanceScenarioId, activeAiControllerRoles)
+      : null;
+    const localAiProvenance: ReplayLocalAiProvenance | undefined = aiMirror
+      ? {
+          schemaVersion: LOCAL_AI_REPLAY_SCHEMA_VERSION,
+          profileId: resolveAiDifficultyForCurrentMatch(),
+          matchSeed: sanitiseSeed(selectedMatchSeed),
+          roundSeed: state.seed,
+          roundIndex: offlineRoundIndex,
+          controllerSeeds: {
+            P1: deriveOfflineAiSeed(state.seed, 'P1'),
+            P2: deriveOfflineAiSeed(state.seed, 'P2'),
+          },
+          controllerRoles: sanitiseAiControllerRoles(activeAiControllerRoles),
+          behaviorTuning: sanitiseAiBehaviorTuning(activeAiBehaviorTuning),
+          recoveryPolicyId: 'legacy' as const,
+          clashPolicyId: 'legacy' as const,
+          pursuitPolicyId: 'legacy' as const,
+        }
+      : undefined;
+    const localModeLabel = selectedMode === 'endless'
+      ? 'AI Sparring (Endless)'
+      : selectedMode === 'best_of_3'
+        ? 'AI Sparring (Best of 3)'
+        : selectedMode === 'arcade'
+          ? 'Arcade Ladder'
+          : balanceSparring
+            ? 'Balance Sparring'
+            : 'AI vs AI';
+    liveAiRoundReplayRecorder = new LocalRoundReplayRecorder({
+      rulesetVersion: getRuntimeRulesetVersion(),
+      simBuildHash: diagnosticsBuildId,
+      roundNumber: offlineRoundIndex + 1,
+      seed: state.seed,
+      loadout: state.loadout,
+      fixedDt,
+      rules: state.rules,
+      tuning: state.tuning,
+      characterBalanceOverrides: state.characterBalanceOverrides,
+      ...(aiMirror || balanceSparring ? { startingSituationId: activeBalanceScenarioId } : {}),
+      ...(localAiProvenance ? { localAiProvenance } : {}),
+      sourceLabel: aiMirror
+        ? `AI vs AI ${state.loadout.P1} vs ${state.loadout.P2} | probe ${testRecipe?.label ?? 'Custom'} | ${resolveAiDifficultyForCurrentMatch()} | ${formatAiControllerRoles(activeAiControllerRoles)} | ${resolveBalanceScenario(activeBalanceScenarioId).label} | round ${offlineRoundIndex + 1} seed ${state.seed}`
+        : `${localModeLabel} | P1 ${state.loadout.P1} human vs P2 ${state.loadout.P2} ${resolveAiDifficultyForCurrentMatch()} AI | probe ${testRecipe?.label ?? 'Custom'} | ${resolveBalanceScenario(activeBalanceScenarioId).label} | round ${offlineRoundIndex + 1} seed ${state.seed}`,
+    });
+  }
   const showDebugDiagnostics = debugHudEnabled;
   hud.setRollbackDiagnosticsVisible(showDebugDiagnostics);
   hud.setInputHistoryVisible(shouldShowLiveInputHistory());
@@ -2383,8 +3869,9 @@ function resetRoundState(): void {
     trainingTelemetry.updateMetadata({
       playerCharacterId: matchLoadout.P1,
       opponentCharacterId: matchLoadout.P2,
-      balanceProfileId: activeBalanceProfile.id,
-      rulesetVersion: activeRulesetVersion,
+      balanceProfileId: runtimeBalanceProfileId,
+      rulesetVersion: getRuntimeRulesetVersion(),
+      scenarioIdentity: getCurrentBalanceScenarioIdentity(),
     });
     trainingTelemetry.startRound(state);
   }
@@ -2397,6 +3884,7 @@ function beginMode(
   arcadeSettings?: ArcadeMenuSettings,
 ): void {
   clearOnlineBootstrapState();
+  balanceLabSampleTargetFrames = null;
   const resolvedMode = resolveStoredMode(mode);
   if (loadout) {
     selectedLoadout = {
@@ -2411,12 +3899,16 @@ function beginMode(
     selectedArcadeSettings = sanitiseArcadeMenuSettings(arcadeSettings);
   }
   selectedMode = resolvedMode;
+  pauseMenu.setBalanceLabAvailable(selectedMode === 'balance_sparring');
   if (selectedMode === 'training') {
     trainingTelemetry = createTrainingTelemetryForCurrentSelection();
   }
-  if (!Number.isFinite(forcedSeed)) {
+  if (!Number.isFinite(forcedSeed) && onlineMatchContext === null) {
     selectedMatchSeed = ((Date.now() ^ Math.floor(performance.now() * 1000)) >>> 0) || 1;
   }
+  offlineRoundIndex = 0;
+  liveAiRoundReplayRecorder = null;
+  latestAiRoundReplayPayload = null;
   arcadePendingLossState = null;
   arcadeRun = selectedMode === 'arcade'
     ? createArcadeRun({
@@ -2461,7 +3953,9 @@ function beginMode(
 
 function returnToHome(): void {
   startupMenuGuardArmed = false;
+  balanceLabSampleTargetFrames = null;
   persistRollbackDiagnostics('return_home');
+  leaveActiveOnlineSessionBeforeTeardown();
   clearOnlineBootstrapState();
   clearOnlineMatchContext();
   if (selectedMode === 'training') {
@@ -2493,6 +3987,7 @@ function beginUserInitiatedMode(
   arcadeSettings?: ArcadeMenuSettings,
 ): void {
   startupMenuGuardArmed = false;
+  leaveActiveOnlineSessionBeforeTeardown();
   clearOnlineBootstrapState();
   clearOnlineMatchContext();
   beginMode(mode, loadout, aiDifficulty, arcadeSettings);
@@ -2591,7 +4086,7 @@ function renderOnlineBootstrapPanel(): void {
   onlineBootstrapTitle.textContent = 'Connecting Online Match';
   const iceConfig = onlineBootstrapState.iceConfig;
   const iceLine = iceConfig
-    ? `ICE servers: ${iceConfig.iceServers.length} | Direct timeout: ${iceConfig.directConnectTimeoutMs}ms`
+    ? `ICE servers: ${iceConfig.iceServers.length} | TURN relay: ${iceConfig.relayAvailable ? 'ready' : 'missing'} | Connect timeout: ${iceConfig.directConnectTimeoutMs}ms`
     : 'ICE servers: unavailable';
   const statusLabel = getBootstrapStatusLabel(onlineBootstrapState.status);
   const nextStep = getBootstrapNextStep(onlineBootstrapState);
@@ -2615,23 +4110,71 @@ function renderOnlineBootstrapPanel(): void {
 
 function clearOnlineBootstrapState(): void {
   onlineBootstrapState = null;
-  onlineRelayFallbackController = null;
   if (onlineBootstrapPanel) {
     onlineBootstrapPanel.hidden = true;
   }
 }
 
+function leaveActiveOnlineSessionBeforeTeardown(): void {
+  const context = onlineMatchContext;
+  const interruptScreenCanLeave = appPhase === 'match_over'
+    && context !== null
+    && context.finalOutcome === null
+    && context.sessionCompletionStatus !== 'completed';
+  if (
+    appPhase !== 'online_bootstrap'
+    && appPhase !== 'playing'
+    && appPhase !== 'round_transition'
+    && !interruptScreenCanLeave
+  ) {
+    return;
+  }
+
+  const queueTicketId = context?.queueTicketId ?? onlineBootstrapState?.queueTicketId ?? null;
+  const accountId = context?.localAccountId ?? onlineBootstrapState?.localAccountId ?? null;
+  if (!queueTicketId || !accountId) {
+    return;
+  }
+  if (playerRankedTicket?.ticketId === queueTicketId) {
+    playerRankedSession = null;
+  }
+  void requestOnlineJson<QueueTicketView>(
+    'POST',
+    '/matchmaking/queue/leave',
+    accountId,
+    { ticketId: queueTicketId },
+    { keepalive: true },
+  ).then((ticket) => {
+    if (playerRankedTicket?.ticketId === queueTicketId) {
+      playerRankedTicket = ticket;
+      playerRankedSession = null;
+    }
+  }).catch((error) => {
+    if (runtimeConfig.features.debugToolsEnabled) {
+      console.warn('[online] intentional leave notice failed', error);
+    }
+  });
+}
+
 function clearOnlineMatchContext(): void {
+  clearOnlineSessionHeartbeat();
   if (onlineMatchContext) {
+    onlineMatchContext.inputPump.clear();
+    closeOnlineTransport(onlineMatchContext);
     selectedMode = onlineMatchContext.restoreMode;
+    pauseMenu.setBalanceLabAvailable(selectedMode === 'balance_sparring');
     selectedLoadout = {
       P1: onlineMatchContext.restoreLoadout.P1,
       P2: onlineMatchContext.restoreLoadout.P2,
     };
+    selectedStageAtmosphereId = applyStageAtmospherePreset(
+      sceneContext,
+      onlineMatchContext.restoreStageAtmosphereId,
+    );
+    startMenu.setStageAtmosphere(selectedStageAtmosphereId);
   }
   onlineMatchContext = null;
-  onlineLifecycleDisconnectedSessionId = null;
-  onlineLifecycleReconnectInFlight = false;
+  localRankedSmokeInputDriver = null;
 }
 
 function createReconnectAttemptId(): string {
@@ -2644,67 +4187,248 @@ function createReconnectAttemptId(): string {
   return `resume-${timestamp}-${random}`;
 }
 
-function canLifecycleManageOnlineSession(): boolean {
-  return Boolean(
-    onlineMatchContext
-    && (appPhase === 'playing' || appPhase === 'round_transition'),
+function resolveHeartbeatIntervalMs(matchStart: MatchStartPayload): number {
+  const configuredSeconds = Number(matchStart.heartbeatIntervalSeconds);
+  const seconds = Number.isFinite(configuredSeconds)
+    ? Math.min(30, Math.max(1, configuredSeconds))
+    : 5;
+  return Math.floor(seconds * 1000);
+}
+
+function clearOnlineSessionHeartbeat(): void {
+  onlineSessionLifecycle.clear();
+}
+
+async function requestOnlineSessionReconnect(
+  target: OnlineSessionLifecycleTarget,
+): Promise<MatchSessionView> {
+  return await requestOnlineJson<MatchSessionView>(
+    'POST',
+    '/matchmaking/sessions/reconnect',
+    target.localAccountId,
+    {
+      sessionId: target.sessionId,
+      sessionToken: target.sessionToken,
+      reconnectAttemptId: createReconnectAttemptId(),
+    },
   );
 }
 
-async function markOnlineSessionDisconnected(source: 'visibility_hidden' | 'pagehide'): Promise<void> {
-  const context = onlineMatchContext;
-  if (!context || !canLifecycleManageOnlineSession()) {
+function handleOnlineSessionHeartbeatError(
+  target: OnlineSessionLifecycleTarget,
+  error: unknown,
+): void {
+  if (onlineSessionLifecycle.getSnapshot().sessionId !== target.sessionId) {
     return;
   }
-  if (onlineLifecycleDisconnectedSessionId === context.sessionId) {
+  const message = error instanceof Error ? error.message : 'Session heartbeat failed.';
+  if (isTerminalOnlineTransportError(error)) {
+    if (
+      error.code === 'session_resolved'
+      && onlineMatchContext?.sessionId === target.sessionId
+      && appPhase === 'match_over'
+      && onlineMatchContext.finalOutcome !== null
+    ) {
+      onlineMatchContext.statusText = 'Session resolved while completion consensus was pending. Verifying the terminal reason.';
+      clearOnlineSessionHeartbeat();
+      return;
+    }
+    clearOnlineSessionHeartbeat();
+    if (onlineMatchContext?.sessionId === target.sessionId) {
+      interruptOnlineMatch(onlineMatchContext, `Session liveness failed: ${message}`);
+      return;
+    }
+    if (onlineBootstrapState?.sessionId === target.sessionId) {
+      onlineBootstrapState = {
+        ...onlineBootstrapState,
+        status: 'failed',
+        statusDetail: `Session liveness failed before transport setup: ${message}`,
+      };
+      renderOnlineBootstrapPanel();
+    }
     return;
   }
-  try {
-    await requestOnlineJson<MatchSessionView>(
-      'POST',
-      '/matchmaking/sessions/disconnect',
-      context.localAccountId,
-      { sessionId: context.sessionId },
-      { keepalive: source === 'pagehide' },
-    );
-    onlineLifecycleDisconnectedSessionId = context.sessionId;
-    context.statusText = `Session suspended (${source}). Reconnect will be requested when focus returns.`;
-  } catch (error) {
-    context.statusText = error instanceof Error
-      ? `Disconnect notice failed: ${error.message}`
-      : 'Disconnect notice failed.';
+
+  if (onlineMatchContext?.sessionId === target.sessionId) {
+    onlineMatchContext.statusText = `Session heartbeat delayed: ${message}`;
+    return;
+  }
+  if (onlineBootstrapState?.sessionId === target.sessionId) {
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      statusDetail: `WebRTC setup continues while session heartbeat retries: ${message}`,
+    };
+    renderOnlineBootstrapPanel();
   }
 }
 
-async function reconnectOnlineSessionAfterResume(source: 'visibility_visible'): Promise<void> {
+function setOnlineSessionLifecycleStatus(
+  target: OnlineSessionLifecycleTarget,
+  message: string,
+): void {
+  if (onlineMatchContext?.sessionId === target.sessionId) {
+    onlineMatchContext.statusText = message;
+    return;
+  }
+  if (onlineBootstrapState?.sessionId === target.sessionId) {
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      statusDetail: message,
+    };
+    renderOnlineBootstrapPanel();
+  }
+}
+
+function handleOnlineSessionLifecycleEvent(event: OnlineSessionLifecycleEvent): void {
+  if (event.type === 'suspended') {
+    const suffix = onlineBootstrapState?.sessionId === event.target.sessionId
+      ? ' during WebRTC setup. Reconnect will resume on focus.'
+      : '. Reconnect will be requested when focus returns.';
+    setOnlineSessionLifecycleStatus(
+      event.target,
+      `Session suspended (${event.source})${suffix}`,
+    );
+    return;
+  }
+
+  if (event.type === 'reconnecting') {
+    const message = event.source === 'heartbeat_timeout'
+      ? 'Session liveness expired. Requesting a nonce-protected reconnect.'
+      : onlineBootstrapState?.sessionId === event.target.sessionId
+        ? 'Requesting session reconnect before WebRTC setup continues.'
+        : 'Requesting session reconnect after returning to the match.';
+    setOnlineSessionLifecycleStatus(event.target, message);
+    return;
+  }
+
+  const message = event.type === 'heartbeat_recovered'
+    ? 'Session liveness restored after a missed heartbeat.'
+    : onlineBootstrapState?.sessionId === event.target.sessionId
+      ? `Reconnect accepted (${event.source}). WebRTC setup continues.`
+      : `Reconnect accepted (${event.source}). Online transport resumed.`;
+  setOnlineSessionLifecycleStatus(event.target, message);
+}
+
+function handleOnlineSessionLifecycleError(failure: OnlineSessionLifecycleError): void {
+  if (onlineSessionLifecycle.getSnapshot().sessionId !== failure.target.sessionId) {
+    return;
+  }
+  if (failure.phase === 'disconnect') {
+    const detail = failure.error instanceof Error
+      ? `Disconnect notice failed: ${failure.error.message}`
+      : 'Disconnect notice failed.';
+    setOnlineSessionLifecycleStatus(failure.target, detail);
+    return;
+  }
+  if (failure.phase === 'reconnect') {
+    if (onlineMatchContext?.sessionId === failure.target.sessionId) {
+      const message = failure.error instanceof Error ? failure.error.message : 'Reconnect failed.';
+      interruptOnlineMatch(onlineMatchContext, `Reconnect failed: ${message}`);
+      return;
+    }
+    if (onlineBootstrapState?.sessionId === failure.target.sessionId) {
+      clearOnlineSessionHeartbeat();
+      onlineBootstrapState = {
+        ...onlineBootstrapState,
+        status: 'failed',
+        statusDetail: failure.error instanceof Error
+          ? `Session reconnect failed before transport setup: ${failure.error.message}`
+          : 'Session reconnect failed before transport setup.',
+      };
+      renderOnlineBootstrapPanel();
+    }
+    return;
+  }
+  handleOnlineSessionHeartbeatError(failure.target, failure.error);
+}
+
+function handleOnlineHeartbeatSessionView(
+  target: OnlineSessionLifecycleTarget,
+  session: MatchSessionView,
+): void {
   const context = onlineMatchContext;
-  if (!context || !canLifecycleManageOnlineSession()) {
-    onlineLifecycleDisconnectedSessionId = null;
+  if (
+    !context
+    || context.sessionId !== target.sessionId
+    || (appPhase !== 'playing' && appPhase !== 'round_transition')
+  ) {
     return;
   }
-  if (onlineLifecycleDisconnectedSessionId !== context.sessionId || onlineLifecycleReconnectInFlight) {
-    return;
+  const peer = session.participants.find((participant) => (
+    participant.accountId === context.remoteAccountId
+  ));
+  const recovery = context.transportRecovery.getSnapshot();
+  if (shouldRecoverForPeerPresence({
+    localSide: context.localPlayerId,
+    peerConnectionStatus: peer?.connectionStatus ?? null,
+    transportState: recovery.state,
+  })) {
+    context.statusText = 'Peer presence disconnected. Advancing the shared transport generation.';
+    context.transportRecovery.requestRecovery(new WebRtcFrameTransportClosedError(
+      'Peer presence reported a disconnected gameplay transport.',
+    ));
   }
-  onlineLifecycleReconnectInFlight = true;
-  context.statusText = 'Requesting session reconnect after returning to the match.';
-  try {
+}
+
+const onlineSessionLifecycle = new OnlineSessionLifecycleController({
+  heartbeat: async (target, signal) => {
+    const session = await requestOnlineJson<MatchSessionView>(
+      'POST',
+      '/matchmaking/sessions/heartbeat',
+      target.localAccountId,
+      {
+        sessionId: target.sessionId,
+        sessionToken: target.sessionToken,
+      },
+      { signal },
+    );
+    handleOnlineHeartbeatSessionView(target, session);
+  },
+  disconnect: async (target) => {
     await requestOnlineJson<MatchSessionView>(
       'POST',
-      '/matchmaking/sessions/reconnect',
-      context.localAccountId,
-      {
-        sessionId: context.sessionId,
-        sessionToken: context.sessionToken,
-        reconnectAttemptId: createReconnectAttemptId(),
-      },
+      '/matchmaking/sessions/disconnect',
+      target.localAccountId,
+      { sessionId: target.sessionId },
+      { keepalive: true },
     );
-    onlineLifecycleDisconnectedSessionId = null;
-    context.statusText = `Reconnect requested (${source}). Online relay resumed.`;
-  } catch (error) {
-    handleOnlineTransportError(context, 'reconnect', error);
-  } finally {
-    onlineLifecycleReconnectInFlight = false;
+  },
+  reconnect: async (target) => {
+    await requestOnlineSessionReconnect(target);
+  },
+  isDisconnectedError: (error) => (
+    error instanceof OnlineRequestError
+    && error.code === 'participant_disconnected'
+  ),
+  onEvent: handleOnlineSessionLifecycleEvent,
+  onError: handleOnlineSessionLifecycleError,
+});
+
+function startOnlineSessionHeartbeat(matchStart: MatchStartPayload): void {
+  clearOnlineSessionHeartbeat();
+  onlineSessionLifecycle.start({
+    sessionId: matchStart.sessionId,
+    sessionToken: matchStart.sessionToken,
+    localAccountId: matchStart.localPlayer.accountId,
+    intervalMs: resolveHeartbeatIntervalMs(matchStart),
+  });
+  if (document.visibilityState === 'hidden' && canLifecycleManageOnlineSession()) {
+    void onlineSessionLifecycle.suspend('visibility_hidden');
   }
+}
+
+function canLifecycleManageOnlineSession(): boolean {
+  const sessionId = onlineSessionLifecycle.getSnapshot().sessionId;
+  if (!sessionId) {
+    return false;
+  }
+  return (
+    onlineMatchContext?.sessionId === sessionId
+    && (appPhase === 'playing' || appPhase === 'round_transition')
+  ) || (
+    onlineBootstrapState?.sessionId === sessionId
+    && appPhase === 'online_bootstrap'
+  );
 }
 
 async function completeOnlineSession(context: OnlineMatchContext): Promise<void> {
@@ -2713,34 +4437,74 @@ async function completeOnlineSession(context: OnlineMatchContext): Promise<void>
   }
   context.sessionCompletionInFlight = true;
   context.sessionCompletionStatus = 'completing';
+  let terminalResolutionReached = false;
   try {
-    await requestOnlineJson<MatchSessionView>(
-      'POST',
-      '/matchmaking/sessions/complete',
-      context.localAccountId,
-      {
-        sessionId: context.sessionId,
-        sessionToken: context.sessionToken,
+    const retryIntervalMs = 500;
+    const result = await reconcileOnlineCompletionConsensus({
+      attest: async () => await requestOnlineJson<MatchSessionView>(
+        'POST',
+        '/matchmaking/sessions/complete',
+        context.localAccountId,
+        {
+          sessionId: context.sessionId,
+          sessionToken: context.sessionToken,
+        },
+      ),
+      read: async () => await requestOnlineJson<MatchSessionView>(
+        'GET',
+        `/matchmaking/sessions/${context.sessionId}`,
+        context.localAccountId,
+      ),
+      maxAttempts: Math.max(
+        20,
+        Math.ceil((context.reconnectGraceSeconds * 1_000) / retryIntervalMs),
+      ),
+      retryIntervalMs,
+      wait: waitForMilliseconds,
+      onAttempt: (attempt, maxAttempts, session, error) => {
+        if (onlineMatchContext !== context || context.sessionCompletionStatus === 'completed') {
+          return;
+        }
+        context.sessionCompletionStatus = session?.status === 'active'
+          ? 'awaiting_peer'
+          : 'completing';
+        const errorDetail = error instanceof Error ? ` Last request: ${error.message}` : '';
+        context.statusText = `Waiting for peer completion (${attempt}/${maxAttempts}).${errorDetail}`;
       },
-    );
-    context.sessionCompletionStatus = 'completed';
-    context.statusText = 'Online session closed cleanly.';
-  } catch (error) {
-    if (error instanceof OnlineRequestError && error.code === 'session_resolved') {
+    });
+    if (result.status === 'consensus') {
+      terminalResolutionReached = true;
       context.sessionCompletionStatus = 'completed';
-      context.statusText = 'Online session was already closed.';
-      return;
+      context.statusText = 'Match completion confirmed.';
+    } else if (result.status === 'terminal') {
+      terminalResolutionReached = true;
+      context.sessionCompletionStatus = 'failed';
+      context.statusText = `Session resolved as ${result.session.resolvedReason ?? 'unknown'} before completion consensus.`;
+    } else {
+      context.sessionCompletionStatus = 'awaiting_peer';
+      const detail = result.lastError instanceof Error ? ` Last request: ${result.lastError.message}` : '';
+      context.statusText = `Peer completion pending.${detail}`;
     }
+  } catch (error) {
     context.sessionCompletionStatus = 'failed';
     context.statusText = error instanceof Error
       ? `Session close failed: ${error.message}`
       : 'Session close failed.';
   } finally {
     context.sessionCompletionInFlight = false;
+    if (terminalResolutionReached) {
+      closeCompletedOnlineSessionNetwork(context);
+    }
   }
 }
 
-function beginOnlineMatch(matchStart: MatchStartPayload): void {
+function beginOnlineMatch(
+  matchStart: MatchStartPayload,
+  transport: RecoverableWebRtcTransport,
+  connectionPath: ConnectionPath,
+  iceConfig: MatchmakingIceConfig,
+  closeTransport: () => void,
+): OnlineMatchContext {
   const localPlayerId = matchStart.localPlayer.side;
   const remotePlayerId = matchStart.peer.side;
   const localCharacterId = isCharacterId(matchStart.localPlayer.selectedCharacterId)
@@ -2754,50 +4518,150 @@ function beginOnlineMatch(matchStart: MatchStartPayload): void {
     P1: selectedLoadout.P1,
     P2: selectedLoadout.P2,
   };
+  const restoreStageAtmosphereId = selectedStageAtmosphereId;
   const matchLoadout = localPlayerId === 'P1'
     ? { P1: localCharacterId, P2: remoteCharacterId }
     : { P1: remoteCharacterId, P2: localCharacterId };
+  if (
+    matchStart.queueType === 'ranked'
+    && (!matchStart.buildVersion || !matchStart.rulesetVersion || !matchStart.balanceProfileId)
+  ) {
+    throw new Error('Ranked match start is missing build or ruleset verification metadata.');
+  }
 
   selectedMode = 'best_of_3';
-  selectedMatchSeed = hashSeedFromString(matchStart.sessionId);
-  onlineMatchContext = {
+  pauseMenu.setBalanceLabAvailable(false);
+  selectedMatchSeed = rankedSeedFromSessionId(matchStart.sessionId);
+  const balanceProfileId = matchStart.balanceProfileId ?? activeBalanceProfile.id;
+  const onlineBalanceProfile = resolveBalanceProfile(balanceProfileId);
+  const onlineStage = resolveStageAtmosphere(ONLINE_ALPHA_STAGE_ATMOSPHERE_ID);
+  selectedStageAtmosphereId = applyStageAtmospherePreset(sceneContext, onlineStage.id);
+  startMenu.setStageAtmosphere(selectedStageAtmosphereId);
+  const LocalRankedSmokeFrameTransportConstructor = localRankedSmokeTransportModule
+    ?.LocalRankedSmokeFrameTransport;
+  const LocalRankedRecoverySmokeControllerConstructor = localRankedRecoverySmokeModule
+    ?.LocalRankedRecoverySmokeController;
+  if (
+    localRankedRootSmokeConfig.enabled
+    && (!LocalRankedSmokeFrameTransportConstructor || !LocalRankedRecoverySmokeControllerConstructor)
+  ) {
+    throw new Error('Local ranked smoke runtime was not loaded before match bootstrap.');
+  }
+  const smokeFrameTransport = LocalRankedSmokeFrameTransportConstructor
+    ? new LocalRankedSmokeFrameTransportConstructor({
+      transport,
+      inboundDelayPolls: localRankedRootSmokeConfig.inboundDelayPolls,
+    })
+    : null;
+  const smokeRecovery = LocalRankedRecoverySmokeControllerConstructor
+    ? new LocalRankedRecoverySmokeControllerConstructor({
+      initialAttemptGeneration: matchStart.transportAttempt.generation,
+      forceRelayRequested: localRankedRootSmokeConfig.forceRelay,
+    })
+    : null;
+  const inputPump = new OnlineInputPump({
+    epoch: 0,
+    remoteAccountId: matchStart.peer.accountId,
+    transport: smokeFrameTransport ?? transport,
+  });
+  const context: OnlineMatchContext = {
+    queueTicketId: matchStart.localPlayer.queueTicketId,
     sessionId: matchStart.sessionId,
     sessionToken: matchStart.sessionToken,
+    reconnectGraceSeconds: Math.max(1, Number(matchStart.reconnectGraceSeconds ?? 20)),
     queueType: matchStart.queueType,
     region: matchStart.region,
     matchLoadout,
     restoreMode,
     restoreLoadout,
+    restoreStageAtmosphereId,
     localPlayerId,
     remotePlayerId,
     localAccountId: matchStart.localPlayer.accountId,
     remoteAccountId: matchStart.peer.accountId,
-    statusText: 'Connected via authenticated session relay.',
-    connectionPath: 'server',
-    lastRemoteFrame: -1,
-    outgoingFrames: [],
-    pendingRemoteInputs: new Map<number, PlayerFrameInput>(),
+    statusText: `Connected via authenticated WebRTC ${connectionPath} path.`,
+    connectionPath,
+    iceTransportPolicy: iceConfig.iceTransportPolicy,
+    relayAvailable: iceConfig.relayAvailable,
+    turnCredentialMode: iceConfig.turnCredentialMode,
+    transportAttemptGeneration: matchStart.transportAttempt.generation,
+    roundEpoch: -1,
+    rankedProofRecorder: matchStart.queueType === 'ranked'
+      ? new RankedMatchProofRecorder({
+        sessionId: matchStart.sessionId,
+        matchId: matchStart.sessionId,
+        buildVersion: matchStart.buildVersion as string,
+        rulesetVersion: matchStart.rulesetVersion as string,
+        balanceProfileId: matchStart.balanceProfileId as string,
+        seed: selectedMatchSeed,
+        loadout: matchLoadout,
+      })
+      : null,
+    rankedProof: null,
+    replayRecorder: new OnlineMatchReplayRecorder({
+      sessionId: matchStart.sessionId,
+      matchId: matchStart.sessionId,
+      localPlayerId,
+      rulesetVersion: matchStart.rulesetVersion ?? getOnlineRulesetVersion(),
+      simBuildHash: matchStart.buildVersion ?? diagnosticsBuildId,
+      balanceProfileId: onlineBalanceProfile.id,
+      seed: selectedMatchSeed,
+      loadout: matchLoadout,
+      fixedDt,
+      rules: getRulesForMode('best_of_3'),
+      tuning: onlineBalanceProfile.tuning,
+      characterBalanceOverrides: {},
+      stage: {
+        id: onlineStage.id,
+        version: 'gw.stage-atmosphere.v1',
+        fingerprint: fingerprintDeterministicValue(onlineStage),
+      },
+    }),
+    replayPayload: null,
+    replayStatus: 'recording',
+    replayDetail: 'Recording mutually confirmed rollback inputs.',
+    replayId: null,
+    replayInFlight: false,
+    replayStartedAt: new Date().toISOString(),
+    inputPump,
+    smokeFrameTransport,
+    smokeRecovery,
+    transportRecovery: transport,
+    closeTransport,
+    transportClosed: false,
+    pendingRoundWinner: null,
+    pendingRoundFinalFrame: null,
+    roundSyncElapsedSeconds: 0,
     sendAccumulatorSeconds: 0,
     pollAccumulatorSeconds: 0,
-    sendInFlight: false,
-    pollInFlight: false,
     finalOutcome: null,
     winnerAccountId: null,
     rankedResultStatus: 'idle',
     rankedResultDetail: 'Awaiting match completion.',
     rankedResultSubmissionId: null,
+    rankedResultResponse: null,
+    rankedResultPersistedRead: false,
     rankedResultInFlight: false,
+    rollbackApplications: 0,
+    rollbackFrames: 0,
+    maxRollbackDepth: 0,
     sessionCompletionInFlight: false,
     sessionCompletionStatus: 'idle',
   };
+  onlineMatchContext = context;
   clearOnlineBootstrapState();
   beginMode('best_of_3', undefined, selectedAiDifficulty, selectedArcadeSettings);
+  return context;
 }
 
 async function beginRankedSessionBootstrap(
   ticket: QueueTicketView,
   session: MatchSessionView | null,
   source: 'ranked_queue',
+  bootstrap: {
+    previousTicket: QueueTicketView | null;
+    serverCreatedTicket: boolean;
+  },
 ): Promise<void> {
   if (!onlineRuntimeEnabled || !ticket.matchStart) {
     return;
@@ -2805,9 +4669,29 @@ async function beginRankedSessionBootstrap(
 
   const accountId = sessionAccountId ?? ticket.accountId;
   const matchStart = ticket.matchStart;
-  onlineRelayFallbackController = null;
+  if (
+    onlineMatchContext?.sessionId === matchStart.sessionId
+    || onlineBootstrapState?.sessionId === matchStart.sessionId
+  ) {
+    return;
+  }
+  const bootstrapAction = decideMatchedTicketBootstrap({
+    previousTicket: bootstrap.previousTicket ? {
+      ticketId: bootstrap.previousTicket.ticketId,
+      status: bootstrap.previousTicket.status,
+      sessionId: bootstrap.previousTicket.matchStart?.sessionId ?? null,
+    } : null,
+    currentTicket: {
+      ticketId: ticket.ticketId,
+      status: ticket.status,
+      sessionId: matchStart.sessionId,
+    },
+    sessionStatus: session?.status ?? null,
+    serverCreatedTicket: bootstrap.serverCreatedTicket,
+  });
   onlineBootstrapState = {
     source,
+    queueTicketId: ticket.ticketId,
     sessionId: matchStart.sessionId,
     queueType: matchStart.queueType,
     region: matchStart.region,
@@ -2821,6 +4705,26 @@ async function beginRankedSessionBootstrap(
     statusDetail: 'Matched session accepted. Preparing online runtime bootstrap.',
     iceConfig: null,
   };
+  if (bootstrapAction !== 'start_fresh') {
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      status: 'failed',
+      statusDetail: session?.status === 'resolved'
+        ? 'This matched session has already ended. Return home and join the queue again.'
+        : 'This browser did not observe the match start and has no verified recovery checkpoint. Starting again at frame zero would desynchronize the match; leave this session and requeue.',
+    };
+  }
+  if (
+    matchStart.buildVersion !== diagnosticsBuildId
+    || matchStart.rulesetVersion !== getOnlineRulesetVersion()
+    || matchStart.balanceProfileId !== activeBalanceProfile.id
+  ) {
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      status: 'failed',
+      statusDetail: 'Matched session build or ruleset does not match this client. The match was not started.',
+    };
+  }
   appPhase = 'online_bootstrap';
   void platform.presence.setStatus('online_dev');
   pauseMenu.setPaused(false);
@@ -2844,39 +4748,307 @@ async function beginRankedSessionBootstrap(
   };
   renderOnlineBootstrapPanel();
 
-  const iceConfig = await fetchMatchmakingIceConfig(matchmakingApiBase, false);
+  if (onlineBootstrapState.status === 'failed') {
+    return;
+  }
+
+  startOnlineSessionHeartbeat(matchStart);
+
+  const requestedConnectionPath: ConnectionPath = localRankedRootSmokeConfig.forceRelay
+    ? 'relay'
+    : 'direct';
+  const iceConfig = await fetchMatchmakingIceConfig(
+    matchmakingApiBase,
+    localRankedRootSmokeConfig.forceRelay,
+    {
+    accountId: matchStart.localPlayer.accountId,
+    accessToken: platform.auth.getAccessToken?.() ?? null,
+  }, {
+    sessionId: matchStart.sessionId,
+    sessionToken: matchStart.sessionToken ?? '',
+  });
   if (!onlineBootstrapState || onlineBootstrapState.sessionId !== matchStart.sessionId) {
     return;
   }
-  if (iceConfig) {
-    onlineRelayFallbackController = new RelayFallbackController({
-      directConnectTimeoutMs: iceConfig.directConnectTimeoutMs,
-    });
-    onlineRelayFallbackController.startDirectAttempt(Date.now());
-    buildRtcConfiguration(iceConfig, 'direct');
+  if (!iceConfig) {
+    clearOnlineSessionHeartbeat();
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      status: 'failed',
+      connectionPath: 'server',
+      statusDetail: 'ICE configuration is unavailable. The match was not started because the process-local frame relay is not an alpha-safe fallback.',
+      iceConfig: null,
+    };
+    renderOnlineBootstrapPanel();
+    return;
+  }
+  if (runtimeConfig.environment !== 'development' && !iceConfig.relayAvailable) {
+    clearOnlineSessionHeartbeat();
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      status: 'failed',
+      connectionPath: 'relay',
+      statusDetail: 'TURN relay is not configured. Staging and production refuse to start an online match without NAT fallback.',
+      iceConfig,
+    };
+    renderOnlineBootstrapPanel();
+    return;
   }
 
   onlineBootstrapState = {
     ...onlineBootstrapState,
     status: 'awaiting_signaling',
-    connectionPath: iceConfig ? 'direct' : 'server',
-    statusDetail: iceConfig
-      ? 'Session relay is ready now, and RTC configuration has also been prepared for a future direct path.'
-      : 'Session relay is ready. ICE config was unavailable, so the runtime will use server relay only.',
+    connectionPath: requestedConnectionPath,
+    statusDetail: 'Exchanging authenticated WebRTC signaling and opening the reliable gameplay channel.',
     iceConfig,
   };
-  onlineDiagnosticsUpdate = {
-    ...onlineDiagnosticsUpdate,
-    connectionPath: iceConfig ? 'direct' : 'relay',
-  };
   renderOnlineBootstrapPanel();
-  beginOnlineMatch(matchStart);
+
+  let activeTransportAttempt = matchStart.transportAttempt;
+  let activeIceConfig = iceConfig;
+  let activeConnectTimeoutMs = Math.max(12_000, iceConfig.directConnectTimeoutMs * 3);
+  const connectFreshWebRtcSession = () => connectWebRtcSession({
+    transportAttemptId: activeTransportAttempt.attemptId,
+    localAccountId: matchStart.localPlayer.accountId,
+    remoteAccountId: matchStart.peer.accountId,
+    initiator: matchStart.localPlayer.side === 'P1',
+    rtcConfiguration: buildRtcConfiguration(activeIceConfig, requestedConnectionPath),
+    signalTransport: {
+      publish: (signal) => publishOnlineSessionSignal(
+        matchStart,
+        activeTransportAttempt.attemptId,
+        signal,
+      ),
+      poll: (afterSignalId) => pollOnlineSessionSignals(
+        matchStart,
+        activeTransportAttempt.attemptId,
+        afterSignalId,
+      ),
+    },
+    connectTimeoutMs: activeConnectTimeoutMs,
+  });
+  let bootstrapRtcSession: Awaited<ReturnType<typeof connectWebRtcSession>> | null = null;
+  let bootstrapTransport: RecoverableWebRtcTransport | null = null;
+  try {
+    const rtcSession = await connectFreshWebRtcSession();
+    bootstrapRtcSession = rtcSession;
+    if (!onlineBootstrapState || onlineBootstrapState.sessionId !== matchStart.sessionId) {
+      rtcSession.close();
+      return;
+    }
+
+    let matchContext: OnlineMatchContext | null = null;
+    let pendingRecoveryCheckpoint: WebRtcRecoveryCheckpoint | null = null;
+    let pendingRecoveryAgreedThrough: number | null = null;
+    const recoveryTransport = new RecoverableWebRtcTransport({
+      initialSession: rtcSession,
+      localAccountId: matchStart.localPlayer.accountId,
+      remoteAccountId: matchStart.peer.accountId,
+      connect: connectFreshWebRtcSession,
+      prepareRecovery: async () => {
+        if (!matchContext || onlineMatchContext !== matchContext) {
+          throw new Error('Online match context ended before transport recovery could start.');
+        }
+        if (matchContext.finalOutcome) {
+          throw new Error(matchContext.statusText);
+        }
+        const checkpoint = createOnlineRecoveryCheckpoint(
+          matchContext,
+          activeTransportAttempt.attemptId,
+        );
+        matchContext.smokeRecovery?.markCheckpointPrepared(
+          checkpoint.roundEpoch,
+          checkpoint.confirmedThrough,
+        );
+        const reconnectGraceSeconds = Number(matchStart.reconnectGraceSeconds ?? 20);
+        if (!Number.isFinite(reconnectGraceSeconds) || reconnectGraceSeconds < 9) {
+          throw new Error('Server reconnect grace is too short for safe WebRTC recovery.');
+        }
+        clearOnlineSessionHeartbeat();
+        await requestOnlineJson<MatchSessionView>(
+          'POST',
+          '/matchmaking/sessions/disconnect',
+          matchStart.localPlayer.accountId,
+          { sessionId: matchStart.sessionId },
+        );
+        activeTransportAttempt = await prepareNextOnlineTransportAttempt(
+          matchStart,
+          activeTransportAttempt,
+        );
+        matchContext.transportAttemptGeneration = activeTransportAttempt.generation;
+        const refreshedIceConfig = await fetchMatchmakingIceConfig(
+          matchmakingApiBase,
+          localRankedRootSmokeConfig.forceRelay,
+          {
+          accountId: matchStart.localPlayer.accountId,
+          accessToken: platform.auth.getAccessToken?.() ?? null,
+        }, {
+          sessionId: matchStart.sessionId,
+          sessionToken: matchStart.sessionToken,
+        });
+        if (!refreshedIceConfig) {
+          throw new Error('ICE configuration could not be refreshed for WebRTC recovery.');
+        }
+        if (runtimeConfig.environment !== 'development' && !refreshedIceConfig.relayAvailable) {
+          throw new Error('TURN relay is unavailable during WebRTC recovery.');
+        }
+        activeIceConfig = refreshedIceConfig;
+        matchContext.smokeRecovery?.markAttemptAdvanced({
+          generation: activeTransportAttempt.generation,
+          relayAvailable: refreshedIceConfig.relayAvailable,
+          iceTransportPolicy: refreshedIceConfig.iceTransportPolicy,
+        });
+        activeConnectTimeoutMs = Math.min(
+          Math.max(5_000, refreshedIceConfig.directConnectTimeoutMs * 3),
+          Math.floor((reconnectGraceSeconds - 5) * 1_000),
+        );
+        pendingRecoveryCheckpoint = {
+          ...checkpoint,
+          transportAttemptId: activeTransportAttempt.attemptId,
+        };
+      },
+      validateReplacement: async (session) => {
+        if (!pendingRecoveryCheckpoint) {
+          throw new Error('Recovery checkpoint was not prepared for the replacement channel.');
+        }
+        const agreement = await exchangeWebRtcRecoveryCheckpoint(
+          session.channel,
+          pendingRecoveryCheckpoint,
+          {
+            resolveStateChecksum: (confirmedThrough) => (
+              rollbackSession?.getRecoveryCheckpointChecksum(confirmedThrough) ?? null
+            ),
+            onCheckpointAgreed: async () => {
+              await requestOnlineSessionReconnect({
+                sessionId: matchStart.sessionId,
+                sessionToken: matchStart.sessionToken,
+                localAccountId: matchStart.localPlayer.accountId,
+                intervalMs: resolveHeartbeatIntervalMs(matchStart),
+              });
+            },
+          },
+        );
+        if (!matchContext || onlineMatchContext !== matchContext) {
+          throw new Error('Online match context ended during recovery checkpoint agreement.');
+        }
+        pendingRecoveryAgreedThrough = agreement.confirmedThrough;
+        startOnlineSessionHeartbeat(matchStart);
+      },
+      maxAttempts: 1,
+      maxRecoveries: 1,
+      frameTransport: { maxFramesPerBatch: 30 },
+      onStateChange: (snapshot: WebRtcRecoverySnapshot) => {
+        if (!matchContext || onlineMatchContext !== matchContext) {
+          return;
+        }
+        if (snapshot.state === 'reconnecting') {
+          const attempt = Math.max(1, snapshot.attempt);
+          matchContext.statusText = `WebRTC interrupted. Re-signaling attempt ${attempt}/${snapshot.maxAttempts}; simulation paused.`;
+          accumulator = 0;
+        }
+      },
+      onRecovered: (session) => {
+        if (!matchContext || onlineMatchContext !== matchContext) {
+          return;
+        }
+        matchContext.inputPump.resumeAfterTransportRecovery();
+        const agreedThrough = pendingRecoveryAgreedThrough;
+        pendingRecoveryCheckpoint = null;
+        pendingRecoveryAgreedThrough = null;
+        matchContext.connectionPath = session.connectionPath;
+        matchContext.iceTransportPolicy = activeIceConfig.iceTransportPolicy;
+        matchContext.relayAvailable = activeIceConfig.relayAvailable;
+        matchContext.turnCredentialMode = activeIceConfig.turnCredentialMode;
+        matchContext.smokeRecovery?.markRecovered({
+          generation: matchContext.transportAttemptGeneration,
+          roundEpoch: matchContext.roundEpoch,
+          agreedThrough: agreedThrough ?? -1,
+          connectionPath: session.connectionPath,
+          relayAvailable: activeIceConfig.relayAvailable,
+          iceTransportPolicy: activeIceConfig.iceTransportPolicy,
+        });
+        matchContext.statusText = `WebRTC ${session.connectionPath} path recovered from confirmed frame ${agreedThrough ?? 'unknown'}. The outbound tail is resynchronizing.`;
+        matchContext.sendAccumulatorSeconds = 0.05;
+        matchContext.pollAccumulatorSeconds = 0.05;
+        onlineDiagnosticsUpdate = {
+          ...onlineDiagnosticsUpdate,
+          connectionPath: session.connectionPath,
+        };
+      },
+      onTerminalFailure: (error) => {
+        if (!matchContext || onlineMatchContext !== matchContext) {
+          return;
+        }
+        if (matchContext.finalOutcome) {
+          return;
+        }
+        matchContext.smokeRecovery?.markFailed(error);
+        void requestOnlineJson<MatchSessionView>(
+          'POST',
+          '/matchmaking/sessions/disconnect',
+          matchStart.localPlayer.accountId,
+          { sessionId: matchStart.sessionId },
+          { keepalive: true },
+        ).catch(() => undefined);
+        interruptOnlineMatch(matchContext, error.message);
+      },
+    });
+    bootstrapTransport = recoveryTransport;
+    bootstrapRtcSession = null;
+    const closeTransport = (): void => recoveryTransport.close();
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      connectionPath: rtcSession.connectionPath,
+      statusDetail: `Reliable WebRTC ${rtcSession.connectionPath} path established. Entering synchronized match.`,
+    };
+    onlineDiagnosticsUpdate = {
+      ...onlineDiagnosticsUpdate,
+      connectionPath: rtcSession.connectionPath,
+    };
+    void requestOnlineJson(
+      'POST',
+      '/matchmaking/network/connection-telemetry',
+      matchStart.localPlayer.accountId,
+      {
+        sessionId: matchStart.sessionId,
+        queueType: matchStart.queueType,
+        region: matchStart.region,
+        connectionPath: rtcSession.connectionPath,
+        transport: 'webrtc',
+      },
+    ).catch(() => undefined);
+    renderOnlineBootstrapPanel();
+    matchContext = beginOnlineMatch(
+      matchStart,
+      recoveryTransport,
+      rtcSession.connectionPath,
+      activeIceConfig,
+      closeTransport,
+    );
+    bootstrapTransport = null;
+  } catch (error) {
+    bootstrapTransport?.close();
+    bootstrapRtcSession?.close();
+    if (!onlineBootstrapState || onlineBootstrapState.sessionId !== matchStart.sessionId) {
+      return;
+    }
+    clearOnlineSessionHeartbeat();
+    onlineBootstrapState = {
+      ...onlineBootstrapState,
+      status: 'failed',
+      statusDetail: error instanceof Error
+        ? `WebRTC bootstrap failed: ${error.message}`
+        : 'WebRTC bootstrap failed.',
+    };
+    renderOnlineBootstrapPanel();
+  }
 }
 
 function openOnlineDevMenu(section?: OnlineDevMenuTarget): void {
   if (!onlineDevMenu) {
     return;
   }
+  leaveActiveOnlineSessionBeforeTeardown();
   clearOnlineBootstrapState();
   clearOnlineMatchContext();
   const sectionId: OnlineDevSectionId | undefined = section
@@ -2918,7 +5090,7 @@ function getRollbackDiagnosticsView(session: RollbackSession): RollbackDiagnosti
     maxRollbackDepth: snapshot.maxRollbackDepth,
     lastRollbackDepth: snapshot.lastRollbackDepth,
     lastRollbackFromFrame: snapshot.lastRollbackFromFrame,
-    desyncEventCount: snapshot.desyncEvents.length,
+    correctionEventCount: snapshot.correctionEvents.length,
   };
 }
 
@@ -2948,7 +5120,7 @@ function persistRollbackDiagnostics(reason: string): void {
     capturedAt: new Date().toISOString(),
     reason,
     mode: selectedMode,
-    seed: selectedMatchSeed,
+    seed: state.seed,
     diagnostics,
   };
   console.info('[rollback] match diagnostics', entry);
@@ -2973,9 +5145,26 @@ function persistRollbackDiagnostics(reason: string): void {
 function exportTrainingTelemetrySession(): string {
   const summary = trainingTelemetry.toSummary();
   const payload: StoredTrainingTelemetryEntry = {
+    schemaVersion: 'gw.training-telemetry-export.v3',
     exportedAt: summary.exportedAt,
     rulesetVersion: summary.rulesetVersion,
     balanceProfileId: summary.balanceProfileId,
+    tuningFingerprint: fingerprintBalanceTuning(state.tuning),
+    roundStartTuningFingerprint: roundTuningFingerprint,
+    tuningChangedDuringRun: false,
+    balanceTuningPending: balanceTuningDirty,
+    tuning: { ...state.tuning },
+    pendingBalanceProfileId: localBalanceProfileId,
+    pendingTuningFingerprint: fingerprintBalanceTuning(localBalanceTuningDraft),
+    pendingTuning: { ...localBalanceTuningDraft },
+    characterBalanceFingerprint: fingerprintCharacterBalanceOverrides(
+      state.characterBalanceOverrides,
+    ),
+    roundStartCharacterBalanceFingerprint: roundCharacterBalanceFingerprint,
+    characterBalanceChangedDuringRun: false,
+    characterBalancePending: characterBalanceDirty,
+    characterBalanceOverrides: cloneCharacterBalanceOverrides(state.characterBalanceOverrides),
+    pendingCharacterBalanceOverrides: cloneCharacterBalanceOverrides(localCharacterBalanceOverrides),
     summary,
   };
   const timestamp = summary.exportedAt.replace(/[:.]/g, '-');
@@ -2998,19 +5187,60 @@ function exportTrainingTelemetrySession(): string {
   return `Training telemetry exported: ${fileName}`;
 }
 
-function exportAiMatchTelemetrySession(): string {
+async function exportAiMatchTelemetrySession(): Promise<string> {
+  const { buildBalanceLabFlowModel } = await import('./sim/balanceLab');
   const exportedAt = new Date().toISOString();
   const summary = matchTelemetry.toSummary();
   const snapshot = getRenderSnapshot(state);
   const payload: StoredAiMatchTelemetryEntry = {
+    schemaVersion: 'gw.ai-match-telemetry-export.v8',
     exportedAt,
     mode: 'cpu_vs_cpu',
-    rulesetVersion: activeRulesetVersion,
-    balanceProfileId: activeBalanceProfile.id,
+    rulesetVersion: getRuntimeRulesetVersion(),
+    balanceProfileId: runtimeBalanceProfileId,
+    tuningFingerprint: fingerprintBalanceTuning(state.tuning),
+    roundStartTuningFingerprint: roundTuningFingerprint,
+    tuningChangedDuringRun: false,
+    balanceTuningPending: balanceTuningDirty,
+    tuning: { ...state.tuning },
+    pendingBalanceProfileId: localBalanceProfileId,
+    pendingTuningFingerprint: fingerprintBalanceTuning(localBalanceTuningDraft),
+    pendingTuning: { ...localBalanceTuningDraft },
+    characterBalanceFingerprint: fingerprintCharacterBalanceOverrides(
+      state.characterBalanceOverrides,
+    ),
+    roundStartCharacterBalanceFingerprint: roundCharacterBalanceFingerprint,
+    characterBalanceChangedDuringRun: false,
+    characterBalancePending: characterBalanceDirty,
+    characterBalanceOverrides: cloneCharacterBalanceOverrides(state.characterBalanceOverrides),
+    pendingCharacterBalanceOverrides: cloneCharacterBalanceOverrides(localCharacterBalanceOverrides),
+    aiBehaviorFingerprint: fingerprintAiBehaviorTuning(activeAiBehaviorTuning),
+    roundStartAiBehaviorFingerprint: roundAiBehaviorFingerprint,
+    aiBehaviorChangedDuringRun: false,
+    aiBehaviorPending: aiBehaviorDirty,
+    aiBehaviorTuning: sanitiseAiBehaviorTuning(activeAiBehaviorTuning),
+    pendingAiBehaviorFingerprint: fingerprintAiBehaviorTuning(localAiBehaviorTuning),
+    pendingAiBehaviorTuning: sanitiseAiBehaviorTuning(localAiBehaviorTuning),
+    aiControllerRoleSchemaVersion: AI_CONTROLLER_ROLE_SCHEMA_VERSION,
+    aiControllerRolesFingerprint: fingerprintAiControllerRoles(activeAiControllerRoles),
+    aiControllerRoles: sanitiseAiControllerRoles(activeAiControllerRoles),
+    aiControllerRolesPending: aiControllerRolesDirty,
+    pendingAiControllerRolesFingerprint: fingerprintAiControllerRoles(
+      selectLocalAiControllerRoles(selectedMode, onlineMatchContext !== null, localAiControllerRoles),
+    ),
+    pendingAiControllerRoles: selectLocalAiControllerRoles(
+      selectedMode,
+      onlineMatchContext !== null,
+      localAiControllerRoles,
+    ),
     aiDifficulty: selectedAiDifficulty,
+    scenario: getCurrentBalanceScenarioIdentity(),
     menuThemeId: selectedMenuThemeId,
     stageAtmosphereId: selectedStageAtmosphereId,
-    seed: selectedMatchSeed,
+    seed: state.seed,
+    matchSeed: selectedMatchSeed,
+    roundSeed: state.seed,
+    roundIndex: offlineRoundIndex,
     loadout: {
       P1: selectedLoadout.P1,
       P2: selectedLoadout.P2,
@@ -3022,6 +5252,8 @@ function exportAiMatchTelemetrySession(): string {
     winner: state.winner,
     statusText: snapshot.statusText,
     summary,
+    aiDecisions: aiDecisionTelemetry.toSummary(),
+    flow: buildBalanceLabFlowModel(summary),
   };
 
   const timestamp = exportedAt.replace(/[:.]/g, '-');
@@ -3058,16 +5290,120 @@ function restartTrainingRound(reason: TrainingRoundEndReason = 'manual_restart')
   accumulator = 0;
 }
 
-function beginReplayReviewFromPayload(payloadRaw: unknown, sourceLabel: string): boolean {
-  const validation = validateReplayPayload(payloadRaw);
-  if (!validation.ok) {
-    console.error('[replay-review] invalid replay payload', sourceLabel, validation.error);
+function restartBalanceLabMatch(targetFrames?: number): void {
+  if (
+    onlineMatchContext !== null
+    || !isLocalBalanceLabMode(selectedMode)
+  ) {
+    return;
+  }
+  if (selectedMode === 'training') {
+    trainingTelemetry.endRound('manual_restart');
+  }
+  p1RoundWins = 0;
+  p2RoundWins = 0;
+  roundTransitionRemaining = 0;
+  resetRoundState();
+  balanceLabSampleTargetFrames = typeof targetFrames === 'number'
+    && Number.isFinite(targetFrames)
+    && targetFrames > 0
+    ? Math.floor(targetFrames)
+    : null;
+  appPhase = 'playing';
+  startMenu.hideRoundBanner();
+  startMenu.hideHome();
+  hudRoot.style.visibility = 'visible';
+  syncTrainingFrameDataVisibility();
+  accumulator = 0;
+}
+
+async function reviewCurrentAiRound(request?: {
+  focusFrame: number;
+  endFrame?: number;
+  label: string;
+}): Promise<boolean> {
+  if (
+    !isLocalAiRoundReviewMode(selectedMode)
+    || onlineMatchContext !== null
+    || (appPhase !== 'playing' && appPhase !== 'round_transition')
+  ) {
     return false;
   }
+  const payload = liveAiRoundReplayRecorder?.buildPayload() ?? latestAiRoundReplayPayload;
+  if (!payload) {
+    return false;
+  }
+  const returnPhase = appPhase;
+  const recordedRound = payload.rounds?.[0]?.round ?? offlineRoundIndex + 1;
+  const reviewFocus: ReplayReviewFocus | undefined = request
+    ? {
+        schemaVersion: 'gw.replay-focus.v1',
+        source: 'balance_lab_exchange',
+        label: request.label,
+        focusFrame: Math.max(0, Math.floor(request.focusFrame)),
+        endFrame: request.endFrame === undefined
+          ? undefined
+          : Math.max(0, Math.floor(request.endFrame)),
+      }
+    : undefined;
+  return await beginReplayReviewFromPayload(
+    payload,
+    selectedMode === 'cpu_vs_cpu'
+      ? `Live AI vs AI round ${recordedRound}`
+      : selectedMode === 'balance_sparring'
+        ? `Live Balance Sparring round ${recordedRound}`
+        : `Live AI sparring round ${recordedRound}`,
+    true,
+    returnPhase,
+    reviewFocus,
+  );
+}
 
-  replayReviewData = buildReplayReviewData(validation.payload);
+async function reviewCapturedAiReplaySample(
+  payload: ReplayPayload,
+  request: {
+    focusFrame: number;
+    endFrame?: number;
+    label: string;
+  },
+  label: string,
+): Promise<boolean> {
+  if (
+    (selectedMode !== 'cpu_vs_cpu' && selectedMode !== 'balance_sparring')
+    || onlineMatchContext !== null
+    || (appPhase !== 'playing' && appPhase !== 'round_transition')
+  ) {
+    return false;
+  }
+  const returnPhase = appPhase;
+  const reviewFocus: ReplayReviewFocus = {
+    schemaVersion: 'gw.replay-focus.v1',
+    source: 'balance_lab_incident_comparison',
+    label: request.label,
+    focusFrame: Math.max(0, Math.floor(request.focusFrame)),
+    endFrame: request.endFrame === undefined
+      ? undefined
+      : Math.max(0, Math.floor(request.endFrame)),
+  };
+  return await beginReplayReviewFromPayload(
+    payload,
+    label,
+    true,
+    returnPhase,
+    reviewFocus,
+  );
+}
+
+function beginReplayReview(
+  review: ReplayReviewData,
+  sourceLabel: string,
+  initialFrame = 0,
+  returnPhase: ReplayReturnPhase = 'home',
+): void {
+  replayReviewData = review;
   replayReviewSourceLabel = sourceLabel;
-  replayFrameIndex = 0;
+  replayReturnPhase = returnPhase;
+  replayFrameIndex = Math.max(0, Math.min(review.totalFrames - 1, Math.floor(initialFrame)));
   replayAccumulator = 0;
   replayPaused = true;
   replaySpeedIndex = replaySpeedOptions.indexOf(1);
@@ -3087,12 +5423,61 @@ function beginReplayReviewFromPayload(payloadRaw: unknown, sourceLabel: string):
   hud.updateRollbackDiagnostics(null);
   replayViewer.show(replayReviewData, replayReviewSourceLabel);
   replayViewer.updatePlayback(replayFrameIndex, replayPaused, replaySpeedOptions[replaySpeedIndex]);
-  const firstSnapshot = replayReviewData.frames[replayFrameIndex]?.snapshot;
-  if (firstSnapshot) {
-    sceneContext.cameraPlayerTracks.P1.set(firstSnapshot.players.P1.pos.x, firstSnapshot.players.P1.pos.y);
-    sceneContext.cameraPlayerTracks.P2.set(firstSnapshot.players.P2.pos.x, firstSnapshot.players.P2.pos.y);
+  const initialSnapshot = replayReviewData.frames[replayFrameIndex]?.snapshot;
+  if (initialSnapshot) {
+    sceneContext.cameraPlayerTracks.P1.set(initialSnapshot.players.P1.pos.x, initialSnapshot.players.P1.pos.y);
+    sceneContext.cameraPlayerTracks.P2.set(initialSnapshot.players.P2.pos.x, initialSnapshot.players.P2.pos.y);
     sceneContext.launchCameraActive = false;
   }
+}
+
+async function beginReplayReviewFromPayload(
+  payloadRaw: unknown,
+  sourceLabel: string,
+  requireChecksums = false,
+  returnPhase: ReplayReturnPhase = 'home',
+  reviewFocusOverride?: ReplayReviewFocus,
+): Promise<boolean> {
+  const validation = validateReplayPayload(payloadRaw);
+  if (validation.ok === false) {
+    console.error('[replay-review] invalid replay payload', sourceLabel, validation.error);
+    return false;
+  }
+
+  if (requireChecksums && !validation.payload.expectedChecksums) {
+    console.error('[replay-review] local replay is missing deterministic checksums', sourceLabel);
+    return false;
+  }
+
+  if (validation.payload.expectedChecksums) {
+    const mismatch = findFirstChecksumMismatch(
+      runReplay(validation.payload).checksums,
+      validation.payload.expectedChecksums,
+    );
+    if (mismatch) {
+      console.error('[replay-review] deterministic checksum mismatch', sourceLabel, mismatch);
+      return false;
+    }
+  }
+
+  const focus = reviewFocusOverride ?? validation.payload.header.reviewFocus;
+  const focusedSourceLabel = focus ? `${sourceLabel} | ${focus.label}` : sourceLabel;
+  const reviewPayload = reviewFocusOverride
+    ? {
+        ...validation.payload,
+        header: {
+          ...validation.payload.header,
+          reviewFocus: reviewFocusOverride,
+        },
+      }
+    : validation.payload;
+  const { buildReplayReviewData } = await import('./sim/replayReview');
+  beginReplayReview(
+    buildReplayReviewData(reviewPayload),
+    focusedSourceLabel,
+    focus?.focusFrame ?? 0,
+    returnPhase,
+  );
   return true;
 }
 
@@ -3109,20 +5494,53 @@ async function beginReplayReviewFromFixture(fileName: string): Promise<void> {
     return;
   }
 
-  beginReplayReviewFromPayload(payloadRaw, fileName);
+  await beginReplayReviewFromPayload(payloadRaw, fileName);
 }
 
 function exitReplayReview(): void {
   if (appPhase !== 'replay_review') {
     return;
   }
+  const returnPhase = replayReturnPhase;
   replayViewer.hide();
   replayReviewData = null;
   replayFrameIndex = 0;
   replayAccumulator = 0;
   replayPaused = true;
   replayReviewSourceLabel = '';
-  returnToHome();
+  replayReturnPhase = 'home';
+  if (returnPhase === 'home') {
+    returnToHome();
+    return;
+  }
+
+  appPhase = returnPhase;
+  pauseMenu.setCanRestartTraining(selectedMode === 'training');
+  startMenu.hideHome();
+  if (returnPhase === 'round_transition' && state.winner) {
+    if (selectedMode === 'arcade' && arcadeRun) {
+      const stage = getCurrentArcadeStage(arcadeRun);
+      startMenu.showRoundBanner(state.winner, `${stage.label} | ${getRoundScoreText()}`);
+    } else {
+      startMenu.showRoundBanner(state.winner, getRoundScoreText());
+    }
+  } else {
+    startMenu.hideRoundBanner();
+  }
+  hudRoot.style.visibility = 'visible';
+  syncTrainingFrameDataVisibility();
+  hud.setRollbackDiagnosticsVisible(debugHudEnabled);
+  hud.updateRollbackDiagnostics(debugHudEnabled && rollbackSession
+    ? getRollbackDiagnosticsView(rollbackSession)
+    : null);
+  hud.setInputHistoryVisible(shouldShowLiveInputHistory());
+  hud.setMatchTelemetryVisible(shouldShowLiveMatchTelemetry());
+  hud.updateMatchTelemetry(shouldShowLiveMatchTelemetry() ? matchTelemetry.toSummary() : null);
+  sceneContext.cameraPlayerTracks.P1.set(state.players.P1.pos.x, state.players.P1.pos.y);
+  sceneContext.cameraPlayerTracks.P2.set(state.players.P2.pos.x, state.players.P2.pos.y);
+  sceneContext.launchCameraActive = false;
+  pauseMenu.setPaused(true);
+  accumulator = 0;
 }
 
 function setReplayFrameIndex(frameIndex: number): void {
@@ -3166,6 +5584,14 @@ function getRoundScoreText(): string {
   return `Rounds: P1 ${p1RoundWins} - ${p2RoundWins} P2`;
 }
 
+function getBalanceLabSampleProgressText(): string {
+  if (balanceLabSampleTargetFrames === null) {
+    return '';
+  }
+  const completedFrames = Math.min(simulationFrame, balanceLabSampleTargetFrames);
+  return ` | Matched sample ${(completedFrames * fixedDt).toFixed(1)}/${(balanceLabSampleTargetFrames * fixedDt).toFixed(1)}s`;
+}
+
 function updateMatchInfo(): void {
   if (appPhase === 'home') {
     matchInfo.textContent = 'Home';
@@ -3197,22 +5623,50 @@ function updateMatchInfo(): void {
   }
 
   if (onlineMatchContext && (appPhase === 'playing' || appPhase === 'round_transition' || appPhase === 'match_over')) {
-    matchInfo.textContent = `Online ${onlineMatchContext.queueType} | ${onlineMatchContext.region} | ${onlineMatchContext.connectionPath} relay | ${getRoundScoreText()}`;
+    const recovery = onlineMatchContext.transportRecovery.getSnapshot();
+    const recoveryLine = recovery.state === 'reconnecting'
+      ? ` | Reconnecting ${Math.max(1, recovery.attempt)}/${recovery.maxAttempts}`
+      : '';
+    matchInfo.textContent = `Online ${onlineMatchContext.queueType} | ${onlineMatchContext.region} | WebRTC ${onlineMatchContext.connectionPath}${recoveryLine} | ${getRoundScoreText()}`;
     return;
   }
 
   if (selectedMode === 'endless') {
-    matchInfo.textContent = 'Mode: Endless Dev';
+    matchInfo.textContent = 'Mode: AI Sparring | Endless';
     return;
   }
 
   if (selectedMode === 'cpu_vs_cpu') {
-    matchInfo.textContent = `Mode: AI vs AI | ${getRoundScoreText()} | ${selectedAiDifficulty}`;
+    const testRecipeId = getBalanceTestRecipeSelectionId(
+      activeBalanceScenarioId,
+      activeAiControllerRoles,
+    );
+    const testRecipe = findBalanceTestRecipeForSetup(
+      activeBalanceScenarioId,
+      activeAiControllerRoles,
+    );
+    const configurationLabel = testRecipeId !== 'custom'
+      && testRecipeId !== DEFAULT_BALANCE_TEST_RECIPE_ID
+      ? ` | Probe: ${testRecipe?.label ?? testRecipeId}`
+      : testRecipeId === 'custom'
+        ? ` | Custom: ${formatAiControllerRoles(activeAiControllerRoles)} / ${resolveBalanceScenario(activeBalanceScenarioId).label}`
+        : '';
+    matchInfo.textContent = `Mode: AI vs AI | ${getRoundScoreText()} | ${selectedAiDifficulty}${configurationLabel} | Round ${offlineRoundIndex + 1} seed ${state.seed}${getBalanceLabSampleProgressText()}`;
+    return;
+  }
+
+  if (selectedMode === 'balance_sparring') {
+    const scenario = resolveBalanceScenario(activeBalanceScenarioId);
+    const testRecipe = findBalanceTestRecipeForSetup(
+      activeBalanceScenarioId,
+      activeAiControllerRoles,
+    );
+    matchInfo.textContent = `Mode: Balance Sparring | P1 Human vs P2 ${selectedAiDifficulty} AI | Probe: ${testRecipe?.label ?? 'Custom'} | ${scenario.label} | Round ${offlineRoundIndex + 1} seed ${state.seed}${getBalanceLabSampleProgressText()}`;
     return;
   }
 
   if (selectedMode === 'training') {
-    matchInfo.textContent = 'Mode: Training';
+    matchInfo.textContent = `Mode: Training${getBalanceLabSampleProgressText()}`;
     return;
   }
 
@@ -3225,7 +5679,7 @@ function updateMatchInfo(): void {
     return;
   }
 
-  matchInfo.textContent = `Mode: Best of 3 | ${getRoundScoreText()}`;
+  matchInfo.textContent = `Mode: AI Sparring | Best of 3 | ${getRoundScoreText()}`;
 }
 
 function resolveAdaptiveMusicState(phase: AppPhase, snapshot: RenderSnapshot): MusicState {
@@ -3431,16 +5885,43 @@ function showArcadeLossPrompt(stageLabel: string, allowedActions: ArcadeLossActi
   });
 }
 
+function beginOnlineRoundResolution(context: OnlineMatchContext, winner: PlayerId): void {
+  if (context.pendingRoundWinner) {
+    return;
+  }
+  const winningFrame = rollbackSession?.getWinningFrame() ?? null;
+  context.pendingRoundWinner = winningFrame?.winner ?? winner;
+  context.pendingRoundFinalFrame = winningFrame?.frame ?? Math.max(0, simulationFrame - 1);
+  context.roundSyncElapsedSeconds = 0;
+  context.statusText = `Synchronizing round ${context.roundEpoch + 1} through frame ${context.pendingRoundFinalFrame}.`;
+  appPhase = 'round_transition';
+  roundTransitionRemaining = 0;
+  startMenu.showRoundBanner(winner, 'Verifying decisive frame with peer');
+}
+
 function onRoundWin(winner: PlayerId): void {
+  if (onlineMatchContext) {
+    beginOnlineRoundResolution(onlineMatchContext, winner);
+    return;
+  }
+  commitRoundWin(winner);
+}
+
+function commitRoundWin(winner: PlayerId): void {
   if (selectedMode === 'training') {
     restartTrainingRound('round_win');
     return;
   }
 
-  if (selectedMode === 'endless') {
+  if (selectedMode === 'endless' || selectedMode === 'balance_sparring') {
     appPhase = 'round_transition';
     roundTransitionRemaining = 0.5;
-    startMenu.showRoundBanner(winner, 'Endless mode continues');
+    startMenu.showRoundBanner(
+      winner,
+      selectedMode === 'balance_sparring'
+        ? 'Balance Sparring continues with the active local rules'
+        : 'Endless mode continues',
+    );
     return;
   }
 
@@ -3512,10 +5993,14 @@ function onRoundWin(winner: PlayerId): void {
       onlineMatchContext.winnerAccountId = winner === onlineMatchContext.localPlayerId
         ? onlineMatchContext.localAccountId
         : onlineMatchContext.remoteAccountId;
+      onlineMatchContext.replayStatus = 'ready';
+      onlineMatchContext.replayDetail = `${onlineMatchContext.replayRecorder.roundCount} canonical rounds are ready to persist.`;
       renderOnlineMatchOverScreen(onlineMatchContext, winner, p1RoundWins, p2RoundWins);
       void completeOnlineSession(onlineMatchContext);
       if (onlineMatchContext.queueType === 'ranked') {
         void submitOnlineRankedResult(onlineMatchContext);
+      } else {
+        void persistOnlineMatchReplay(onlineMatchContext);
       }
     } else {
       startMenu.showMatchOver(winner, p1RoundWins, p2RoundWins);
@@ -3531,6 +6016,22 @@ function onRoundWin(winner: PlayerId): void {
     startMenu.showRoundBanner(winner, `${stage.label} | ${getRoundScoreText()}`);
   } else {
     startMenu.showRoundBanner(winner, getRoundScoreText());
+  }
+}
+
+function requestGameplayPauseToggle(): void {
+  const decision = resolveGameplayPauseRequest(onlineMatchContext !== null);
+  if (decision.forceUnpaused) {
+    pauseMenu.setPaused(false);
+  }
+  if (decision.togglePause) {
+    pauseMenu.toggle();
+  }
+  if (decision.resetAccumulator) {
+    accumulator = 0;
+  }
+  if (decision.statusText && onlineMatchContext) {
+    onlineMatchContext.statusText = decision.statusText;
   }
 }
 
@@ -3580,8 +6081,7 @@ window.addEventListener('keydown', (event) => {
       return;
     }
     event.preventDefault();
-    pauseMenu.toggle();
-    accumulator = 0;
+    requestGameplayPauseToggle();
   }
 
   if (
@@ -3593,6 +6093,114 @@ window.addEventListener('keydown', (event) => {
     returnToHome();
   }
 });
+
+function updateOnlineRoundResolution(
+  context: OnlineMatchContext,
+  elapsedSeconds: number,
+): boolean {
+  let finalFrame = context.pendingRoundFinalFrame;
+  if (!context.pendingRoundWinner || finalFrame === null) {
+    return false;
+  }
+
+  context.roundSyncElapsedSeconds += elapsedSeconds;
+  if (rollbackSession) {
+    recordPendingRankedRemoteInputs(context, Math.max(0, simulationFrame - 1));
+    const remoteInputBatch = applyPendingRemoteInputs(
+      context.inputPump.getPendingRemoteInputs(),
+      rollbackSession,
+      Math.max(0, simulationFrame - 1),
+    );
+    if (
+      remoteInputBatch.conflictingFrames.length > 0
+      || remoteInputBatch.tooLateFrames.length > 0
+    ) {
+      interruptOnlineMatch(
+        context,
+        'The decisive frame could not be verified within rollback history.',
+      );
+      return true;
+    }
+    recordOnlineRollbackEvidence(context, remoteInputBatch.rollbackFrames);
+    state = rollbackSession.getStateSnapshot();
+    try {
+      recordSynchronizedOnlineReplayFrames(context, rollbackSession);
+    } catch (error) {
+      context.replayStatus = 'failed';
+      context.replayDetail = error instanceof Error ? error.message : 'Online replay synchronization failed.';
+      interruptOnlineMatch(context, context.replayDetail);
+      return true;
+    }
+  }
+
+  const winningFrame = rollbackSession?.getWinningFrame() ?? null;
+  if (!state.winner || (rollbackSession && !winningFrame)) {
+    context.pendingRoundWinner = null;
+    context.pendingRoundFinalFrame = null;
+    context.roundSyncElapsedSeconds = 0;
+    context.statusText = 'Predicted round result was corrected. Match resumed.';
+    startMenu.hideRoundBanner();
+    appPhase = 'playing';
+    accumulator = 0;
+    return true;
+  }
+
+  const resolvedWinner = winningFrame?.winner ?? state.winner;
+  const resolvedFinalFrame = winningFrame?.frame ?? finalFrame;
+  if (
+    resolvedWinner !== context.pendingRoundWinner
+    || resolvedFinalFrame !== context.pendingRoundFinalFrame
+  ) {
+    context.pendingRoundWinner = resolvedWinner;
+    context.pendingRoundFinalFrame = resolvedFinalFrame;
+    finalFrame = resolvedFinalFrame;
+    startMenu.showRoundBanner(resolvedWinner, 'Corrected result; verifying with peer');
+  }
+
+  if (context.inputPump.isSynchronizedThrough(finalFrame)) {
+    const confirmedWinner = context.pendingRoundWinner;
+    try {
+      context.rankedProofRecorder?.finalizeRound(
+        context.roundEpoch,
+        finalFrame,
+        confirmedWinner,
+        winningFrame?.checksum ?? computeStateChecksum(state),
+      );
+      context.replayRecorder.finalizeRound(
+        context.roundEpoch,
+        finalFrame,
+        confirmedWinner,
+      );
+    } catch (error) {
+      context.replayStatus = 'failed';
+      context.replayDetail = error instanceof Error
+        ? error.message
+        : 'Round evidence finalization failed.';
+      interruptOnlineMatch(
+        context,
+        error instanceof Error
+          ? `Round evidence finalization failed: ${error.message}`
+          : 'Round evidence finalization failed.',
+      );
+      return true;
+    }
+    context.pendingRoundWinner = null;
+    context.pendingRoundFinalFrame = null;
+    context.roundSyncElapsedSeconds = 0;
+    context.statusText = `Round ${context.roundEpoch + 1} confirmed through frame ${finalFrame}.`;
+    commitRoundWin(confirmedWinner);
+    return true;
+  }
+
+  if (context.roundSyncElapsedSeconds >= 10) {
+    const diagnostics = context.inputPump.getDiagnostics();
+    interruptOnlineMatch(
+      context,
+      `Round synchronization timed out at frame ${finalFrame} (remote ${diagnostics.contiguousRemoteFrame}, peer confirmation ${diagnostics.peerConfirmedThrough}).`,
+    );
+  }
+  return true;
+}
 
 function tick(nowMs: number): void {
   const nowSeconds = nowMs / 1000;
@@ -3606,8 +6214,7 @@ function tick(nowMs: number): void {
     && nowSeconds >= pauseToggleLockUntil
     && (appPhase === 'playing' || appPhase === 'round_transition')
   ) {
-    pauseMenu.toggle();
-    accumulator = 0;
+    requestGameplayPauseToggle();
     pauseToggleLockUntil = nowSeconds + 0.2;
   }
   pauseButtonWasDown = pauseDown;
@@ -3625,66 +6232,153 @@ function tick(nowMs: number): void {
   }
   frameDataToggleButtonWasDown = frameDataToggleDown;
 
-  if (!pauseMenu.isPaused() && appPhase === 'playing') {
-    accumulator = Math.min(accumulator + elapsedSeconds, maxAccumulatedTime);
+  const onlineTransportReconnecting = onlineMatchContext?.transportRecovery.getSnapshot().state
+    === 'reconnecting';
+  const localRankedRecoveryHolding = onlineMatchContext?.smokeRecovery?.isHoldingBeforeRecovery()
+    ?? false;
+  const onlineSimulationPaused = onlineTransportReconnecting || localRankedRecoveryHolding;
+  const simulationElapsedSeconds = localRankedRootSmokeConfig.enabled && onlineMatchContext
+    ? elapsedSeconds * localRankedRootSmokeConfig.simulationRate
+    : elapsedSeconds;
+  if (!pauseMenu.isPaused() && appPhase === 'playing' && !onlineSimulationPaused) {
+    accumulator = Math.min(accumulator + simulationElapsedSeconds, maxAccumulatedTime);
   } else {
     accumulator = 0;
   }
 
-  if (!pauseMenu.isPaused() && appPhase === 'playing') {
+  if (!pauseMenu.isPaused() && appPhase === 'playing' && !onlineSimulationPaused) {
     while (accumulator >= fixedDt) {
       const frameInputRaw = input.getFrameInput();
       if (onlineMatchContext) {
-        const localInput = cloneOnlinePlayerInput(frameInputRaw.p1);
+        let localInput: PlayerFrameInput;
+        try {
+          localInput = localRankedSmokeInputDriver
+            ? localRankedSmokeInputDriver.nextLocalInput(
+              simulationFrame,
+              onlineMatchContext.localPlayerId,
+            )
+            : cloneOnlinePlayerInput(
+              onlineMatchContext.localPlayerId === 'P1' ? frameInputRaw.p1 : frameInputRaw.p2,
+            );
+          onlineMatchContext.inputPump.enqueueLocalInput(simulationFrame, localInput);
+        } catch (error) {
+          interruptOnlineMatch(
+            onlineMatchContext,
+            error instanceof Error
+              ? `Live input queue failed: ${error.message}`
+              : 'Live input queue failed.',
+          );
+          accumulator = 0;
+          break;
+        }
         const resolvedOnlineFrameInput = onlineMatchContext.localPlayerId === 'P1'
           ? { p1: localInput, p2: createEmptyPlayerInput() }
           : { p1: createEmptyPlayerInput(), p2: localInput };
-        onlineMatchContext.outgoingFrames.push({
-          frame: simulationFrame,
-          input: localInput,
-        });
-        const remoteInput = onlineMatchContext.pendingRemoteInputs.get(simulationFrame) ?? null;
-        if (remoteInput) {
-          onlineMatchContext.pendingRemoteInputs.delete(simulationFrame);
-        }
+        onlineMatchContext.rankedProofRecorder?.recordInput(
+          onlineMatchContext.roundEpoch,
+          simulationFrame,
+          onlineMatchContext.localPlayerId,
+          localInput,
+        );
         if (rollbackSession) {
+          recordPendingRankedRemoteInputs(onlineMatchContext, simulationFrame);
+          const remoteInputBatch = applyPendingRemoteInputs(
+            onlineMatchContext.inputPump.getPendingRemoteInputs(),
+            rollbackSession,
+            simulationFrame,
+          );
+          onlineMatchContext.smokeRecovery?.recordRejectedInputs(
+            remoteInputBatch.conflictingFrames.length,
+            remoteInputBatch.tooLateFrames.length,
+          );
+          if (
+            remoteInputBatch.conflictingFrames.length > 0
+            || remoteInputBatch.tooLateFrames.length > 0
+          ) {
+            const rejectedFrames = [
+              ...remoteInputBatch.conflictingFrames.map((frame) => `conflict ${frame}`),
+              ...remoteInputBatch.tooLateFrames.map((frame) => `too late ${frame}`),
+            ].join(', ');
+            interruptOnlineMatch(
+              onlineMatchContext,
+              `Authoritative input could not be applied (${rejectedFrames}).`,
+            );
+            accumulator = 0;
+            break;
+          }
           const rollbackResult = rollbackSession.advanceFrame({
             localInput,
-            remoteAuthoritativeInput: remoteInput,
           });
-          if (runtimeConfig.features.debugToolsEnabled && rollbackResult.rollbackFrames > 0) {
+          const rollbackFrames = remoteInputBatch.rollbackFrames + rollbackResult.rollbackFrames;
+          recordOnlineRollbackEvidence(onlineMatchContext, rollbackFrames);
+          if (runtimeConfig.features.debugToolsEnabled && rollbackFrames > 0) {
             console.info('[rollback] online correction', {
               frame: rollbackResult.frame,
-              rollbackFrames: rollbackResult.rollbackFrames,
+              authoritativeFrames: remoteInputBatch.appliedFrames,
+              rollbackFrames,
             });
           }
           if (runtimeConfig.features.debugToolsEnabled) {
-            const desyncEvents = rollbackSession.drainPendingDesyncEvents();
-            for (const event of desyncEvents) {
-              console.warn('[rollback] online desync event', event);
+            const correctionEvents = rollbackSession.drainPendingCorrectionEvents();
+            for (const event of correctionEvents) {
+              console.info('[rollback] online state correction', event);
             }
           }
           state = rollbackSession.getStateSnapshot();
+          try {
+            recordSynchronizedOnlineReplayFrames(onlineMatchContext, rollbackSession);
+          } catch (error) {
+            onlineMatchContext.replayStatus = 'failed';
+            onlineMatchContext.replayDetail = error instanceof Error
+              ? error.message
+              : 'Online replay synchronization failed.';
+            interruptOnlineMatch(onlineMatchContext, onlineMatchContext.replayDetail);
+            accumulator = 0;
+            break;
+          }
         } else {
+          const pendingRemoteInputs = onlineMatchContext.inputPump.getPendingRemoteInputs();
+          const remoteInput = pendingRemoteInputs.get(simulationFrame) ?? null;
+          if (remoteInput) {
+            pendingRemoteInputs.delete(simulationFrame);
+            if (onlineMatchContext.localPlayerId === 'P1') {
+              resolvedOnlineFrameInput.p2 = remoteInput;
+            } else {
+              resolvedOnlineFrameInput.p1 = remoteInput;
+            }
+          }
           step(state, resolvedOnlineFrameInput, fixedDt);
         }
-        matchTelemetry.recordFrame(resolvedOnlineFrameInput, state, fixedDt);
+        // Online metrics stay disabled until frame observations can be replaced after rollback.
       } else {
         let frameInput = frameInputRaw;
+        const aiDecisions: Partial<Record<PlayerId, AiDecisionTrace>> = {};
         const p1AiController = aiControllers.P1;
         const p2AiController = aiControllers.P2;
         if (p1AiController || p2AiController) {
           const p1Input = p1AiController
             ? (() => {
-              const aiTick = tickAiController(state, 'P1', p1AiController);
+              const aiTick = tickAiControllerWithRole(
+                state,
+                'P1',
+                p1AiController,
+                activeAiControllerRoles.P1,
+              );
               aiControllers.P1 = aiTick.next;
+              aiDecisions.P1 = aiTick.decision;
               return aiTick.input;
             })()
             : frameInputRaw.p1;
           const p2Input = p2AiController
             ? (() => {
-              const aiTick = tickAiController(state, 'P2', p2AiController);
+              const aiTick = tickAiControllerWithRole(
+                state,
+                'P2',
+                p2AiController,
+                activeAiControllerRoles.P2,
+              );
               aiControllers.P2 = aiTick.next;
+              aiDecisions.P2 = aiTick.decision;
               return aiTick.input;
             })()
             : frameInputRaw.p2;
@@ -3695,6 +6389,7 @@ function tick(nowMs: number): void {
         }
         inputTimeline.setLocalInput(simulationFrame, 'P1', frameInput.p1);
         inputTimeline.setLocalInput(simulationFrame, 'P2', frameInput.p2);
+        let acceptedActionStarts: SimulationActionStart[] | undefined;
         if (rollbackSession) {
           const rollbackResult = rollbackSession.advanceFrame({
             localInput: frameInput.p1,
@@ -3707,35 +6402,74 @@ function tick(nowMs: number): void {
             });
           }
           if (runtimeConfig.features.debugToolsEnabled) {
-            const desyncEvents = rollbackSession.drainPendingDesyncEvents();
-            for (const event of desyncEvents) {
-              console.warn('[rollback] desync event', event);
+            const correctionEvents = rollbackSession.drainPendingCorrectionEvents();
+            for (const event of correctionEvents) {
+              console.info('[rollback] state correction', event);
             }
           }
           state = rollbackSession.getStateSnapshot();
         } else {
-          step(state, frameInput, fixedDt);
+          acceptedActionStarts = [];
+          step(state, frameInput, fixedDt, {
+            onActionStart: (event) => acceptedActionStarts?.push(event),
+          });
         }
-        matchTelemetry.recordFrame(frameInput, state, fixedDt);
+        aiDecisionTelemetry.recordFrame(simulationFrame, aiDecisions);
+        matchTelemetry.recordFrame(frameInput, state, fixedDt, acceptedActionStarts);
+        liveAiRoundReplayRecorder?.recordFrame(frameInput, state, aiDecisions);
         if (selectedMode === 'training') {
           trainingTelemetry.recordFrame(frameInput, state, fixedDt);
         }
       }
       simulationFrame += 1;
       accumulator -= fixedDt;
+      if (
+        onlineMatchContext
+        && !state.winner
+        && onlineMatchContext.smokeRecovery?.observeSpeculativeTail(
+          createLocalRankedRecoveryObservation(onlineMatchContext),
+        )
+      ) {
+        accumulator = 0;
+        break;
+      }
+      if (balanceLabSampleTargetFrames !== null) {
+        const balanceSampleStop = evaluateBalanceLabSampleStop(
+          balanceLabSampleTargetFrames,
+          simulationFrame,
+          state.winner !== null,
+        );
+        if (balanceSampleStop.shouldStop) {
+          balanceLabSampleTargetFrames = null;
+          const completedSeconds = balanceSampleStop.completedFrames * fixedDt;
+          const targetSeconds = balanceSampleStop.targetFrames * fixedDt;
+          const status = balanceSampleStop.reason === 'round_finished_early'
+            ? `Matched sample stopped at ${completedSeconds.toFixed(1)}s because the candidate finished before the ${targetSeconds.toFixed(1)}s baseline. Review finish cadence and flow deltas.`
+            : `Matched sample completed at the baseline's exact ${balanceSampleStop.targetFrames}-frame (${targetSeconds.toFixed(1)}s) window.`;
+          accumulator = 0;
+          pauseMenu.openBalanceLab(status);
+          break;
+        }
+      }
     }
 
-    if (state.winner) {
+    if (state.winner && !pauseMenu.isPaused()) {
       onRoundWin(state.winner);
     }
   }
 
   if (!pauseMenu.isPaused() && appPhase === 'round_transition') {
-    roundTransitionRemaining -= elapsedSeconds;
-    if (roundTransitionRemaining <= 0) {
-      resetRoundState();
-      startMenu.hideRoundBanner();
-      appPhase = 'playing';
+    const resolvingOnlineRound = onlineMatchContext
+      ? onlineTransportReconnecting
+        || updateOnlineRoundResolution(onlineMatchContext, elapsedSeconds)
+      : false;
+    if (!resolvingOnlineRound) {
+      roundTransitionRemaining -= elapsedSeconds;
+      if (roundTransitionRemaining <= 0) {
+        resetRoundState({ advanceOfflineRound: true });
+        startMenu.hideRoundBanner();
+        appPhase = 'playing';
+      }
     }
   }
 
@@ -3762,10 +6496,18 @@ function tick(nowMs: number): void {
     replayAccumulator = 0;
   }
 
-  if (onlineMatchContext && appPhase === 'playing') {
+  if (
+    onlineMatchContext
+    && (appPhase === 'playing' || appPhase === 'round_transition')
+    && onlineMatchContext.transportRecovery.getSnapshot().state === 'connected'
+    && !onlineMatchContext.smokeRecovery?.isHoldingBeforeRecovery()
+  ) {
     onlineMatchContext.sendAccumulatorSeconds += elapsedSeconds;
     onlineMatchContext.pollAccumulatorSeconds += elapsedSeconds;
-    if (onlineMatchContext.sendAccumulatorSeconds >= 0.05 || onlineMatchContext.outgoingFrames.length >= 4) {
+    if (
+      onlineMatchContext.sendAccumulatorSeconds >= 0.05
+      || onlineMatchContext.inputPump.getOutboundFrameCount() >= 4
+    ) {
       onlineMatchContext.sendAccumulatorSeconds = 0;
       flushOnlineTransport(onlineMatchContext);
     } else if (onlineMatchContext.pollAccumulatorSeconds >= 0.05) {
@@ -3774,26 +6516,6 @@ function tick(nowMs: number): void {
     if (onlineMatchContext.pollAccumulatorSeconds >= 0.05) {
       onlineMatchContext.pollAccumulatorSeconds = 0;
     }
-  }
-
-  if (
-    appPhase === 'online_bootstrap'
-    && onlineBootstrapState
-    && onlineBootstrapState.iceConfig
-    && onlineRelayFallbackController
-    && onlineRelayFallbackController.shouldFallbackToRelay(nowMs)
-  ) {
-    onlineRelayFallbackController.applyRelayFallback();
-    buildRtcConfiguration(onlineBootstrapState.iceConfig, 'relay');
-    onlineBootstrapState = {
-      ...onlineBootstrapState,
-      connectionPath: 'relay',
-      statusDetail: 'Direct connect timed out. Relay fallback is prepared. The remaining missing layer is signaling/datachannel exchange.',
-    };
-    onlineDiagnosticsUpdate = {
-      ...onlineDiagnosticsUpdate,
-      connectionPath: 'relay',
-    };
   }
 
   const snapshot = appPhase === 'replay_review' && replayReviewData
@@ -3848,6 +6570,192 @@ function tick(nowMs: number): void {
   requestAnimationFrame(tick);
 }
 
+function buildLocalRankedRootSmokeSnapshot(): LocalRankedRootSmokeSnapshot {
+  const context = onlineMatchContext;
+  const proof = context?.rankedProof ?? null;
+  const result = context?.rankedResultResponse ?? null;
+  const rollbackDiagnostics = rollbackSession?.getDiagnosticsSnapshot() ?? null;
+  const inputPumpDiagnostics = context?.inputPump.getDiagnostics() ?? null;
+  return {
+    schemaVersion: LOCAL_RANKED_ROOT_SMOKE_SCHEMA_VERSION,
+    rootPath: window.location.pathname,
+    releaseProfile: {
+      environment: runtimeConfig.environment,
+      buildId: diagnosticsBuildId,
+      onlineEnabled: runtimeConfig.features.onlineEnabled,
+      rankedEnabled: runtimeConfig.features.rankedEnabled,
+      onlineMatchRuntimeEnabled: runtimeConfig.features.onlineMatchRuntimeEnabled,
+      debugToolsEnabled: runtimeConfig.features.debugToolsEnabled,
+    },
+    forceRelayRequested: localRankedRootSmokeConfig.forceRelay,
+    phase: appPhase,
+    account: {
+      accountId: sessionAccountId,
+      signedAccessToken: Boolean(platform.auth.getAccessToken?.()),
+    },
+    ticket: playerRankedTicket ? {
+      ticketId: playerRankedTicket.ticketId,
+      status: playerRankedTicket.status,
+      sessionId: playerRankedTicket.matchStart?.sessionId ?? null,
+    } : null,
+    bootstrap: onlineBootstrapState ? {
+      sessionId: onlineBootstrapState.sessionId,
+      status: onlineBootstrapState.status,
+      connectionPath: onlineBootstrapState.connectionPath,
+      detail: onlineBootstrapState.statusDetail,
+    } : null,
+    session: playerRankedSession ? {
+      sessionId: playerRankedSession.sessionId,
+      status: playerRankedSession.status,
+      resolvedReason: playerRankedSession.resolvedReason ?? null,
+      participantAccountIds: playerRankedSession.participants.map((entry) => entry.accountId),
+    } : null,
+    match: context && inputPumpDiagnostics ? {
+      sessionId: context.sessionId,
+      localAccountId: context.localAccountId,
+      remoteAccountId: context.remoteAccountId,
+      localPlayerId: context.localPlayerId,
+      remotePlayerId: context.remotePlayerId,
+      connectionPath: context.connectionPath,
+      iceTransportPolicy: context.iceTransportPolicy,
+      relayAvailable: context.relayAvailable,
+      turnCredentialMode: context.turnCredentialMode,
+      transportAttemptGeneration: context.transportAttemptGeneration,
+      roundEpoch: context.roundEpoch,
+      simulationFrame,
+      p1RoundWins,
+      p2RoundWins,
+      winner: state.winner,
+      finalOutcome: context.finalOutcome,
+      winnerAccountId: context.winnerAccountId,
+      sessionCompletionStatus: context.sessionCompletionStatus,
+      proof: proof ? {
+        claimedOutcome: proof.claimedOutcome,
+        roundCount: proof.rounds.length,
+        frameCount: proof.rounds.reduce((total, round) => total + round.inputs.length, 0),
+      } : null,
+      replay: {
+        status: context.replayStatus,
+        replayId: context.replayId,
+        digest: context.replayPayload?.integrity?.digest ?? null,
+        roundCount: context.replayRecorder.roundCount,
+        frameCount: context.replayRecorder.frameCount,
+        detail: context.replayDetail,
+      },
+      result: {
+        status: context.rankedResultStatus,
+        submissionId: context.rankedResultSubmissionId,
+        persistedRead: context.rankedResultPersistedRead,
+        settlementSource: result?.settlementSource ?? null,
+        proofDigest: result?.proof?.digest ?? null,
+        proofRoundCount: result?.proof?.roundCount ?? null,
+        proofFrameCount: result?.proof?.frameCount ?? null,
+        outcome: result?.outcome ?? null,
+        winnerAccountId: result?.winnerAccountId ?? null,
+        ratingDeltas: (result?.ratingDeltas ?? []).map((delta) => ({
+          accountId: delta.accountId,
+          side: delta.side,
+          preRating: delta.preRating,
+          postRating: delta.postRating,
+          ratingDelta: delta.ratingDelta,
+          result: delta.result,
+        })),
+        detail: context.rankedResultDetail,
+      },
+      rollback: {
+        applications: context.rollbackApplications,
+        totalFrames: context.rollbackFrames,
+        maxDepth: context.maxRollbackDepth,
+        currentRoundTotalRollbacks: rollbackDiagnostics?.totalRollbacks ?? 0,
+        currentRoundCorrectionEvents: rollbackDiagnostics?.correctionEvents.length ?? 0,
+      },
+      inputPump: {
+        outboundFrames: inputPumpDiagnostics.outboundFrames,
+        contiguousRemoteFrame: inputPumpDiagnostics.contiguousRemoteFrame,
+        peerConfirmedThrough: inputPumpDiagnostics.peerConfirmedThrough,
+        mutuallyConfirmedThrough: context.inputPump.getMutuallyConfirmedThrough(),
+        uploadFailures: inputPumpDiagnostics.uploadFailures,
+        pollFailures: inputPumpDiagnostics.pollFailures,
+        confirmationFailures: inputPumpDiagnostics.confirmationFailures,
+      },
+      recovery: context.smokeRecovery?.getDiagnostics(inputPumpDiagnostics.outboundFrames) ?? null,
+      smokeTransport: context.smokeFrameTransport?.getDiagnostics() ?? null,
+      driver: localRankedSmokeInputDriver?.getDiagnostics() ?? null,
+    } : null,
+    progression: playerRankedSnapshot ? {
+      rating: playerRankedSnapshot.rating,
+      leagueTier: playerRankedSnapshot.leagueTier,
+      leaguePoints: playerRankedSnapshot.leaguePoints,
+      provisional: playerRankedSnapshot.provisional,
+      recentDeltas: playerRankedSnapshot.recentDeltas.map((delta) => ({
+        result: delta.result,
+        preRating: delta.preRating,
+        postRating: delta.postRating,
+        occurredAt: delta.occurredAt,
+      })),
+    } : null,
+  };
+}
+
+async function refreshLocalRankedRootSmokePersistedState(): Promise<void> {
+  const context = onlineMatchContext;
+  if (!localRankedRootSmokeConfig.enabled || !context || appPhase !== 'match_over') {
+    throw new Error('A completed local ranked root smoke match is required before persistence readback.');
+  }
+  playerRankedSession = await requestOnlineJson<MatchSessionView>(
+    'GET',
+    `/matchmaking/sessions/${context.sessionId}`,
+    context.localAccountId,
+  );
+  const persistedResult = await requestOnlineJson<RankedResultSubmitResponse>(
+    'GET',
+    `/ranked/results/${context.sessionId}`,
+    context.localAccountId,
+    undefined,
+    { matchSessionToken: context.sessionToken },
+  );
+  if (!await applyOnlineRankedResultResponse(context, persistedResult)) {
+    throw new Error('Persisted ranked result is still awaiting peer consensus.');
+  }
+  await persistOnlineMatchReplay(context);
+  context.rankedResultPersistedRead = true;
+}
+
+const disposeLocalRankedRootSmokeBridge = installLocalRankedRootSmokeBridge(
+  localRankedRootSmokeConfig,
+  {
+    schemaVersion: LOCAL_RANKED_ROOT_SMOKE_SCHEMA_VERSION,
+    getSnapshot: buildLocalRankedRootSmokeSnapshot,
+    joinRankedQueue: async () => {
+      await localRankedSmokeRuntimeModulePromise;
+      await joinRankedQueue();
+    },
+    refreshRankedQueue: async () => {
+      await refreshRankedQueue();
+    },
+    armMidRoundRecovery: async () => {
+      const context = onlineMatchContext;
+      if (!context || !context.smokeRecovery || appPhase !== 'playing' || context.finalOutcome) {
+        throw new Error('A live local ranked root match is required to arm recovery.');
+      }
+      context.smokeRecovery.arm();
+    },
+    triggerMidRoundRecovery: async () => {
+      const context = onlineMatchContext;
+      if (!context || !context.smokeRecovery || appPhase !== 'playing' || context.finalOutcome) {
+        throw new Error('A live local ranked root match is required to trigger recovery.');
+      }
+      context.smokeRecovery.triggerRecovery(
+        createLocalRankedRecoveryObservation(context),
+        () => context.transportRecovery.requestRecovery(
+          new WebRtcFrameTransportClosedError('Loopback ranked-root recovery smoke requested.'),
+        ),
+      );
+    },
+    refreshPersistedState: refreshLocalRankedRootSmokePersistedState,
+  },
+);
+
 hudRoot.style.visibility = 'hidden';
 syncTrainingFrameDataVisibility();
 ensureDevOpenMenuButton();
@@ -3874,21 +6782,14 @@ window.addEventListener('resize', () => {
   resizeScene(sceneContext);
 });
 
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') {
-    void markOnlineSessionDisconnected('visibility_hidden');
-    return;
-  }
-  if (document.visibilityState === 'visible') {
-    void reconnectOnlineSessionAfterResume('visibility_visible');
-  }
-});
-
-window.addEventListener('pagehide', () => {
-  void markOnlineSessionDisconnected('pagehide');
+const disposeOnlineSessionLifecycleListeners = installOnlineSessionLifecycleListeners({
+  controller: onlineSessionLifecycle,
+  canManage: canLifecycleManageOnlineSession,
 });
 
 window.addEventListener('beforeunload', () => {
+  disposeLocalRankedRootSmokeBridge();
+  disposeOnlineSessionLifecycleListeners();
   startMenu.dispose();
   onlineDevMenu?.dispose();
   replayViewer.dispose();

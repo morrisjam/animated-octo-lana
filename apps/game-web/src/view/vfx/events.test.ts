@@ -15,6 +15,8 @@ function makeSnapshot(gameTime: number): RenderSnapshot {
         maxFuel: 100,
         fuel: 100,
         launchBreaks: 3,
+        boostActive: false,
+        superBoost: 0,
         helpless: 0,
         parry: 0,
         launchFlash: 0,
@@ -24,6 +26,8 @@ function makeSnapshot(gameTime: number): RenderSnapshot {
         dunkFlash: 0,
         recovering: 0,
         recoveryProgress: 0,
+        presentationAction: 'idle',
+        presentationPhase: 'none',
       },
       P2: {
         id: 'P2',
@@ -32,6 +36,8 @@ function makeSnapshot(gameTime: number): RenderSnapshot {
         maxFuel: 100,
         fuel: 100,
         launchBreaks: 3,
+        boostActive: false,
+        superBoost: 0,
         helpless: 0,
         parry: 0,
         launchFlash: 0,
@@ -41,6 +47,8 @@ function makeSnapshot(gameTime: number): RenderSnapshot {
         dunkFlash: 0,
         recovering: 0,
         recoveryProgress: 0,
+        presentationAction: 'idle',
+        presentationPhase: 'none',
       },
     },
     projectiles: [],
@@ -52,13 +60,14 @@ function findEvent(events: ReturnType<typeof extractCombatVfxEvents>, type: stri
 }
 
 describe('combat VFX event extraction', () => {
-  test('extracts clash, break, parry, dunk, and projectile spawn events from snapshot deltas', () => {
+  test('extracts clash, special, break, parry, dunk, and projectile spawn events from snapshot deltas', () => {
     const previous = makeSnapshot(1);
     const current = makeSnapshot(1 + 1 / 60);
     current.players.P1.launchFlash = 0.22;
     current.players.P2.launchFlash = 0.2;
     current.players.P1.dunkFlash = 0.18;
     current.players.P2.parryFlash = 0.15;
+    current.players.P2.specialFlash = 0.16;
     current.players.P2.breakFlash = 0.2;
     current.projectiles.push({
       id: 10,
@@ -73,6 +82,7 @@ describe('combat VFX event extraction', () => {
     expect(findEvent(events, 'clash', 'P2')).toBeTruthy();
     expect(findEvent(events, 'dunk', 'P1')).toBeTruthy();
     expect(findEvent(events, 'parry', 'P2')).toBeTruthy();
+    expect(findEvent(events, 'special', 'P2')).toBeTruthy();
     expect(findEvent(events, 'break', 'P2')).toBeTruthy();
     const projectileEvent = findEvent(events, 'projectile', 'P1');
     expect(projectileEvent).toBeTruthy();

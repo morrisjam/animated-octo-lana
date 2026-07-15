@@ -16,8 +16,18 @@ import {
   type ArcadeStageDefinition,
 } from '../sim/arcade';
 import type { PlayerId, PlayersById } from '../sim/types';
+import type {
+  LocalFlowReviewCase,
+  LocalFlowReviewCatalog,
+} from '../dev/localFlowReviewCatalog';
 
-export type GameMode = 'endless' | 'best_of_3' | 'arcade' | 'training' | 'cpu_vs_cpu';
+export type GameMode =
+  | 'endless'
+  | 'best_of_3'
+  | 'arcade'
+  | 'training'
+  | 'balance_sparring'
+  | 'cpu_vs_cpu';
 export type WebAuthMenuAction = 'signin' | 'signup' | 'signout';
 export type OnlineDevMenuTarget = 'matchmaking' | 'rooms' | 'replay' | 'ranked' | 'social';
 export type StatusTone = 'neutral' | 'success' | 'warning' | 'danger';
@@ -116,6 +126,10 @@ interface StartMenuOptions {
   onCloseCustomRoom?(roomCode: string): Promise<OnlineRoomViewState> | OnlineRoomViewState;
   onRefreshReplayArchive?(): Promise<ReplayArchiveViewState> | ReplayArchiveViewState;
   onOpenLatestReplay?(): Promise<ReplayArchiveViewState> | ReplayArchiveViewState;
+  onOpenLocalReplayFile?(file: File): Promise<ReplayArchiveViewState> | ReplayArchiveViewState;
+  onLoadLocalFlowReviews?(): Promise<LocalFlowReviewCatalog> | LocalFlowReviewCatalog;
+  onOpenLocalFlowReview?(reviewCase: LocalFlowReviewCase): Promise<ReplayArchiveViewState> | ReplayArchiveViewState;
+  onOpenLocalRankedProofReview?(): Promise<ReplayArchiveViewState> | ReplayArchiveViewState;
   onRefreshRankedSnapshot?(): Promise<RankedSnapshotViewState> | RankedSnapshotViewState;
   onOpenOnlineDevMenu?(target?: OnlineDevMenuTarget): void;
   onOpenReplayReview?(): void;
@@ -136,13 +150,21 @@ interface PadState {
 }
 
 const MODE_LABELS: Record<GameMode, string> = {
-  endless: 'Endless Dev',
-  best_of_3: 'Best of 3',
+  endless: 'AI Sparring (Endless)',
+  best_of_3: 'AI Sparring (Best of 3)',
   arcade: 'Arcade Ladder',
   training: 'Training',
+  balance_sparring: 'Balance Sparring (Local)',
   cpu_vs_cpu: 'AI vs AI',
 };
-const MODE_ORDER: GameMode[] = ['endless', 'best_of_3', 'arcade', 'training', 'cpu_vs_cpu'];
+const MODE_ORDER: GameMode[] = [
+  'endless',
+  'best_of_3',
+  'arcade',
+  'training',
+  'balance_sparring',
+  'cpu_vs_cpu',
+];
 const ARCADE_CONTINUE_OPTIONS = [0, 1, 2, 3];
 const SETTINGS_THEME_ROW_INDEX = 3;
 const SETTINGS_STAGE_ATMOSPHERE_ROW_INDEX = 4;
@@ -195,7 +217,7 @@ function cycleCharacter(current: CharacterId, direction: 1 | -1): CharacterId {
 
 function sanitiseEnabledModes(rawModes: GameMode[] | undefined): GameMode[] {
   if (!rawModes || rawModes.length === 0) {
-    return ['endless', 'best_of_3', 'arcade', 'cpu_vs_cpu'];
+    return ['endless', 'best_of_3', 'arcade', 'balance_sparring', 'cpu_vs_cpu'];
   }
   const uniqueModes: GameMode[] = [];
   for (const mode of MODE_ORDER) {
@@ -455,6 +477,10 @@ export class StartMenu {
   private readonly replayStatusHint: HTMLDivElement;
   private readonly replayRefreshButton: HTMLButtonElement;
   private readonly replayOpenLatestButton: HTMLButtonElement;
+  private readonly replayOpenLocalButton: HTMLButtonElement;
+  private readonly replayFlowRefreshButton: HTMLButtonElement;
+  private readonly replayFlowSelectButton: HTMLButtonElement;
+  private readonly replayFlowOpenButton: HTMLButtonElement;
   private readonly rankingsStatusHeadline: HTMLDivElement;
   private readonly rankingsStatusDetail: HTMLPreElement;
   private readonly rankingsStatusHint: HTMLDivElement;
@@ -501,6 +527,9 @@ export class StartMenu {
   private rankedBusy = false;
   private roomBusy = false;
   private replayBusy = false;
+  private localFlowReviewCatalog: LocalFlowReviewCatalog | null = null;
+  private localFlowReviewIndex = 0;
+  private localFlowReviewLoadAttempted = false;
   private rankingsBusy = false;
   private matchPrimaryAction: () => void;
   private matchSecondaryAction: () => void;
@@ -640,7 +669,7 @@ export class StartMenu {
     this.authDisplayNameInput = document.createElement('input');
     this.authDisplayNameInput.type = 'text';
     this.authDisplayNameInput.placeholder = 'Optional';
-    this.authDisplayNameInput.autocomplete = 'nickname';
+    this.authDisplayNameInput.autocomplete = 'name';
     displayNameLabel.appendChild(this.authDisplayNameInput);
 
     const upgradeRow = document.createElement('label');
@@ -958,6 +987,64 @@ export class StartMenu {
       await this.handleReplayAction('open_latest');
     });
     this.replayOpenLatestButton = replayOpenLatestRow.button;
+    const replayLocalFileInput = document.createElement('input');
+    replayLocalFileInput.type = 'file';
+    replayLocalFileInput.accept = '.json,application/json';
+    replayLocalFileInput.hidden = true;
+    const replayOpenLocalRow = this.createActionRow('Open Local Replay JSON', () => {
+      replayLocalFileInput.click();
+    });
+    this.replayOpenLocalButton = replayOpenLocalRow.button;
+    this.replayOpenLocalButton.disabled = !this.options.onOpenLocalReplayFile;
+    replayLocalFileInput.addEventListener('change', () => {
+      const file = replayLocalFileInput.files?.[0];
+      replayLocalFileInput.value = '';
+      if (file) {
+        void this.handleLocalReplayFile(file);
+      }
+    });
+    const replayFlowRefreshRow = this.createActionRow('Load Local AI Flow Cases', async () => {
+      await this.refreshLocalFlowReviews();
+    });
+    this.replayFlowRefreshButton = replayFlowRefreshRow.button;
+    const replayFlowSelectRow = this.createActionRow('Selected AI Flow Case: None', () => {
+      this.cycleLocalFlowReview();
+    });
+    this.replayFlowSelectButton = replayFlowSelectRow.button;
+    const replayFlowOpenRow = this.createActionRow('Open Selected AI Flow Case', async () => {
+      await this.openSelectedLocalFlowReview();
+    });
+    this.replayFlowOpenButton = replayFlowOpenRow.button;
+    this.refreshLocalFlowReviewButtons();
+    const replayLocalProofRow = this.createActionRow('Review Last Ranked Match', async () => {
+      if (!this.options.onOpenLocalRankedProofReview) {
+        this.applyReplayState({
+          headline: 'Local proof unavailable',
+          detail: 'This build does not expose local ranked proof review.',
+          tone: 'warning',
+          hint: 'Complete a ranked match on this device, then return here.',
+        });
+        return;
+      }
+      replayLocalProofRow.button.disabled = true;
+      this.applyReplayState({
+        headline: 'Verifying local match proof',
+        detail: 'Replaying the authoritative inputs and rebuilding gameplay-flow telemetry.',
+        hint: 'This runs entirely on this device and does not query the online API.',
+      });
+      try {
+        this.applyReplayState(await this.options.onOpenLocalRankedProofReview());
+      } catch (error) {
+        this.applyReplayState({
+          headline: 'Local proof review failed',
+          detail: error instanceof Error ? error.message : 'The local ranked proof could not be opened.',
+          tone: 'warning',
+          hint: 'Complete another ranked match on this device to replace the local proof.',
+        });
+      } finally {
+        replayLocalProofRow.button.disabled = false;
+      }
+    });
     const replayFixtureRow = this.createActionRow('Replay Review (Smoke Fixture)', () => {
       this.options.onOpenReplayReview?.();
     });
@@ -971,16 +1058,28 @@ export class StartMenu {
     const replayActions = document.createElement('div');
     replayActions.className = 'start-utility-actions';
     replayInfo.appendChild(replayStatusPanel.root);
-    replayActions.append(replayRefreshRow.row, replayOpenLatestRow.row, replayFixtureRow.row, replayBackRow.row);
+    const replayRows = [replayRefreshRow.row, replayOpenLatestRow.row, replayOpenLocalRow.row];
+    if (this.options.onLoadLocalFlowReviews && this.options.onOpenLocalFlowReview) {
+      replayRows.push(
+        replayFlowRefreshRow.row,
+        replayFlowSelectRow.row,
+        replayFlowOpenRow.row,
+      );
+    }
+    if (this.options.onOpenLocalRankedProofReview) {
+      replayRows.push(replayLocalProofRow.row);
+    }
+    replayRows.push(replayFixtureRow.row, replayBackRow.row);
+    replayActions.append(replayLocalFileInput, ...replayRows);
     replayLayout.append(replayInfo, replayActions);
     this.replaysPanel.append(replayLayout);
-    this.registerRows('replays', [replayRefreshRow.row, replayOpenLatestRow.row, replayFixtureRow.row, replayBackRow.row]);
+    this.registerRows('replays', replayRows);
 
-    const rankingsStatusPanel = this.createStatusPanel('Ranked Snapshot');
+    const rankingsStatusPanel = this.createStatusPanel('Ranked Progression');
     this.rankingsStatusHeadline = rankingsStatusPanel.headline;
     this.rankingsStatusDetail = rankingsStatusPanel.detail;
     this.rankingsStatusHint = rankingsStatusPanel.hint;
-    const rankingsRefreshRow = this.createActionRow('Refresh Ranked Snapshot', async () => {
+    const rankingsRefreshRow = this.createActionRow('Refresh Rankings', async () => {
       await this.handleRankingsRefreshAction();
     });
     this.rankingsRefreshButton = rankingsRefreshRow.button;
@@ -1170,9 +1269,9 @@ export class StartMenu {
       hint: 'Recent online sessions only appear here after the replay payload has been stored.',
     });
     this.applyRankingsState({
-      headline: 'No ranked snapshot loaded',
-      detail: 'Press "Refresh Ranked Snapshot" to load progression.',
-      hint: 'Use this after a ranked session to confirm placement and rating changes.',
+      headline: 'No rankings loaded',
+      detail: 'Press "Refresh Rankings" to load progression and the leaderboard.',
+      hint: 'Use this after a ranked session to confirm placement, rating changes, and current rank.',
     });
     this.setArcadeHistoryView(
       'No arcade runs',
@@ -1444,6 +1543,8 @@ export class StartMenu {
     this.replayBusy = busy;
     this.replayRefreshButton.disabled = busy;
     this.replayOpenLatestButton.disabled = busy;
+    this.replayOpenLocalButton.disabled = busy || !this.options.onOpenLocalReplayFile;
+    this.refreshLocalFlowReviewButtons();
   }
 
   private setRankingsBusy(busy: boolean): void {
@@ -1479,6 +1580,13 @@ export class StartMenu {
     this.currentScreen = screen;
     this.refreshPanelVisibility();
     this.refreshRowHighlights();
+    if (
+      screen === 'replays'
+      && this.options.onLoadLocalFlowReviews
+      && !this.localFlowReviewLoadAttempted
+    ) {
+      void this.refreshLocalFlowReviews();
+    }
   }
 
   private refreshPanelVisibility(): void {
@@ -1720,8 +1828,8 @@ export class StartMenu {
 
   private getRankingsBusyState(): RankedSnapshotViewState {
     return {
-      headline: 'Refreshing ranked snapshot',
-      detail: 'Requesting progression, placement, and recent ranked deltas.',
+      headline: 'Refreshing rankings',
+      detail: 'Requesting progression, placement, recent deltas, and the current leaderboard.',
       tone: 'neutral',
       hint: 'Use this after a ranked set to confirm the latest rating update landed.',
     };
@@ -1903,6 +2011,187 @@ export class StartMenu {
         detail: this.getErrorMessage(error),
         tone: 'danger',
         hint: 'Refresh the archive and retry once the latest replay entry appears.',
+      });
+    } finally {
+      this.setReplayBusy(false);
+    }
+  }
+
+  private async handleLocalReplayFile(file: File): Promise<void> {
+    if (!this.options.onOpenLocalReplayFile) {
+      return;
+    }
+    this.applyReplayState({
+      headline: 'Verifying local replay',
+      detail: `${file.name}\nChecking payload structure and deterministic frame checksums on this device.`,
+      hint: 'No online API or hosted database is used for this review.',
+    });
+    this.setReplayBusy(true);
+    try {
+      this.applyReplayState(await this.options.onOpenLocalReplayFile(file));
+    } catch (error) {
+      this.applyReplayState({
+        headline: 'Local replay rejected',
+        detail: this.getErrorMessage(error),
+        tone: 'danger',
+        hint: 'Re-run the batch against the current build if the replay checksum no longer matches.',
+      });
+    } finally {
+      this.setReplayBusy(false);
+    }
+  }
+
+  private getSelectedLocalFlowReview(): LocalFlowReviewCase | null {
+    const cases = this.localFlowReviewCatalog?.cases ?? [];
+    if (cases.length === 0) {
+      return null;
+    }
+    const index = Math.max(0, Math.min(cases.length - 1, this.localFlowReviewIndex));
+    return cases[index] ?? null;
+  }
+
+  private refreshLocalFlowReviewButtons(): void {
+    const enabled = Boolean(
+      this.options.onLoadLocalFlowReviews
+      && this.options.onOpenLocalFlowReview,
+    );
+    const cases = this.localFlowReviewCatalog?.cases ?? [];
+    const selected = this.getSelectedLocalFlowReview();
+    this.replayFlowRefreshButton.textContent = cases.length > 0
+      ? 'Reload Local AI Flow Cases'
+      : 'Load Local AI Flow Cases';
+    this.replayFlowRefreshButton.disabled = this.replayBusy || !enabled;
+    this.replayFlowSelectButton.textContent = selected
+      ? `Case ${this.localFlowReviewIndex + 1}/${cases.length}: ${this.formatLocalFlowReviewName(selected)}`
+      : 'Selected AI Flow Case: None';
+    this.replayFlowSelectButton.disabled = this.replayBusy || cases.length < 2;
+    this.replayFlowOpenButton.disabled = this.replayBusy || !selected || !enabled;
+  }
+
+  private formatLocalFlowReviewName(reviewCase: LocalFlowReviewCase): string {
+    const status = reviewCase.status === 'representative'
+      ? 'Review'
+      : reviewCase.status.toUpperCase();
+    const kind = reviewCase.kind
+      .replace(/^loop-/, '')
+      .replace(/-/g, ' ')
+      .replace(/\b\w/g, (value) => value.toUpperCase());
+    const difficulty = reviewCase.difficulty.replace(/\b\w/g, (value) => value.toUpperCase());
+    return `${status} | ${kind} | ${difficulty} ${reviewCase.p1} vs ${reviewCase.p2}`;
+  }
+
+  private getLocalFlowReviewTone(reviewCase: LocalFlowReviewCase): StatusTone {
+    if (reviewCase.status === 'blocked') {
+      return 'danger';
+    }
+    if (reviewCase.status === 'watch') {
+      return 'warning';
+    }
+    return 'neutral';
+  }
+
+  private applySelectedLocalFlowReviewState(): void {
+    const selected = this.getSelectedLocalFlowReview();
+    const cases = this.localFlowReviewCatalog?.cases ?? [];
+    if (!selected || !this.localFlowReviewCatalog) {
+      this.applyReplayState({
+        headline: 'No local AI flow cases',
+        detail: 'No generated checksum-verified AI flow replays are available.',
+        tone: 'warning',
+        hint: 'Run `npm run ai:flow-review` from the repository root, then reload this menu.',
+      });
+      return;
+    }
+    const focusRange = selected.endFrame === null
+      ? `frame ${selected.focusFrame}`
+      : `frames ${selected.focusFrame}-${selected.endFrame}`;
+    const statusLabel = selected.status === 'representative'
+      ? 'REPRESENTATIVE REVIEW'
+      : selected.status.toUpperCase();
+    const blockedCases = cases.filter((reviewCase) => reviewCase.status === 'blocked').length;
+    const watchCases = cases.filter((reviewCase) => reviewCase.status === 'watch').length;
+    this.applyReplayState({
+      headline: `${statusLabel} | ${blockedCases} blocked, ${watchCases} watch, ${cases.length} total`,
+      detail: [
+        selected.summary,
+        '',
+        selected.label,
+        `Round seed ${selected.roundSeed} | set seed ${selected.setSeed} | ${focusRange}`,
+        `${selected.frames} total frames | generated ${this.localFlowReviewCatalog.generatedAt}`,
+      ].join('\n'),
+      tone: this.getLocalFlowReviewTone(selected),
+      hint: selected.status === 'representative'
+        ? 'This is a representative sequence, not a failed check. Open it to inspect the loop; class wins are context only.'
+        : 'Open the exact sequence and inspect the named behavior or tuning controls. Class wins are context only.',
+    });
+  }
+
+  private async refreshLocalFlowReviews(): Promise<void> {
+    const callback = this.options.onLoadLocalFlowReviews;
+    if (!callback || this.replayBusy) {
+      return;
+    }
+    this.localFlowReviewLoadAttempted = true;
+    const previousId = this.getSelectedLocalFlowReview()?.id ?? null;
+    this.applyReplayState({
+      headline: 'Loading local AI flow cases',
+      detail: 'Reading the latest deterministic batch catalog from this development server.',
+      hint: 'This uses local build artifacts only; no online API or hosted database is contacted.',
+    });
+    this.setReplayBusy(true);
+    try {
+      const catalog = await callback();
+      this.localFlowReviewCatalog = catalog;
+      const previousIndex = previousId
+        ? catalog.cases.findIndex((entry) => entry.id === previousId)
+        : -1;
+      this.localFlowReviewIndex = previousIndex >= 0 ? previousIndex : 0;
+      this.applySelectedLocalFlowReviewState();
+    } catch (error) {
+      this.localFlowReviewCatalog = null;
+      this.localFlowReviewIndex = 0;
+      this.applyReplayState({
+        headline: 'Local AI flow cases unavailable',
+        detail: this.getErrorMessage(error),
+        tone: 'warning',
+        hint: 'Run `npm run ai:flow-review` from the repository root, then choose Load Local AI Flow Cases.',
+      });
+    } finally {
+      this.setReplayBusy(false);
+    }
+  }
+
+  private cycleLocalFlowReview(): void {
+    const cases = this.localFlowReviewCatalog?.cases ?? [];
+    if (cases.length < 2 || this.replayBusy) {
+      return;
+    }
+    this.localFlowReviewIndex = (this.localFlowReviewIndex + 1) % cases.length;
+    this.refreshLocalFlowReviewButtons();
+    this.applySelectedLocalFlowReviewState();
+  }
+
+  private async openSelectedLocalFlowReview(): Promise<void> {
+    const selected = this.getSelectedLocalFlowReview();
+    const callback = this.options.onOpenLocalFlowReview;
+    if (!selected || !callback || this.replayBusy) {
+      return;
+    }
+    this.applyReplayState({
+      headline: 'Verifying local AI flow case',
+      detail: `${selected.summary}\n\n${selected.label}\nReplaying every frame checksum before opening the flagged sequence.`,
+      tone: this.getLocalFlowReviewTone(selected),
+      hint: 'This verification runs entirely on this device.',
+    });
+    this.setReplayBusy(true);
+    try {
+      this.applyReplayState(await callback(selected));
+    } catch (error) {
+      this.applyReplayState({
+        headline: 'Local AI flow case rejected',
+        detail: this.getErrorMessage(error),
+        tone: 'danger',
+        hint: 'Re-run `npm run ai:flow-review` against the current code and reload the case catalog.',
       });
     } finally {
       this.setReplayBusy(false);

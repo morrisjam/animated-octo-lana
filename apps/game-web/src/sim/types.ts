@@ -1,4 +1,5 @@
 import type { CharacterId } from './characters';
+import type { CharacterBalanceOverrides } from './characterBalance';
 
 export type PlayerId = 'P1' | 'P2';
 
@@ -40,7 +41,9 @@ export interface GameTuning {
   chainWindowSeconds: number;
   playerMoveAccel: number;
   playerVelocityDamping: number;
+  actionRecoveryControlMultiplier: number;
   helplessVelocityDamping: number;
+  helplessReleaseSpeedRatio: number;
   boostHoldSpeed: number;
   superBoostHoldSpeed: number;
   superBoostSteerLerp: number;
@@ -51,6 +54,16 @@ export interface GameTuning {
   launchChainBonus: number;
   launchInputInfluence: number;
   launchHelplessSeconds: number;
+  startupClashGraceSeconds: number;
+  launchClashSeparationPadding: number;
+  launchClashRecoilMultiplier: number;
+  closeRangeSeparationPadding: number;
+  closeRangeSeparationImpulse: number;
+  closeRangeCommitSeparationMultiplier: number;
+  defensiveResetDistance: number;
+  defensiveResetImpulse: number;
+  launchBreakResetMultiplier: number;
+  naturalRecoveryResetMultiplier: number;
   dunkRecoveryDurationSeconds: number;
   dunkRecoveryMoveSpeed: number;
   dunkRecoveryFuelFraction: number;
@@ -119,6 +132,7 @@ export interface ProjectileState {
 
 export interface GameState {
   loadout: PlayersById<CharacterId>;
+  characterBalanceOverrides: CharacterBalanceOverrides;
   rules: GameRules;
   seed: number;
   rngState: number;
@@ -130,6 +144,19 @@ export interface GameState {
   tuning: GameTuning;
 }
 
+export type PlayerPresentationAction =
+  | 'idle'
+  | 'boost'
+  | 'launch'
+  | 'parry'
+  | 'break'
+  | 'special'
+  | 'dunk'
+  | 'helpless'
+  | 'recover';
+
+export type PlayerPresentationPhase = 'none' | 'startup' | 'active' | 'sustain' | 'recovery';
+
 export interface PlayerRenderSnapshot {
   id: PlayerId;
   characterId: CharacterId;
@@ -137,6 +164,8 @@ export interface PlayerRenderSnapshot {
   maxFuel: number;
   fuel: number;
   launchBreaks: number;
+  boostActive: boolean;
+  superBoost: number;
   helpless: number;
   parry: number;
   launchFlash: number;
@@ -146,6 +175,8 @@ export interface PlayerRenderSnapshot {
   dunkFlash: number;
   recovering: number;
   recoveryProgress: number;
+  presentationAction: PlayerPresentationAction;
+  presentationPhase: PlayerPresentationPhase;
 }
 
 export interface ProjectileRenderSnapshot {

@@ -59,9 +59,9 @@ Status: approved for implementation
 
 7. `Rankings`
 - Actions:
-  - `Ranked Snapshot` (current ranked section)
+  - `Refresh Rankings` (API-backed progression, recent deltas, and top-100 leaderboard)
   - `Back`
-- Note: leaderboard API is not shipped yet, so this is explicitly snapshot/dev-backed.
+- The current player's rank is shown when present in the fetched cohort. Public entries use display names with a short account fallback and never expose profile settings or authentication fields.
 
 8. `Settings`
 - Actions:
@@ -95,7 +95,7 @@ Status: approved for implementation
 - Rooms: `/rooms/*`
 - Replays: `/replays/search`, `/replays/:replayId/payload`
 - Social: `/friends/*`, `/social/*`
-- Ranked: fallback snapshot path via existing ranked section until leaderboard endpoints exist.
+- Ranked: `/ranked/progression`, `/ranked/leaderboard`.
 
 ## Implementation Order
 1. Start menu state-machine refactor for Title/Login/Main/Category screens.

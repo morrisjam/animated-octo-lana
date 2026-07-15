@@ -11,6 +11,7 @@ export interface RelayPlayerFrameInput {
 }
 
 export interface RelayFrameEntry {
+  epoch: number;
   frame: number;
   accountId: string;
   input: RelayPlayerFrameInput;
@@ -21,6 +22,7 @@ export interface SubmitRelayFramesRequest {
   sessionId: string;
   accountId: string;
   frames: Array<{
+    epoch?: number;
     frame: number;
     input: RelayPlayerFrameInput;
   }>;
@@ -28,10 +30,12 @@ export interface SubmitRelayFramesRequest {
 
 export interface RelayFramesResponse {
   frames: RelayFrameEntry[];
+  peerConfirmedThrough: number;
 }
 
 interface SessionRelayState {
-  framesByAccount: Map<string, Map<number, RelayFrameEntry>>;
+  framesByAccount: Map<string, Map<string, RelayFrameEntry>>;
+  confirmationsByAccount: Map<string, Map<number, number>>;
 }
 
 export interface LiveSessionFrameRelayOptions {
@@ -72,7 +76,9 @@ export class LiveSessionFrameRelay {
     const accountFrames = this.ensureAccountFrames(session, request.accountId);
     const receivedAt = new Date(this.now()).toISOString();
     for (const frame of request.frames) {
-      accountFrames.set(frame.frame, {
+      const epoch = frame.epoch ?? 0;
+      accountFrames.set(`${epoch}:${frame.frame}`, {
+        epoch,
         frame: frame.frame,
         accountId: request.accountId,
         input: cloneInput(frame.input),
@@ -83,10 +89,15 @@ export class LiveSessionFrameRelay {
     return request.frames.length;
   }
 
-  public getPeerFrames(sessionId: string, accountId: string, sinceFrame: number): RelayFramesResponse {
+  public getPeerFrames(
+    sessionId: string,
+    accountId: string,
+    epoch: number,
+    sinceFrame: number,
+  ): RelayFramesResponse {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      return { frames: [] };
+      return { frames: [], peerConfirmedThrough: -1 };
     }
     const frames: RelayFrameEntry[] = [];
     for (const [participantAccountId, accountFrames] of session.framesByAccount.entries()) {
@@ -94,8 +105,9 @@ export class LiveSessionFrameRelay {
         continue;
       }
       for (const entry of accountFrames.values()) {
-        if (entry.frame > sinceFrame) {
+        if (entry.epoch === epoch && entry.frame > sinceFrame) {
           frames.push({
+            epoch: entry.epoch,
             frame: entry.frame,
             accountId: entry.accountId,
             input: cloneInput(entry.input),
@@ -105,7 +117,30 @@ export class LiveSessionFrameRelay {
       }
     }
     frames.sort((a, b) => a.frame - b.frame);
-    return { frames };
+    let peerConfirmedThrough = -1;
+    for (const [participantAccountId, confirmations] of session.confirmationsByAccount.entries()) {
+      if (participantAccountId !== accountId) {
+        peerConfirmedThrough = Math.max(peerConfirmedThrough, confirmations.get(epoch) ?? -1);
+      }
+    }
+    return { frames, peerConfirmedThrough };
+  }
+
+  public confirmPeerFrames(
+    sessionId: string,
+    accountId: string,
+    epoch: number,
+    confirmedThrough: number,
+  ): number {
+    const session = this.ensureSession(sessionId);
+    let confirmations = session.confirmationsByAccount.get(accountId);
+    if (!confirmations) {
+      confirmations = new Map<number, number>();
+      session.confirmationsByAccount.set(accountId, confirmations);
+    }
+    const nextConfirmedThrough = Math.max(confirmations.get(epoch) ?? -1, confirmedThrough);
+    confirmations.set(epoch, nextConfirmedThrough);
+    return nextConfirmedThrough;
   }
 
   public clearSession(sessionId: string): void {
@@ -116,30 +151,36 @@ export class LiveSessionFrameRelay {
     let session = this.sessions.get(sessionId);
     if (!session) {
       session = {
-        framesByAccount: new Map<string, Map<number, RelayFrameEntry>>(),
+        framesByAccount: new Map<string, Map<string, RelayFrameEntry>>(),
+        confirmationsByAccount: new Map<string, Map<number, number>>(),
       };
       this.sessions.set(sessionId, session);
     }
     return session;
   }
 
-  private ensureAccountFrames(session: SessionRelayState, accountId: string): Map<number, RelayFrameEntry> {
+  private ensureAccountFrames(session: SessionRelayState, accountId: string): Map<string, RelayFrameEntry> {
     let frames = session.framesByAccount.get(accountId);
     if (!frames) {
-      frames = new Map<number, RelayFrameEntry>();
+      frames = new Map<string, RelayFrameEntry>();
       session.framesByAccount.set(accountId, frames);
     }
     return frames;
   }
 
-  private pruneAccountFrames(accountFrames: Map<number, RelayFrameEntry>): void {
+  private pruneAccountFrames(accountFrames: Map<string, RelayFrameEntry>): void {
     if (accountFrames.size <= this.maxFramesPerAccount) {
       return;
     }
-    const orderedFrames = [...accountFrames.keys()].sort((a, b) => a - b);
+    const orderedFrames = [...accountFrames.entries()].sort(([, first], [, second]) => (
+      first.epoch - second.epoch || first.frame - second.frame
+    ));
     const excess = orderedFrames.length - this.maxFramesPerAccount;
     for (let index = 0; index < excess; index += 1) {
-      accountFrames.delete(orderedFrames[index]);
+      const key = orderedFrames[index]?.[0];
+      if (key !== undefined) {
+        accountFrames.delete(key);
+      }
     }
   }
 }

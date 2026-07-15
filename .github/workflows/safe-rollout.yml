@@ -11,54 +11,229 @@ on:
         options:
           - canary
           - production
+      release_sha:
+        description: "Exact 40-character commit SHA to deploy"
+        required: true
+        type: string
+      rollback_sha:
+        description: "Exact known-good 40-character commit SHA used if rollout fails"
+        required: true
+        type: string
+      canary_run_id:
+        description: "Successful same-SHA canary workflow run ID (required for production)"
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: safe-rollout-${{ inputs.target }}
+  cancel-in-progress: false
 
 jobs:
   rollout:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: gravity_well
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gravity_well"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
-      RENDER_CANARY_DEPLOY_HOOK_URL: ${{ secrets.RENDER_CANARY_DEPLOY_HOOK_URL }}
-      RENDER_PRODUCTION_DEPLOY_HOOK_URL: ${{ secrets.RENDER_PRODUCTION_DEPLOY_HOOK_URL }}
-      RENDER_ROLLBACK_HOOK_URL: ${{ secrets.RENDER_ROLLBACK_HOOK_URL }}
-      API_CANARY_BASE_URL: ${{ secrets.API_CANARY_BASE_URL }}
-      API_PRODUCTION_BASE_URL: ${{ secrets.API_PRODUCTION_BASE_URL }}
-      API_SLO_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      ROLLBACK_SHA: ${{ inputs.rollback_sha }}
+      API_CANARY_EXPECTED_HOSTNAME: ${{ vars.API_CANARY_EXPECTED_HOSTNAME }}
+      API_PRODUCTION_EXPECTED_HOSTNAME: ${{ vars.API_PRODUCTION_EXPECTED_HOSTNAME }}
+      API_CANARY_DATABASE_ID: ${{ vars.API_CANARY_DATABASE_ID }}
+      API_PRODUCTION_DATABASE_ID: ${{ vars.API_PRODUCTION_DATABASE_ID }}
+      WEB_CANARY_RELEASE_ATTESTATION_URL: ${{ vars.WEB_CANARY_RELEASE_ATTESTATION_URL }}
+      WEB_PRODUCTION_RELEASE_ATTESTATION_URL: ${{ vars.WEB_PRODUCTION_RELEASE_ATTESTATION_URL }}
+      WEB_CANARY_EXPECTED_HOSTNAME: ${{ vars.WEB_CANARY_EXPECTED_HOSTNAME }}
+      WEB_PRODUCTION_EXPECTED_HOSTNAME: ${{ vars.WEB_PRODUCTION_EXPECTED_HOSTNAME }}
+      DEPLOY_EXPECT_MIGRATION_HEAD: 030_matchmaking_runtime_fences.sql
+      DEPLOY_EXPECT_MIGRATION_COUNT: "30"
+      DEPLOY_EXPECT_MAX_RESIDENT_TICKETS: "64"
+      DEPLOY_EXPECT_DATABASE_TARGET: remote
       DEPLOY_MAX_CRITICAL_ALERTS: "0"
       DEPLOY_MAX_WARNING_ALERTS: "1"
       DEPLOY_HEALTHCHECK_WINDOW_HOURS: "1"
+      DEPLOY_MAX_ACTIVE_SESSIONS: "0"
+      DEPLOY_DRAIN_TIMEOUT_SECONDS: "180"
+      DEPLOY_FETCH_TIMEOUT_MS: "5000"
+      DEPLOY_READINESS_TIMEOUT_SECONDS: "300"
+      DEPLOY_REQUIRE_ADMIN_CHECKS: "true"
+      DEPLOY_REQUIRE_ALPHA_ALLOWLIST: "true"
+      DEPLOY_REQUIRE_TURN: "true"
+      DEPLOY_REQUIRE_DURABLE_REPLAY_STORE: "true"
+      DEPLOY_REQUIRE_WEB_RELEASE_ATTESTATION: "true"
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout
+      - name: Validate immutable release inputs
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "release_sha must be a full 40-character Git SHA."
+            exit 1
+          fi
+          if [[ ! "${ROLLBACK_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "rollback_sha must be a full 40-character Git SHA."
+            exit 1
+          fi
+          if [[ "${RELEASE_SHA,,}" == "${ROLLBACK_SHA,,}" ]]; then
+            echo "rollback_sha must identify a different known-good release."
+            exit 1
+          fi
+
+      - name: Checkout exact release
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Verify release and rollback ancestry and successful CI
+        run: |
+          set -euo pipefail
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+          if [[ "${CHECKED_OUT_SHA,,}" != "${RELEASE_SHA,,}" ]]; then
+            echo "Checkout mismatch: requested ${RELEASE_SHA}, got ${CHECKED_OUT_SHA}."
+            exit 1
+          fi
+          git fetch origin master --no-tags
+          if ! git cat-file -e "${ROLLBACK_SHA}^{commit}"; then
+            echo "Rollback commit ${ROLLBACK_SHA} is unavailable in the repository."
+            exit 1
+          fi
+          for SHA_SPEC in "release:${RELEASE_SHA}" "rollback:${ROLLBACK_SHA}"; do
+            SHA_LABEL="${SHA_SPEC%%:*}"
+            SHA_VALUE="${SHA_SPEC#*:}"
+            if ! git merge-base --is-ancestor "${SHA_VALUE}" origin/master; then
+              echo "${SHA_LABEL} SHA ${SHA_VALUE} is not reachable from origin/master."
+              exit 1
+            fi
+            SUCCESSFUL_RUNS="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="${SHA_VALUE}" \
+              -f status=completed \
+              -f per_page=100 \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
+            if [[ "${SUCCESSFUL_RUNS}" -lt 1 ]]; then
+              echo "No successful CI workflow run exists for ${SHA_LABEL} SHA ${SHA_VALUE}."
+              exit 1
+            fi
+          done
+
+      - name: Verify same-SHA canary evidence for production
+        if: inputs.target == 'production'
+        env:
+          CANARY_RUN_ID: ${{ inputs.canary_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${CANARY_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "Production requires the numeric run ID from a successful canary rollout."
+            exit 1
+          fi
+          RUN_CONCLUSION="$(gh run view "${CANARY_RUN_ID}" --json conclusion --jq .conclusion)"
+          if [[ "${RUN_CONCLUSION}" != "success" ]]; then
+            echo "Canary run ${CANARY_RUN_ID} did not complete successfully."
+            exit 1
+          fi
+          mkdir -p /tmp/gravity-well-canary-evidence
+          gh run download "${CANARY_RUN_ID}" \
+            --name "gravity-well-canary-${RELEASE_SHA}" \
+            --dir /tmp/gravity-well-canary-evidence
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const evidence = JSON.parse(fs.readFileSync('/tmp/gravity-well-canary-evidence/evidence.json', 'utf8'));
+          if (
+            evidence.schemaVersion !== 'gw.safe-rollout.v2'
+            || evidence.target !== 'canary'
+            || String(evidence.releaseSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
+            || evidence.migrationHead !== process.env.DEPLOY_EXPECT_MIGRATION_HEAD
+            || String(evidence.migrationCount) !== process.env.DEPLOY_EXPECT_MIGRATION_COUNT
+            || String(evidence.maxResidentTickets) !== process.env.DEPLOY_EXPECT_MAX_RESIDENT_TICKETS
+            || evidence.migrationChecksumsVerified !== true
+            || evidence.webReleaseAttestationSchema !== 'gw.web-release.v1'
+            || String(evidence.webReleaseSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
+            || evidence.rollbackCompatibilitySchema !== 'gw.rollback-schema-compatibility.v1'
+            || String(evidence.rollbackCompatibilityCandidateSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
+            || String(evidence.rollbackCompatibilityRollbackSha).toLowerCase() !== process.env.ROLLBACK_SHA.toLowerCase()
+            || evidence.rollbackCompatibilityPassed !== true
+          ) {
+            throw new Error(`Canary evidence does not match release ${process.env.RELEASE_SHA}.`);
+          }
+          NODE
 
       - name: Resolve target config
         id: target
+        env:
+          RENDER_CANARY_DEPLOY_HOOK_URL: ${{ secrets.RENDER_CANARY_DEPLOY_HOOK_URL }}
+          RENDER_PRODUCTION_DEPLOY_HOOK_URL: ${{ secrets.RENDER_PRODUCTION_DEPLOY_HOOK_URL }}
+          API_CANARY_BASE_URL: ${{ secrets.API_CANARY_BASE_URL }}
+          API_PRODUCTION_BASE_URL: ${{ secrets.API_PRODUCTION_BASE_URL }}
         run: |
           set -euo pipefail
-          TARGET="${{ github.event.inputs.target }}"
+          TARGET="${{ inputs.target }}"
           if [[ "${TARGET}" == "production" ]]; then
             DEPLOY_HOOK="${RENDER_PRODUCTION_DEPLOY_HOOK_URL}"
             API_BASE="${API_PRODUCTION_BASE_URL}"
+            API_HOSTNAME="${API_PRODUCTION_EXPECTED_HOSTNAME}"
+            DATABASE_ID="${API_PRODUCTION_DATABASE_ID}"
+            WEB_RELEASE_ATTESTATION_URL="${WEB_PRODUCTION_RELEASE_ATTESTATION_URL}"
+            WEB_HOSTNAME="${WEB_PRODUCTION_EXPECTED_HOSTNAME}"
           else
             DEPLOY_HOOK="${RENDER_CANARY_DEPLOY_HOOK_URL}"
             API_BASE="${API_CANARY_BASE_URL}"
+            API_HOSTNAME="${API_CANARY_EXPECTED_HOSTNAME}"
+            DATABASE_ID="${API_CANARY_DATABASE_ID}"
+            WEB_RELEASE_ATTESTATION_URL="${WEB_CANARY_RELEASE_ATTESTATION_URL}"
+            WEB_HOSTNAME="${WEB_CANARY_EXPECTED_HOSTNAME}"
           fi
-          if [[ -z "${DEPLOY_HOOK}" ]]; then
-            echo "Missing deploy hook secret for target ${TARGET}."
+          if [[ -z "${DEPLOY_HOOK}" || -z "${API_BASE}" || -z "${API_HOSTNAME}" || -z "${DATABASE_ID}" || -z "${WEB_RELEASE_ATTESTATION_URL}" || -z "${WEB_HOSTNAME}" ]]; then
+            echo "Target ${TARGET} is missing its deploy hook, API identity, database identity, or web release attestation contract."
             exit 1
           fi
-          if [[ -z "${API_BASE}" ]]; then
-            echo "Missing API base URL secret for target ${TARGET}."
-            exit 1
-          fi
+          export DEPLOY_HOOK API_BASE API_HOSTNAME WEB_RELEASE_ATTESTATION_URL WEB_HOSTNAME
+          node - <<'NODE'
+          function validatedUrl(name, expectedHostname, requireBaseUrl) {
+            const value = process.env[name];
+            let parsed;
+            try {
+              parsed = new URL(value);
+            } catch {
+              throw new Error(`${name} must be an absolute URL.`);
+            }
+            if (parsed.protocol !== 'https:') {
+              throw new Error(`${name} must use HTTPS.`);
+            }
+            if (parsed.username || parsed.password || parsed.hash || (requireBaseUrl && parsed.search)) {
+              throw new Error(`${name} contains unsupported URL components.`);
+            }
+            if (expectedHostname && parsed.hostname.toLowerCase() !== expectedHostname.toLowerCase()) {
+              throw new Error(`${name} does not match its independently configured hostname.`);
+            }
+          }
+          validatedUrl('DEPLOY_HOOK', null, false);
+          validatedUrl('API_BASE', process.env.API_HOSTNAME, true);
+          validatedUrl('WEB_RELEASE_ATTESTATION_URL', process.env.WEB_HOSTNAME, false);
+          NODE
           echo "deploy_hook=${DEPLOY_HOOK}" >> "${GITHUB_OUTPUT}"
           echo "api_base=${API_BASE}" >> "${GITHUB_OUTPUT}"
+          echo "api_hostname=${API_HOSTNAME}" >> "${GITHUB_OUTPUT}"
+          echo "database_id=${DATABASE_ID}" >> "${GITHUB_OUTPUT}"
+          echo "web_release_attestation_url=${WEB_RELEASE_ATTESTATION_URL}" >> "${GITHUB_OUTPUT}"
+          echo "web_hostname=${WEB_HOSTNAME}" >> "${GITHUB_OUTPUT}"
           echo "target=${TARGET}" >> "${GITHUB_OUTPUT}"
-
-      - name: Trigger deploy
-        run: |
-          curl --fail --silent --show-error -X POST "${{ steps.target.outputs.deploy_hook }}"
-
-      - name: Wait for deployment warmup
-        run: sleep 120
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -69,25 +244,282 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run health gate
+      - name: Prove rollback API against release schema locally
+        env:
+          ROLLBACK_COMPAT_CANDIDATE_SHA: ${{ inputs.release_sha }}
+          ROLLBACK_COMPAT_REQUIRE_CLEAN_CANDIDATE: "1"
+          ROLLBACK_COMPAT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          ROLLBACK_COMPAT_MANAGE_POSTGRES: "0"
+        run: >-
+          npm run api:smoke:rollback-schema-compatibility --
+          "${ROLLBACK_SHA}"
+          rollout-evidence/rollback-schema-compatibility.json
+
+      - name: Verify rollback baseline readiness and compatibility
+        env:
+          API_SLO_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_EXPECT_RELEASE_SHA: ${{ inputs.rollback_sha }}
+          DEPLOY_EXPECT_DATABASE_ID: ${{ steps.target.outputs.database_id }}
+          DEPLOY_EXPECT_ENVIRONMENT: ${{ steps.target.outputs.target }}
+          DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: ${{ steps.target.outputs.target }}
+          DEPLOY_EXPECT_MATCHMAKING_DRAINING: "false"
+          DEPLOY_MAX_ACTIVE_SESSIONS: "1000000"
+          DEPLOY_WEB_RELEASE_ATTESTATION_URL: ${{ steps.target.outputs.web_release_attestation_url }}
+          DEPLOY_EXPECT_WEB_HOSTNAME: ${{ steps.target.outputs.web_hostname }}
+        run: npm run api:deploy:health-gate
+
+      - name: Drain matchmaking
+        id: drain
+        continue-on-error: true
+        env:
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+        run: npm run api:deploy:drain-gate
+
+      - name: Stop rollout when drain fails
+        if: steps.drain.outcome == 'failure'
+        run: |
+          echo "Matchmaking did not drain; deployment was not triggered."
+          exit 1
+
+      - name: Trigger exact release deploy
+        id: deploy
+        continue-on-error: true
+        env:
+          DEPLOY_HOOK: ${{ steps.target.outputs.deploy_hook }}
+        run: |
+          set -euo pipefail
+          SEPARATOR='?'
+          if [[ "${DEPLOY_HOOK}" == *'?'* ]]; then
+            SEPARATOR='&'
+          fi
+          DEPLOY_STATUS="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' \
+            -X POST "${DEPLOY_HOOK}${SEPARATOR}ref=${RELEASE_SHA}")"
+          if [[ ! "${DEPLOY_STATUS}" =~ ^2[0-9]{2}$ ]]; then
+            echo "Deploy hook returned non-success status ${DEPLOY_STATUS}."
+            exit 1
+          fi
+
+      - name: Resume matchmaking when deploy trigger fails
+        id: deploy_failure_resume
+        if: steps.deploy.outcome == 'failure'
+        continue-on-error: true
+        env:
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_DRAIN_ACTION: resume
+        run: npm run api:deploy:drain-gate
+
+      - name: Mark deploy trigger failure
+        if: steps.deploy.outcome == 'failure'
+        run: |
+          echo "Exact-SHA deploy trigger failed; resume outcome=${{ steps.deploy_failure_resume.outcome }}."
+          exit 1
+
+      - name: Wait for exact release readiness before resuming
         id: gate
         continue-on-error: true
         env:
+          API_SLO_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
           API_BASE_URL: ${{ steps.target.outputs.api_base }}
-        run: npm run api:deploy:health-gate
-
-      - name: Trigger rollback on failed gate
-        if: steps.gate.outcome == 'failure'
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_EXPECT_RELEASE_SHA: ${{ inputs.release_sha }}
+          DEPLOY_EXPECT_DATABASE_ID: ${{ steps.target.outputs.database_id }}
+          DEPLOY_EXPECT_ENVIRONMENT: ${{ steps.target.outputs.target }}
+          DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: ${{ steps.target.outputs.target }}
+          DEPLOY_EXPECT_MATCHMAKING_DRAINING: "true"
+          DEPLOY_WEB_RELEASE_ATTESTATION_URL: ${{ steps.target.outputs.web_release_attestation_url }}
+          DEPLOY_EXPECT_WEB_HOSTNAME: ${{ steps.target.outputs.web_hostname }}
         run: |
           set -euo pipefail
-          if [[ -z "${RENDER_ROLLBACK_HOOK_URL}" ]]; then
-            echo "Health gate failed and rollback hook is not configured."
+          DEADLINE=$((SECONDS + DEPLOY_READINESS_TIMEOUT_SECONDS))
+          ATTEMPT=0
+          while (( SECONDS < DEADLINE )); do
+            ATTEMPT=$((ATTEMPT + 1))
+            if npm run api:deploy:health-gate; then
+              exit 0
+            fi
+            echo "Release readiness attempt ${ATTEMPT} has not passed."
+            REMAINING=$((DEADLINE - SECONDS))
+            if (( REMAINING > 0 )); then
+              sleep $((REMAINING < 5 ? REMAINING : 5))
+            fi
+          done
+          exit 1
+
+      - name: Resume matchmaking after healthy deploy
+        id: resume
+        if: steps.gate.outcome == 'success'
+        continue-on-error: true
+        env:
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_DRAIN_ACTION: resume
+        run: npm run api:deploy:drain-gate
+
+      - name: Verify resumed deployment
+        id: final_gate
+        if: steps.resume.outcome == 'success'
+        continue-on-error: true
+        env:
+          API_SLO_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_EXPECT_RELEASE_SHA: ${{ inputs.release_sha }}
+          DEPLOY_EXPECT_DATABASE_ID: ${{ steps.target.outputs.database_id }}
+          DEPLOY_EXPECT_ENVIRONMENT: ${{ steps.target.outputs.target }}
+          DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: ${{ steps.target.outputs.target }}
+          DEPLOY_EXPECT_MATCHMAKING_DRAINING: "false"
+          DEPLOY_MAX_ACTIVE_SESSIONS: "1000000"
+          DEPLOY_WEB_RELEASE_ATTESTATION_URL: ${{ steps.target.outputs.web_release_attestation_url }}
+          DEPLOY_EXPECT_WEB_HOSTNAME: ${{ steps.target.outputs.web_hostname }}
+        run: npm run api:deploy:health-gate
+
+      - name: Re-drain matchmaking before rollback
+        id: rollback_drain
+        if: ${{ always() && (steps.gate.outcome == 'failure' || steps.resume.outcome == 'failure' || steps.final_gate.outcome == 'failure') }}
+        continue-on-error: true
+        env:
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_DRAIN_ACTION: drain
+        run: npm run api:deploy:drain-gate
+
+      - name: Trigger exact rollback release
+        id: rollback
+        if: ${{ always() && steps.rollback_drain.outcome == 'success' && (steps.gate.outcome == 'failure' || steps.resume.outcome == 'failure' || steps.final_gate.outcome == 'failure') }}
+        continue-on-error: true
+        env:
+          DEPLOY_HOOK: ${{ steps.target.outputs.deploy_hook }}
+        run: |
+          set -euo pipefail
+          SEPARATOR='?'
+          if [[ "${DEPLOY_HOOK}" == *'?'* ]]; then
+            SEPARATOR='&'
+          fi
+          echo "Proceeding with rollback after the replacement drain completed successfully."
+          ROLLBACK_STATUS="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' \
+            -X POST "${DEPLOY_HOOK}${SEPARATOR}ref=${ROLLBACK_SHA}")"
+          if [[ ! "${ROLLBACK_STATUS}" =~ ^2[0-9]{2}$ ]]; then
+            echo "Rollback hook returned non-success status ${ROLLBACK_STATUS}."
             exit 1
           fi
-          curl --fail --silent --show-error -X POST "${RENDER_ROLLBACK_HOOK_URL}"
 
-      - name: Mark rollout failed when gate fails
-        if: steps.gate.outcome == 'failure'
+      - name: Wait for exact rollback readiness
+        id: rollback_gate
+        if: ${{ always() && steps.rollback.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          API_SLO_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_EXPECT_RELEASE_SHA: ${{ inputs.rollback_sha }}
+          DEPLOY_EXPECT_DATABASE_ID: ${{ steps.target.outputs.database_id }}
+          DEPLOY_EXPECT_ENVIRONMENT: ${{ steps.target.outputs.target }}
+          DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: ${{ steps.target.outputs.target }}
+          DEPLOY_EXPECT_MATCHMAKING_DRAINING: "true"
+          DEPLOY_WEB_RELEASE_ATTESTATION_URL: ${{ steps.target.outputs.web_release_attestation_url }}
+          DEPLOY_EXPECT_WEB_HOSTNAME: ${{ steps.target.outputs.web_hostname }}
         run: |
-          echo "Health gate failed for target=${{ steps.target.outputs.target }}. Rollback triggered."
+          set -euo pipefail
+          DEADLINE=$((SECONDS + DEPLOY_READINESS_TIMEOUT_SECONDS))
+          ATTEMPT=0
+          while (( SECONDS < DEADLINE )); do
+            ATTEMPT=$((ATTEMPT + 1))
+            if npm run api:deploy:health-gate; then
+              exit 0
+            fi
+            echo "Rollback readiness attempt ${ATTEMPT} has not passed."
+            REMAINING=$((DEADLINE - SECONDS))
+            if (( REMAINING > 0 )); then
+              sleep $((REMAINING < 5 ? REMAINING : 5))
+            fi
+          done
+          exit 1
+
+      - name: Resume matchmaking after verified rollback
+        id: rollback_resume
+        if: ${{ always() && steps.rollback_gate.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
+          API_BASE_URL: ${{ steps.target.outputs.api_base }}
+          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_DRAIN_ACTION: resume
+        run: npm run api:deploy:drain-gate
+
+      - name: Write canary promotion evidence
+        if: inputs.target == 'canary' && steps.final_gate.outcome == 'success'
+        env:
+          DATABASE_ID: ${{ steps.target.outputs.database_id }}
+        run: |
+          mkdir -p rollout-evidence
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const rollbackCompatibility = JSON.parse(fs.readFileSync(
+            'rollout-evidence/rollback-schema-compatibility.json',
+            'utf8',
+          ));
+          if (
+            rollbackCompatibility.schemaVersion !== 'gw.rollback-schema-compatibility.v1'
+            || rollbackCompatibility.ok !== true
+            || rollbackCompatibility.localOnly !== true
+            || rollbackCompatibility.hostedServicesContacted !== false
+            || rollbackCompatibility.candidate.dirty !== false
+            || String(rollbackCompatibility.candidate.sha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
+            || String(rollbackCompatibility.rollback.sha).toLowerCase() !== process.env.ROLLBACK_SHA.toLowerCase()
+          ) {
+            throw new Error('Rollback schema compatibility evidence does not match this rollout pair.');
+          }
+          fs.writeFileSync('rollout-evidence/evidence.json', JSON.stringify({
+            schemaVersion: 'gw.safe-rollout.v2',
+            target: 'canary',
+            releaseSha: process.env.RELEASE_SHA,
+            migrationHead: process.env.DEPLOY_EXPECT_MIGRATION_HEAD,
+            migrationCount: Number(process.env.DEPLOY_EXPECT_MIGRATION_COUNT),
+            maxResidentTickets: Number(process.env.DEPLOY_EXPECT_MAX_RESIDENT_TICKETS),
+            migrationChecksumsVerified: true,
+            webReleaseAttestationSchema: 'gw.web-release.v1',
+            webReleaseSha: process.env.RELEASE_SHA,
+            rollbackCompatibilitySchema: rollbackCompatibility.schemaVersion,
+            rollbackCompatibilityCandidateSha: rollbackCompatibility.candidate.sha,
+            rollbackCompatibilityRollbackSha: rollbackCompatibility.rollback.sha,
+            rollbackCompatibilityPassed: rollbackCompatibility.ok,
+            rollbackCompatibilityCandidateMigrationDigest: rollbackCompatibility.candidate.migrationDigest,
+            rollbackCompatibilityRollbackMigrationDigest: rollbackCompatibility.rollback.migrationDigest,
+            rollbackCompatibilityExceptionCount: rollbackCompatibility.compatibilityExceptions.length,
+            databaseId: process.env.DATABASE_ID,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            verifiedAt: new Date().toISOString(),
+          }, null, 2));
+          NODE
+          echo "Canary run ID for production promotion: ${GITHUB_RUN_ID}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Archive canary promotion evidence
+        if: inputs.target == 'canary' && steps.final_gate.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravity-well-canary-${{ inputs.release_sha }}
+          path: |
+            rollout-evidence/evidence.json
+            rollout-evidence/rollback-schema-compatibility.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Mark rollout failed when a gate fails
+        if: ${{ always() && (steps.gate.outcome == 'failure' || steps.resume.outcome == 'failure' || steps.final_gate.outcome == 'failure') }}
+        run: |
+          echo "Rollout failed for target=${{ steps.target.outputs.target }}; rollback drain=${{ steps.rollback_drain.outcome }}, rollback=${{ steps.rollback.outcome }}, rollback gate=${{ steps.rollback_gate.outcome }}, rollback resume=${{ steps.rollback_resume.outcome }}."
           exit 1

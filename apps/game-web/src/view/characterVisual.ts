@@ -6,6 +6,13 @@ import {
   type CharacterVisualProfile,
 } from '../sim/characters';
 import type { PlayerId, PlayerRenderSnapshot } from '../sim/types';
+import {
+  resolveSpriteAnimationSet,
+  resolveSpriteClip,
+  resolveSpriteFrame,
+  type SpriteAnimationSet,
+  type SpriteClipId,
+} from './sprites/atlasDefinitions';
 
 interface CharacterPalette {
   body: string;
@@ -37,6 +44,17 @@ interface CharacterVisualAdapter {
   presentation: CharacterVisualPresentation;
   createNode: (profile: CharacterVisualProfile, playerId: PlayerId, characterId: CharacterId) => THREE.Object3D;
   updateNode: (node: THREE.Object3D, context: CharacterVisualUpdateContext) => void;
+}
+
+interface SpriteVisualRuntime {
+  animationSet: SpriteAnimationSet;
+  body: THREE.Sprite;
+  rim: THREE.Sprite;
+  contactShadow: THREE.Mesh;
+  groundGlow: THREE.Mesh;
+  clipId: SpriteClipId;
+  clipStartedAt: number;
+  phase: number;
 }
 
 const SPRITE_TEXTURE_CACHE = new Map<string, THREE.Texture>();
@@ -228,34 +246,138 @@ function createMechBody(characterId: CharacterId, palette: CharacterPalette): TH
   return mech;
 }
 
-function createSpriteNode(characterId: CharacterId, palette: CharacterPalette): THREE.Sprite {
-  const style = getCharacterStyle(characterId);
-  const material = new THREE.SpriteMaterial({
-    map: getShapeTexture(style.spriteShape),
-    color: palette.body,
-    transparent: true,
-    opacity: 0.98,
-    alphaTest: 0.08,
-  });
-  const sprite = new THREE.Sprite(material);
-  sprite.scale.set(6.2, 6.2, 1);
-  sprite.name = 'sprite-body';
+function configureAtlasTexture(texture: THREE.Texture): THREE.Texture {
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.userData.ownedByCharacterVisual = true;
+  return texture;
+}
 
-  const accent = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: getShapeTexture(style.accentShape),
-      color: palette.accent,
+function createFallbackAtlasTexture(animationSet: SpriteAnimationSet): THREE.DataTexture {
+  const data = new Uint8Array(animationSet.columns * animationSet.rows * 4);
+  data.fill(255);
+  const texture = new THREE.DataTexture(
+    data,
+    animationSet.columns,
+    animationSet.rows,
+    THREE.RGBAFormat,
+  );
+  texture.needsUpdate = true;
+  return configureAtlasTexture(texture) as THREE.DataTexture;
+}
+
+function loadAtlasTexture(animationSet: SpriteAnimationSet): THREE.Texture {
+  if (typeof document === 'undefined' || typeof Image === 'undefined') {
+    return createFallbackAtlasTexture(animationSet);
+  }
+  const texture = new THREE.TextureLoader().load(animationSet.textureUrl);
+  return configureAtlasTexture(texture);
+}
+
+function applyAtlasFrame(texture: THREE.Texture, animationSet: SpriteAnimationSet, frame: number): void {
+  const column = frame % animationSet.columns;
+  const row = Math.floor(frame / animationSet.columns);
+  texture.repeat.set(1 / animationSet.columns, 1 / animationSet.rows);
+  texture.offset.set(
+    column / animationSet.columns,
+    1 - (row + 1) / animationSet.rows,
+  );
+}
+
+function createSpriteNode(
+  profile: CharacterVisualProfile,
+  characterId: CharacterId,
+  palette: CharacterPalette,
+  playerId: PlayerId,
+): THREE.Group {
+  if (!profile.animationSetId) {
+    throw new Error(`Missing sprite animation set id for ${characterId}.`);
+  }
+  const animationSet = resolveSpriteAnimationSet(profile.animationSetId);
+  if (!animationSet) {
+    throw new Error(`Missing sprite animation set "${profile.animationSetId}" for ${characterId}.`);
+  }
+  const group = new THREE.Group();
+  group.name = `${profile.animationSetId}:sprite`;
+
+  const contactShadow = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 32),
+    new THREE.MeshBasicMaterial({
+      color: '#01040c',
       transparent: true,
-      opacity: 0.58,
-      alphaTest: 0.08,
+      opacity: 0.34,
+      depthWrite: false,
     }),
   );
-  accent.name = 'accent';
-  accent.position.set(0, 0, 0.02);
-  accent.scale.set(5.1, 5.1, 1);
-  sprite.add(accent);
+  contactShadow.name = 'sprite-contact-shadow';
+  contactShadow.position.z = 0.08;
+  contactShadow.scale.set(animationSet.worldWidth * 0.38, animationSet.worldWidth * 0.12, 1);
+  group.add(contactShadow);
 
-  return sprite;
+  const groundGlow = new THREE.Mesh(
+    new THREE.RingGeometry(0.42, 1, 48),
+    new THREE.MeshBasicMaterial({
+      color: palette.body,
+      transparent: true,
+      opacity: 0.16,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  groundGlow.name = 'sprite-ground-glow';
+  groundGlow.position.z = 0.1;
+  groundGlow.scale.set(animationSet.worldWidth * 0.44, animationSet.worldWidth * 0.15, 1);
+  group.add(groundGlow);
+
+  const rimTexture = loadAtlasTexture(animationSet);
+  applyAtlasFrame(rimTexture, animationSet, 0);
+  const rim = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: rimTexture,
+    color: palette.accent,
+    transparent: true,
+    opacity: 0.3,
+    alphaTest: 0.04,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  }));
+  rim.name = 'sprite-rim';
+  rim.center.set(0.5, 0.1);
+  rim.position.z = 0.3;
+  rim.scale.set(animationSet.worldWidth * 1.12, animationSet.worldHeight * 1.12, 1);
+  group.add(rim);
+
+  const bodyTexture = loadAtlasTexture(animationSet);
+  applyAtlasFrame(bodyTexture, animationSet, 0);
+  const body = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: bodyTexture,
+    color: palette.body,
+    transparent: true,
+    opacity: 1,
+    alphaTest: 0.06,
+    depthWrite: false,
+  }));
+  body.name = 'sprite-body';
+  body.center.set(0.5, 0.1);
+  body.position.z = 0.36;
+  body.scale.set(animationSet.worldWidth, animationSet.worldHeight, 1);
+  group.add(body);
+
+  const runtime: SpriteVisualRuntime = {
+    animationSet,
+    body,
+    rim,
+    contactShadow,
+    groundGlow,
+    clipId: 'idle',
+    clipStartedAt: 0,
+    phase: playerId === 'P1' ? 0 : 0.13,
+  };
+  group.userData.spriteRuntime = runtime;
+  return group;
 }
 
 function createHybridNode(characterId: CharacterId, palette: CharacterPalette): THREE.Group {
@@ -319,7 +441,7 @@ const threeDAdapter: CharacterVisualAdapter = {
   presentation: '3d',
   createNode(profile: CharacterVisualProfile, playerId: PlayerId, characterId: CharacterId): THREE.Object3D {
     const mech = createMechBody(characterId, getPalette(playerId));
-    mech.name = `${profile.modelId}:${profile.animationSetId}`;
+    mech.name = `${profile.modelId ?? characterId}:${profile.animationSetId ?? 'procedural'}`;
     return mech;
   },
   updateNode(node: THREE.Object3D, context: CharacterVisualUpdateContext): void {
@@ -332,22 +454,80 @@ const threeDAdapter: CharacterVisualAdapter = {
 const spriteAdapter: CharacterVisualAdapter = {
   presentation: 'sprite',
   createNode(profile: CharacterVisualProfile, playerId: PlayerId, characterId: CharacterId): THREE.Object3D {
-    const sprite = createSpriteNode(characterId, getPalette(playerId));
-    sprite.name = `${profile.modelId}:sprite`;
-    return sprite;
+    return createSpriteNode(profile, characterId, getPalette(playerId), playerId);
   },
   updateNode(node: THREE.Object3D, context: CharacterVisualUpdateContext): void {
-    const sprite = node as THREE.Sprite;
-    const directionalLean = THREE.MathUtils.clamp(context.opponent.pos.x - context.own.pos.x, -1, 1) * 0.08;
-    const pulse = 1 + Math.abs(Math.sin(context.gameTime * 5.2)) * 0.05 + context.own.specialFlash * 0.16;
-    sprite.scale.set(6.2 * pulse, 6.2 * pulse, 1);
-    sprite.material.rotation = directionalLean;
-    const accent = sprite.children.find((child) => child.name === 'accent');
-    if (accent instanceof THREE.Sprite) {
-      accent.scale.set(4.8 + context.own.launchFlash * 1.1, 4.8 + context.own.launchFlash * 1.1, 1);
-      (accent.material as THREE.SpriteMaterial).rotation = -directionalLean * 1.8;
-      (accent.material as THREE.SpriteMaterial).opacity = THREE.MathUtils.clamp(0.46 + context.own.breakFlash * 0.8, 0, 0.95);
+    const runtime = node.userData.spriteRuntime as SpriteVisualRuntime | undefined;
+    if (!runtime) {
+      return;
     }
+    const clipId = resolveSpriteClip(context.own);
+    if (clipId !== runtime.clipId) {
+      runtime.clipId = clipId;
+      runtime.clipStartedAt = context.gameTime;
+    }
+    const frame = resolveSpriteFrame(
+      runtime.animationSet,
+      runtime.clipId,
+      context.gameTime - runtime.clipStartedAt,
+      runtime.phase,
+    );
+    const bodyMap = (runtime.body.material as THREE.SpriteMaterial).map;
+    const rimMap = (runtime.rim.material as THREE.SpriteMaterial).map;
+    if (bodyMap) {
+      applyAtlasFrame(bodyMap, runtime.animationSet, frame);
+    }
+    if (rimMap) {
+      applyAtlasFrame(rimMap, runtime.animationSet, frame);
+    }
+
+    const directionalLean = THREE.MathUtils.clamp(context.opponent.pos.x - context.own.pos.x, -1, 1) * 0.08;
+    const facing = context.opponent.pos.x >= context.own.pos.x ? 1 : -1;
+    const startupTelegraph = context.own.presentationPhase === 'startup'
+      ? 0.18 + Math.abs(Math.sin(context.gameTime * 18 + runtime.phase * 10)) * 0.18
+      : 0;
+    const activeTelegraph = context.own.presentationPhase === 'active' ? 0.22 : 0;
+    const actionPulse = Math.max(
+      context.own.launchFlash,
+      context.own.parryFlash,
+      context.own.specialFlash,
+      context.own.breakFlash,
+      context.own.dunkFlash,
+      startupTelegraph,
+      activeTelegraph,
+    );
+    const idlePulse = Math.abs(Math.sin(context.gameTime * 4.2 + runtime.phase * 10)) * 0.025;
+    const pulse = 1 + idlePulse + actionPulse * 0.16;
+    runtime.body.scale.set(
+      runtime.animationSet.worldWidth * pulse * facing,
+      runtime.animationSet.worldHeight * pulse,
+      1,
+    );
+    (runtime.body.material as THREE.SpriteMaterial).rotation = directionalLean;
+    runtime.rim.scale.set(
+      runtime.animationSet.worldWidth * (1.1 + actionPulse * 0.24) * facing,
+      runtime.animationSet.worldHeight * (1.1 + actionPulse * 0.24),
+      1,
+    );
+    const rimMaterial = runtime.rim.material as THREE.SpriteMaterial;
+    rimMaterial.rotation = directionalLean;
+    rimMaterial.opacity = THREE.MathUtils.clamp(0.2 + actionPulse * 0.7, 0.18, 0.82);
+    runtime.contactShadow.scale.set(
+      runtime.animationSet.worldWidth * (0.38 + context.own.recovering * 0.02),
+      runtime.animationSet.worldWidth * 0.12,
+      1,
+    );
+    (runtime.contactShadow.material as THREE.MeshBasicMaterial).opacity = context.own.recovering > 0
+      ? 0.06
+      : 0.34 + actionPulse * 0.1;
+    runtime.groundGlow.scale.set(
+      runtime.animationSet.worldWidth * (0.44 + actionPulse * 0.08),
+      runtime.animationSet.worldWidth * (0.15 + actionPulse * 0.025),
+      1,
+    );
+    (runtime.groundGlow.material as THREE.MeshBasicMaterial).opacity = context.own.recovering > 0
+      ? 0.04
+      : 0.14 + actionPulse * 0.28;
   },
 };
 
@@ -355,7 +535,7 @@ const hybridAdapter: CharacterVisualAdapter = {
   presentation: 'hybrid',
   createNode(profile: CharacterVisualProfile, playerId: PlayerId, characterId: CharacterId): THREE.Object3D {
     const group = createHybridNode(characterId, getPalette(playerId));
-    group.name = `${profile.modelId}:hybrid`;
+    group.name = `${profile.modelId ?? characterId}:hybrid`;
     return group;
   },
   updateNode(node: THREE.Object3D, context: CharacterVisualUpdateContext): void {
@@ -403,6 +583,7 @@ export function updateCharacterVisualHandle(
 }
 
 export function disposeCharacterVisualNode(node: THREE.Object3D): void {
+  const disposedTextures = new Set<THREE.Texture>();
   node.traverse((child) => {
     const mesh = child as THREE.Mesh;
     if (mesh.geometry) {
@@ -411,6 +592,11 @@ export function disposeCharacterVisualNode(node: THREE.Object3D): void {
     if (mesh.material) {
       const material = mesh.material as THREE.Material | THREE.Material[];
       const disposeMaterial = (entry: THREE.Material) => {
+        const map = 'map' in entry ? entry.map as THREE.Texture | null : null;
+        if (map?.userData.ownedByCharacterVisual && !disposedTextures.has(map)) {
+          disposedTextures.add(map);
+          map.dispose();
+        }
         entry.dispose();
       };
       if (Array.isArray(material)) {

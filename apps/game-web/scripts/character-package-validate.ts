@@ -1,5 +1,7 @@
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { discoverNodeCharacterPackageFiles } from '../src/content/characterPackageLoader';
 import {
   CharacterPackageValidationError,
   parseCharacterPackage,
@@ -34,32 +36,6 @@ function parseDirArg(argv: string[]): string {
   return 'content/characters';
 }
 
-function walkFiles(rootDir: string): string[] {
-  const files: string[] = [];
-  const stack = [rootDir];
-  while (stack.length > 0) {
-    const current = stack.pop() as string;
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(current);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const fullPath = join(current, entry);
-      const stats = statSync(fullPath);
-      if (stats.isDirectory()) {
-        stack.push(fullPath);
-        continue;
-      }
-      if (entry.toLowerCase().endsWith('.character.package.json')) {
-        files.push(fullPath);
-      }
-    }
-  }
-  return files.sort();
-}
-
 function writeReport(report: ValidationReport): string {
   const outputDir = join(process.cwd(), 'build-artifacts');
   mkdirSync(outputDir, { recursive: true });
@@ -68,14 +44,23 @@ function writeReport(report: ValidationReport): string {
   return outputPath;
 }
 
-function readJson(path: string): unknown {
+function readJson(path: URL): unknown {
   const raw = readFileSync(path, 'utf8');
   return JSON.parse(raw) as unknown;
 }
 
 const rootDirArg = parseDirArg(process.argv.slice(2));
-const absoluteRoot = join(process.cwd(), rootDirArg);
-const packageFiles = walkFiles(absoluteRoot);
+const absoluteRoot = resolve(process.cwd(), rootDirArg);
+let packageFiles;
+try {
+  packageFiles = discoverNodeCharacterPackageFiles({
+    rootUrl: pathToFileURL(`${absoluteRoot}${sep}`),
+    sourceRoot: rootDirArg,
+  });
+} catch (error) {
+  console.error(error instanceof Error ? error.message : '[character-package] package discovery failed.');
+  packageFiles = [];
+}
 const validPackages: ValidPackageResult[] = [];
 const invalidPackages: InvalidPackageResult[] = [];
 
@@ -84,9 +69,9 @@ if (packageFiles.length === 0) {
 }
 
 for (const file of packageFiles) {
-  const fileLabel = relative(process.cwd(), file).replace(/\\/g, '/');
+  const fileLabel = file.source;
   try {
-    const json = readJson(file);
+    const json = readJson(file.url);
     const parsed = parseCharacterPackage(json);
     validPackages.push({
       file: fileLabel,

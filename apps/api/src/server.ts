@@ -1,20 +1,57 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
-import { randomUUID } from 'node:crypto';
-import { db } from './db';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import type { PoolClient } from 'pg';
+import { CHARACTER_BY_ID, type CharacterId } from '../../game-web/src/sim/characters';
+import { validateReplayPayload as validateDeterministicReplayPayload } from '../../game-web/src/sim/replay';
+import {
+  getRankedTuningFingerprint,
+  rankedSeedFromSessionId,
+  verifyRankedMatchProof,
+} from '../../game-web/src/sim/rankedProof';
+import { databaseTarget, db } from './db';
 import {
   createMatchmakingQueueService,
   isQueueType,
   isRegionId,
+  MatchmakingCapacityError,
   type SessionActionErrorCode,
   type RegionId,
   type QueueType,
+  type MatchSessionView,
+  type MatchmakingQueueSnapshot,
 } from './matchmaking/queueService';
 import {
   createLiveSessionFrameRelay,
   type RelayPlayerFrameInput,
 } from './matchmaking/liveSessionFrameRelay';
-import { createMatchmakingNetworkConfigFromEnv } from './matchmaking/networkConfig';
+import {
+  createMatchmakingAccessPolicyFromEnv,
+  type MatchmakingAccessDenialCode,
+} from './matchmaking/accessPolicy';
+import { createMatchmakingNetworkConfigServiceFromEnv } from './matchmaking/networkConfig';
+import {
+  createMatchmakingRuntimeStateStore,
+  fingerprintMatchmakingRuntimeSnapshot,
+  resolveMatchmakingRuntimeSnapshotKey,
+} from './matchmaking/runtimeStateStore';
+import {
+  createMatchmakingRuntimeCoordinator,
+  matchmakingRuntimeLockKeyFromNamespace,
+  MATCHMAKING_RUNTIME_COORDINATION_MODE,
+  MatchmakingRuntimeLockTimeoutError,
+  type MatchmakingRuntimeLease,
+} from './matchmaking/runtimeCoordinator';
+import {
+  createSessionSignalStore,
+  DEFAULT_EXPIRED_SIGNAL_DELETE_LIMIT,
+  isSessionSignalType,
+  SessionSignalConflictError,
+  SessionSignalQuotaExceededError,
+  type SessionSignalJson,
+} from './matchmaking/sessionSignalStore';
+import { createMatchmakingSessionAccessStore } from './matchmaking/sessionAccessStore';
+import { requestUsesMatchmakingRuntime } from './matchmaking/runtimeRoutePolicy';
 import {
   createConnectivityTelemetryStore,
   type ConnectionPath,
@@ -31,7 +68,26 @@ import {
   type RoomParticipantRole,
 } from './rooms/roomService';
 import { createReplayBlobStoreFromEnv } from './replays/blobStore';
-import { validateReplayPayloadForArchive } from './replays/payload';
+import {
+  computeReplayCanonicalDigestForArchive,
+  validateReplayPayloadForArchive,
+} from './replays/payload';
+import {
+  compareReplayArchiveIdentity,
+  type CanonicalReplayBindingInput,
+  type NormalisedReplayParticipant,
+  type RankedReplaySettlement,
+  type ReplayArchiveIdentity,
+  resolveReplayIngestBodyLimitBytes,
+  validateCanonicalReplayBinding,
+  validateRankedReplayProofBinding,
+  validateRankedReplaySettlement,
+} from './replays/ingestValidation';
+import {
+  evaluateReplayIngestQuota,
+  resolveReplayIngestQuotaPolicy,
+} from './replays/ingestPolicy';
+import { pruneExpiredReplayArchives } from './replays/retention';
 import {
   buildReplaySearchQuery,
   encodeReplaySearchCursor,
@@ -44,8 +100,25 @@ import {
   validateWebPassword,
   verifyWebPassword,
 } from './auth/webAuth';
-import { validateSteamExchangeTicket } from './auth/steamAuth';
-import { logIdentityLinkEvent, mergeAccountIntoTarget } from './auth/steamLinkService';
+import { createSteamTicketVerifier } from './auth/steamAuth';
+import {
+  SteamAccountLinkError,
+  logIdentityLinkEvent,
+  resolveSteamAccountLink,
+} from './auth/steamLinkService';
+import { createAuthSessionTokenService } from './auth/sessionToken';
+import {
+  resolveAllowInsecureAccountHeader,
+  resolveAuthSessionSecret,
+} from './auth/sessionConfig';
+import {
+  resolveAccountAuthorizationStatus,
+  resolveAuthenticatedAccountId,
+} from './auth/requestAuth';
+import {
+  createAuthRateLimiter,
+  type AuthRateLimitRule,
+} from './auth/authRateLimit';
 import {
   createPresenceInviteService,
   type PresenceActivityInput,
@@ -57,12 +130,15 @@ import {
 } from './social/enforcementPolicy';
 import { deriveSloSummary, evaluateSloAlerts } from './ops/sloPolicy';
 import {
+  createSloSampleStore,
+  resolveSloSampleRetentionConfig,
+} from './ops/sloSampleStore';
+import {
+  evaluateRankedResultConsensus,
   evaluateRankedResultSubmission,
   type RankedResultSuspiciousReason,
 } from './ranked/resultValidation';
-import { applyRankedRatingUpdate } from './ranked/ratingService';
 import {
-  detectRankedAnomalies,
   type RankedAnomalyType,
 } from './ranked/anomalyDetection';
 import {
@@ -72,12 +148,37 @@ import {
   runRankedSeasonReset,
 } from './ranked/seasonService';
 import {
-  applyLeagueProgression,
-  type LeagueTier,
-} from './ranked/leagueService';
-import { applyMasterRatingProgression } from './ranked/masterRatingService';
+  ARCHIVED_MASTER_LEADERBOARD_PAGE_SQL,
+  ARCHIVED_MASTER_LEADERBOARD_TOTAL_SQL,
+} from './ranked/leaderboardQueries';
+import type { LeagueTier } from './ranked/leagueService';
+import {
+  deriveRankedTerminalDecision,
+  processRankedAuthoritativeResolution,
+  type RankedAuthoritativeResolutionCandidate,
+} from './ranked/authoritativeResolutionService';
+import {
+  createRankedTerminalDecisionStore,
+  type EnqueueRankedTerminalDecisionInput,
+  type RankedTerminalDecision,
+} from './ranked/terminalDecisionStore';
+import { resolveDurableRankedResultAccess } from './ranked/resultReadAccess';
+import {
+  settleRankedMatch,
+  type RankedSettlementConfig,
+} from './ranked/settlementService';
 
-const app = Fastify({ logger: true });
+const app = Fastify({
+  logger: true,
+  trustProxy: resolveTrustProxyHops(process.env.API_TRUST_PROXY_HOPS),
+});
+const replayIngestBodyLimitBytes = resolveReplayIngestBodyLimitBytes(
+  process.env.REPLAY_INGEST_BODY_LIMIT_BYTES,
+);
+const sloSampleStore = createSloSampleStore(
+  db,
+  resolveSloSampleRetentionConfig(process.env),
+);
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
 app.register(cors, {
   origin: (origin, callback) => {
@@ -88,7 +189,14 @@ app.register(cors, {
     callback(new Error('Origin not allowed by CORS'), false);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['content-type', 'x-account-id', 'x-admin-key', 'x-admin-actor'],
+  allowedHeaders: [
+    'authorization',
+    'content-type',
+    'x-account-id',
+    'x-admin-key',
+    'x-admin-actor',
+    'x-match-session-token',
+  ],
 });
 
 app.addHook('onRequest', async (request) => {
@@ -96,8 +204,12 @@ app.addHook('onRequest', async (request) => {
 });
 
 app.addHook('onResponse', async (request, reply) => {
-  const startedAt = (request as { _sloRequestStartAt?: bigint })._sloRequestStartAt;
-  if (!startedAt) {
+  const trackedRequest = request as {
+    _sloRequestStartAt?: bigint;
+    _excludeFromSloAvailability?: boolean;
+  };
+  const startedAt = trackedRequest._sloRequestStartAt;
+  if (!startedAt || trackedRequest._excludeFromSloAvailability) {
     return;
   }
   const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
@@ -107,30 +219,120 @@ app.addHook('onResponse', async (request, reply) => {
     ?? 'unknown',
   ).slice(0, 160);
   try {
-    await db.query(
-      `
-      INSERT INTO service_slo_request_samples(method, route, status_code, latency_ms)
-      VALUES ($1, $2, $3, $4)
-      `,
-      [
-        request.method.toUpperCase(),
-        routePath,
-        reply.statusCode,
-        Math.max(0, Math.round(elapsedMs)),
-      ],
-    );
+    const recorded = await sloSampleStore.record({
+      method: request.method.toUpperCase(),
+      route: routePath,
+      statusCode: reply.statusCode,
+      latencyMs: Math.max(0, Math.round(elapsedMs)),
+    });
+    if (recorded.cleanupDue) {
+      try {
+        await sloSampleStore.pruneBatch();
+      } catch (error) {
+        request.log.warn({ err: error }, 'Failed to prune retained SLO request samples.');
+      }
+    }
   } catch (error) {
     request.log.warn({ err: error }, 'Failed to record SLO request sample.');
   }
 });
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RANKED_PROOF_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 const PROVIDERS = new Set(['steam', 'web']);
+const releaseSha = [
+  process.env.RELEASE_SHA,
+  process.env.RENDER_GIT_COMMIT,
+  process.env.CF_PAGES_COMMIT_SHA,
+  process.env.VERCEL_GIT_COMMIT_SHA,
+  process.env.COMMIT_SHA,
+].map((value) => String(value ?? '').trim()).find((value) => value.length > 0) ?? 'dev-local';
+const deploymentEnvironment = String(
+  process.env.DEPLOYMENT_ENVIRONMENT ?? process.env.NODE_ENV ?? 'development',
+).trim();
+const deploymentDatabaseId = String(
+  process.env.DEPLOYMENT_DATABASE_ID ?? (databaseTarget === 'local' ? 'local' : 'unconfigured'),
+).trim();
+const authSessionSecret = resolveAuthSessionSecret(process.env);
+const authSessionTokenService = createAuthSessionTokenService({
+  secret: authSessionSecret,
+  ttlSeconds: parsePositiveIntegerEnv(process.env.AUTH_SESSION_TTL_SECONDS),
+});
+const authRateLimiter = createAuthRateLimiter({
+  database: db,
+  secret: process.env.AUTH_RATE_LIMIT_SECRET?.trim() || authSessionSecret,
+});
+const authIdentityAdminKey = resolveOptionalSecret(
+  process.env.AUTH_IDENTITY_ADMIN_KEY,
+  'AUTH_IDENTITY_ADMIN_KEY',
+);
+const authRateLimitPolicies = {
+  globalSource: resolveAuthRateLimitPolicy('AUTH_RATE_LIMIT_GLOBAL_SOURCE', 60, 15 * 60),
+  guestSource: resolveAuthRateLimitPolicy('AUTH_RATE_LIMIT_GUEST_SOURCE', 20, 60 * 60),
+  webSignupSource: resolveAuthRateLimitPolicy('AUTH_RATE_LIMIT_WEB_SIGNUP_SOURCE', 10, 60 * 60),
+  webSignupPrincipal: resolveAuthRateLimitPolicy('AUTH_RATE_LIMIT_WEB_SIGNUP_PRINCIPAL', 3, 60 * 60),
+  webSigninPrincipal: resolveAuthRateLimitPolicy('AUTH_RATE_LIMIT_WEB_SIGNIN_PRINCIPAL', 8, 15 * 60),
+  steamSource: resolveAuthRateLimitPolicy('AUTH_RATE_LIMIT_STEAM_SOURCE', 20, 5 * 60),
+  steamTicket: resolveAuthRateLimitPolicy('AUTH_RATE_LIMIT_STEAM_TICKET', 3, 5 * 60),
+};
+const replayIngestRateLimitPolicies = {
+  source: resolveAuthRateLimitPolicy('REPLAY_INGEST_RATE_LIMIT_SOURCE', 40, 60 * 60),
+  account: resolveAuthRateLimitPolicy('REPLAY_INGEST_RATE_LIMIT_ACCOUNT', 20, 60 * 60),
+};
+const rankedProofRateLimitPolicies = {
+  accountSession: resolveAuthRateLimitPolicy('RANKED_PROOF_RATE_LIMIT_ACCOUNT_SESSION', 4, 10 * 60),
+  accountHour: resolveAuthRateLimitPolicy('RANKED_PROOF_RATE_LIMIT_ACCOUNT_HOUR', 20, 60 * 60),
+};
+const replayIngestQuotaPolicy = resolveReplayIngestQuotaPolicy(process.env);
+const replayRetentionCleanupIntervalMs = Math.max(
+  60,
+  parsePositiveIntegerEnv(process.env.REPLAY_RETENTION_CLEANUP_INTERVAL_SECONDS) ?? 3_600,
+) * 1_000;
+const matchmakingSignalCleanupIntervalMs = Math.min(
+  3_600,
+  Math.max(30, parsePositiveIntegerEnv(process.env.MATCHMAKING_SIGNAL_CLEANUP_INTERVAL_SECONDS) ?? 60),
+) * 1_000;
+const authRateLimitCleanupIntervalMs = Math.min(
+  86_400,
+  Math.max(60, parsePositiveIntegerEnv(process.env.AUTH_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS) ?? 900),
+) * 1_000;
+const allowInsecureAccountHeader = resolveAllowInsecureAccountHeader(process.env);
+const legacyHttpFrameRelayEnabled = process.env.NODE_ENV !== 'production'
+  && process.env.MATCHMAKING_ENABLE_LEGACY_HTTP_FRAME_RELAY === 'true';
+const steamTicketVerifier = createSteamTicketVerifier({
+  apiKey: process.env.STEAM_WEB_API_KEY,
+  appId: process.env.STEAM_APP_ID,
+  identity: process.env.STEAM_WEB_API_IDENTITY,
+  allowDevTickets: process.env.NODE_ENV !== 'production' && process.env.STEAM_ALLOW_DEV_TICKETS === 'true',
+  apiBase: process.env.STEAM_WEB_API_BASE,
+  timeoutMs: parsePositiveIntegerEnv(process.env.STEAM_WEB_API_TIMEOUT_MS),
+});
+const liveSessionFrameRelay = createLiveSessionFrameRelay();
+const sessionSignalStore = createSessionSignalStore(db, {
+  ttlSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_SIGNAL_TTL_SECONDS),
+  maxMessagesPerSession: parsePositiveIntegerEnv(
+    process.env.MATCHMAKING_SIGNAL_MAX_MESSAGES_PER_SESSION,
+  ),
+  maxBytesPerSession: parsePositiveIntegerEnv(
+    process.env.MATCHMAKING_SIGNAL_MAX_BYTES_PER_SESSION,
+  ),
+  maxMessagesPerSender: parsePositiveIntegerEnv(
+    process.env.MATCHMAKING_SIGNAL_MAX_MESSAGES_PER_SENDER,
+  ),
+  maxBytesPerSender: parsePositiveIntegerEnv(
+    process.env.MATCHMAKING_SIGNAL_MAX_BYTES_PER_SENDER,
+  ),
+});
+const rankedTerminalDecisionStore = createRankedTerminalDecisionStore(db);
+const pendingRankedTerminalDecisions = new Map<string, EnqueueRankedTerminalDecisionInput>();
 const matchmakingQueueService = createMatchmakingQueueService({
+  maxResidentTickets: parsePositiveIntegerEnv(process.env.MATCHMAKING_MAX_RESIDENT_TICKETS),
   ticketTtlSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_TICKET_TTL_SECONDS),
   sessionTtlSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_SESSION_TTL_SECONDS),
   sessionTokenTtlSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_SESSION_TOKEN_TTL_SECONDS),
   reconnectGraceSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_RECONNECT_GRACE_SECONDS),
+  heartbeatIntervalSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_HEARTBEAT_INTERVAL_SECONDS),
+  heartbeatTimeoutSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_HEARTBEAT_TIMEOUT_SECONDS),
   closedTicketRetentionSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_CLOSED_RETENTION_SECONDS),
   rankedRatingInitialGap: parsePositiveIntegerEnv(process.env.MATCHMAKING_RANKED_INITIAL_GAP),
   rankedRatingExpansionPerSecond: parsePositiveNumberEnv(process.env.MATCHMAKING_RANKED_GAP_EXPANSION_PER_SECOND),
@@ -139,9 +341,43 @@ const matchmakingQueueService = createMatchmakingQueueService({
   rankedMasterExpansionPerSecond: parsePositiveNumberEnv(process.env.MATCHMAKING_MASTER_GAP_EXPANSION_PER_SECOND),
   rankedMasterMaxGap: parsePositiveIntegerEnv(process.env.MATCHMAKING_MASTER_MAX_GAP),
   rankedMasterStrictRegionSeconds: parsePositiveIntegerEnv(process.env.MATCHMAKING_MASTER_STRICT_REGION_SECONDS),
+  onSessionResolved: (sessionId, _reason, session) => {
+    queueRankedTerminalDecision(session);
+    const cleanupTimer = setTimeout(() => {
+      liveSessionFrameRelay.clearSession(sessionId);
+      void sessionSignalStore.clearSession(sessionId).catch((error) => {
+        app.log.warn({ err: error, sessionId }, 'Failed to clear WebRTC signaling mailbox.');
+      });
+    }, 15_000);
+    cleanupTimer.unref();
+  },
 });
-const liveSessionFrameRelay = createLiveSessionFrameRelay();
-const matchmakingNetworkConfig = createMatchmakingNetworkConfigFromEnv(process.env);
+const matchmakingRuntimeNamespace = resolveMatchmakingRuntimeSnapshotKey(
+  process.env.MATCHMAKING_RUNTIME_NAMESPACE,
+);
+const matchmakingRuntimeStateStore = createMatchmakingRuntimeStateStore(db, {
+  snapshotKey: matchmakingRuntimeNamespace,
+});
+const matchmakingSessionAccessStore = createMatchmakingSessionAccessStore(db, {
+  snapshotKey: matchmakingRuntimeNamespace,
+});
+const matchmakingRuntimeCoordinator = createMatchmakingRuntimeCoordinator(db, {
+  acquireTimeoutMs: parsePositiveIntegerEnv(process.env.MATCHMAKING_RUNTIME_LOCK_TIMEOUT_MS),
+  lockKey: matchmakingRuntimeLockKeyFromNamespace(matchmakingRuntimeNamespace),
+  fenceKey: matchmakingRuntimeNamespace,
+});
+interface MatchmakingRuntimeRequestLeaseState {
+  lease: MatchmakingRuntimeLease;
+  finalization: Promise<void> | null;
+}
+
+const matchmakingRuntimeLeaseByRequest = new WeakMap<object, MatchmakingRuntimeRequestLeaseState>();
+let matchmakingPersistenceChain: Promise<void> = Promise.resolve();
+let rankedTerminalDecisionProcessingChain: Promise<void> = Promise.resolve();
+let lastPersistedMatchmakingFingerprint: string | null = null;
+let matchmakingDraining = false;
+const matchmakingAccessPolicy = createMatchmakingAccessPolicyFromEnv(process.env);
+const matchmakingNetworkConfigService = createMatchmakingNetworkConfigServiceFromEnv(process.env);
 const connectivityTelemetryStore = createConnectivityTelemetryStore({
   retentionMs: parsePositiveIntegerEnv(process.env.MATCHMAKING_TELEMETRY_RETENTION_MS),
 });
@@ -164,8 +400,14 @@ const presenceInviteService = createPresenceInviteService({
   webInviteBaseUrl: process.env.ROOM_WEB_INVITE_BASE_URL,
   steamAppId: process.env.STEAM_APP_ID,
 });
-const replayBlobStore = createReplayBlobStoreFromEnv(process.env);
+const replayBlobStore = createReplayBlobStoreFromEnv(process.env, { database: db });
 const rankedReplayRetentionDays = parsePositiveIntegerEnv(process.env.REPLAY_RETENTION_DAYS_RANKED) ?? 365;
+const rankedSupportedRulesetVersions = new Set(
+  (process.env.RANKED_SUPPORTED_RULESET_VERSIONS ?? 'prototype-2026.02')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0),
+);
 const casualReplayRetentionDays = parsePositiveIntegerEnv(process.env.REPLAY_RETENTION_DAYS_CASUAL) ?? 90;
 const rankedSeasonDurationDays = resolveRankedSeasonDurationDays(process.env);
 const rankedCalibrationMatchesRequired = parsePositiveIntegerEnv(process.env.RANKED_CALIBRATION_MATCHES) ?? 5;
@@ -177,6 +419,16 @@ const rankedAnomalyMinMatchIntervalSeconds = parsePositiveIntegerEnv(
 ) ?? 30;
 const rankedAnomalyRatingJumpThreshold = parsePositiveIntegerEnv(process.env.RANKED_ANOMALY_RATING_JUMP_THRESHOLD) ?? 60;
 const rankedAnomalyMrJumpThreshold = parsePositiveIntegerEnv(process.env.RANKED_ANOMALY_MR_JUMP_THRESHOLD) ?? 80;
+const rankedSettlementConfig: RankedSettlementConfig = {
+  seasonDurationDays: rankedSeasonDurationDays,
+  calibrationMatchesRequired: rankedCalibrationMatchesRequired,
+  masterEntryRating: rankedMasterEntryRating,
+  masterBasePoints: rankedMasterBasePoints,
+  masterQueueWeight: rankedMasterQueueWeight,
+  anomalyMinMatchIntervalSeconds: rankedAnomalyMinMatchIntervalSeconds,
+  anomalyRatingJumpThreshold: rankedAnomalyRatingJumpThreshold,
+  anomalyMrJumpThreshold: rankedAnomalyMrJumpThreshold,
+};
 const rankedAnomalyAdminKey = process.env.RANKED_ANOMALY_ADMIN_KEY;
 const enforcementAdminKey = process.env.ENFORCEMENT_ADMIN_KEY;
 const sloAdminKey = process.env.SLO_ADMIN_KEY;
@@ -209,7 +461,8 @@ interface WebSigninBody {
 
 interface SteamExchangeBody {
   steamTicket?: string;
-  mergeAccountId?: string;
+  linkToAuthenticatedAccount?: boolean;
+  mergeAccountId?: unknown;
   displayName?: string | null;
 }
 
@@ -217,6 +470,8 @@ interface MatchmakingQueueJoinBody {
   queueType?: string;
   regionPreferences?: string[];
   buildVersion?: string;
+  rulesetVersion?: string;
+  balanceProfileId?: string;
   platform?: string;
   characterId?: string;
 }
@@ -225,8 +480,17 @@ interface MatchmakingQueueLeaveBody {
   ticketId?: string;
 }
 
+interface MatchmakingDrainBody {
+  draining?: boolean;
+}
+
 interface MatchmakingSessionDisconnectBody {
   sessionId?: string;
+}
+
+interface MatchmakingSessionHeartbeatBody {
+  sessionId?: string;
+  sessionToken?: string;
 }
 
 interface MatchmakingSessionReconnectBody {
@@ -240,21 +504,49 @@ interface MatchmakingSessionCompleteBody {
   sessionToken?: string;
 }
 
+interface MatchmakingSessionTransportAttemptBody {
+  sessionToken?: string;
+  expectedGeneration?: number;
+}
+
 interface MatchmakingSessionFramesSubmitBody {
   sessionToken?: string;
   frames?: Array<{
+    epoch?: number;
     frame?: number;
     input?: Record<string, unknown>;
   }>;
 }
 
 interface MatchmakingSessionFramesQuery {
-  sessionToken?: string;
+  epoch?: string;
   sinceFrame?: string;
 }
 
-interface MatchmakingIceConfigQuery {
-  forceRelay?: string;
+interface MatchmakingSessionFramesConfirmBody {
+  sessionToken?: string;
+  epoch?: number;
+  confirmedThrough?: number;
+}
+
+interface MatchmakingSessionSignalSubmitBody {
+  sessionToken?: string;
+  transportAttemptId?: string;
+  clientMessageId?: string;
+  signalType?: string;
+  payload?: unknown;
+}
+
+interface MatchmakingSessionSignalsQuery {
+  transportAttemptId?: string;
+  afterSignalId?: string;
+  limit?: string;
+}
+
+interface MatchmakingIceConfigBody {
+  sessionId?: string;
+  sessionToken?: string;
+  forceRelay?: boolean;
 }
 
 interface MatchmakingConnectionTelemetryBody {
@@ -380,6 +672,7 @@ interface RankedResultSubmitBody {
   participantAccountIds?: string[];
   winnerAccountId?: string | null;
   outcome?: string;
+  proof?: unknown;
 }
 
 type RankedResultOutcome = 'p1_win' | 'p2_win' | 'draw' | 'forfeit';
@@ -454,7 +747,7 @@ interface SloSummaryQuery {
   windowHours?: string;
 }
 
-function isUuid(value: string | undefined): boolean {
+function isUuid(value: string | undefined): value is string {
   if (!value) {
     return false;
   }
@@ -508,6 +801,574 @@ function parseCorsOrigins(value: string | undefined): string[] {
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
 }
+
+interface AuthRateLimitPolicy {
+  maxAttempts: number;
+  windowSeconds: number;
+}
+
+interface AuthRateLimitRejection {
+  error: string;
+  code?: string;
+  recovery: string;
+  retryAfterSeconds?: number;
+}
+
+function resolveTrustProxyHops(value: string | undefined): number | false {
+  if (!value?.trim()) {
+    return false;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 8) {
+    throw new Error('API_TRUST_PROXY_HOPS must be an integer between 1 and 8.');
+  }
+  return parsed;
+}
+
+function resolveOptionalSecret(value: string | undefined, name: string): string | null {
+  const secret = value?.trim() ?? '';
+  if (!secret) {
+    return null;
+  }
+  if (secret.length < 32) {
+    throw new Error(`${name} must contain at least 32 characters when configured.`);
+  }
+  return secret;
+}
+
+function resolveAuthRateLimitPolicy(
+  envPrefix: string,
+  defaultMaxAttempts: number,
+  defaultWindowSeconds: number,
+): AuthRateLimitPolicy {
+  return {
+    maxAttempts: parsePositiveIntegerEnv(process.env[`${envPrefix}_MAX_ATTEMPTS`])
+      ?? defaultMaxAttempts,
+    windowSeconds: parsePositiveIntegerEnv(process.env[`${envPrefix}_WINDOW_SECONDS`])
+      ?? defaultWindowSeconds,
+  };
+}
+
+function buildAuthRateLimitRule(
+  scope: string,
+  subject: string,
+  policy: AuthRateLimitPolicy,
+): AuthRateLimitRule {
+  return {
+    scope,
+    subject,
+    maxAttempts: policy.maxAttempts,
+    windowSeconds: policy.windowSeconds,
+  };
+}
+
+async function enforceAuthRateLimits(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  rules: AuthRateLimitRule[],
+): Promise<AuthRateLimitRejection | null> {
+  try {
+    const decisions = await authRateLimiter.consume(rules);
+    const denied = decisions.filter((decision) => !decision.allowed);
+    if (denied.length === 0) {
+      return null;
+    }
+    const retryAfterSeconds = Math.max(
+      1,
+      ...denied.map((decision) => decision.retryAfterSeconds),
+    );
+    request.log.warn(
+      { scopes: denied.map((decision) => decision.scope), retryAfterSeconds },
+      'Authentication request rate-limited.',
+    );
+    reply.header('Retry-After', String(retryAfterSeconds));
+    reply.code(429);
+    return {
+      error: 'Too many authentication attempts.',
+      recovery: 'Wait before retrying with fresh credentials.',
+      retryAfterSeconds,
+    };
+  } catch (error) {
+    request.log.error({ err: error }, 'Authentication rate-limit check failed closed.');
+    reply.code(503);
+    return {
+      error: 'Authentication safety service is temporarily unavailable.',
+      recovery: 'Retry after the service has recovered.',
+    };
+  }
+}
+
+async function enforceReplayIngestRateLimits(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  accountId: string,
+): Promise<AuthRateLimitRejection | null> {
+  try {
+    const decisions = await authRateLimiter.consume([
+      buildAuthRateLimitRule(
+        'replay_ingest_source',
+        request.ip,
+        replayIngestRateLimitPolicies.source,
+      ),
+      buildAuthRateLimitRule(
+        'replay_ingest_account',
+        accountId,
+        replayIngestRateLimitPolicies.account,
+      ),
+    ]);
+    const denied = decisions.filter((decision) => !decision.allowed);
+    if (denied.length === 0) {
+      return null;
+    }
+    const retryAfterSeconds = Math.max(1, ...denied.map((decision) => decision.retryAfterSeconds));
+    request.log.warn(
+      { scopes: denied.map((decision) => decision.scope), retryAfterSeconds },
+      'Replay ingest rate-limited.',
+    );
+    reply.header('Retry-After', String(retryAfterSeconds));
+    reply.code(429);
+    return {
+      error: 'Too many replay ingest attempts.',
+      recovery: 'Wait before uploading another replay archive.',
+      retryAfterSeconds,
+    };
+  } catch (error) {
+    request.log.error({ err: error }, 'Replay ingest rate-limit check failed closed.');
+    reply.code(503);
+    return {
+      error: 'Replay ingest safety service is temporarily unavailable.',
+      recovery: 'Retry after the service has recovered.',
+    };
+  }
+}
+
+async function enforceRankedProofRateLimits(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  accountId: string,
+  sessionId: string,
+): Promise<AuthRateLimitRejection | null> {
+  try {
+    const decisions = await authRateLimiter.consume([
+      buildAuthRateLimitRule(
+        'ranked_proof_account_session',
+        `${accountId}:${sessionId}`,
+        rankedProofRateLimitPolicies.accountSession,
+      ),
+      buildAuthRateLimitRule(
+        'ranked_proof_account_hour',
+        accountId,
+        rankedProofRateLimitPolicies.accountHour,
+      ),
+    ]);
+    const denied = decisions.filter((decision) => !decision.allowed);
+    if (denied.length === 0) {
+      return null;
+    }
+    const retryAfterSeconds = Math.max(1, ...denied.map((decision) => decision.retryAfterSeconds));
+    request.log.warn(
+      { scopes: denied.map((decision) => decision.scope), retryAfterSeconds },
+      'Ranked proof verification rate-limited.',
+    );
+    reply.header('Retry-After', String(retryAfterSeconds));
+    reply.code(429);
+    return {
+      error: 'Too many ranked proof verification attempts.',
+      code: 'ranked_proof_rate_limited',
+      recovery: 'Wait before retrying the ranked proof submission.',
+      retryAfterSeconds,
+    };
+  } catch (error) {
+    request.log.error({ err: error }, 'Ranked proof rate-limit check failed closed.');
+    reply.code(503);
+    return {
+      error: 'Ranked proof verification safety service is temporarily unavailable.',
+      code: 'ranked_proof_rate_limit_unavailable',
+      recovery: 'Retry after the service has recovered.',
+    };
+  }
+}
+
+function secretMatches(provided: string, expected: string): boolean {
+  const providedBytes = Buffer.from(provided, 'utf8');
+  const expectedBytes = Buffer.from(expected, 'utf8');
+  return providedBytes.length === expectedBytes.length
+    && timingSafeEqual(providedBytes, expectedBytes);
+}
+
+function isAuthIdentityAdmin(request: FastifyRequest): boolean {
+  if (!authIdentityAdminKey) {
+    return false;
+  }
+  const provided = getHeaderValue(request.headers['x-admin-key']);
+  return secretMatches(provided, authIdentityAdminKey);
+}
+
+function requireAuthIdentityAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): { error: string } | null {
+  if (!authIdentityAdminKey) {
+    reply.code(404);
+    return { error: 'Administrative identity routes are disabled.' };
+  }
+  if (!isAuthIdentityAdmin(request)) {
+    reply.code(401);
+    return { error: 'Missing or invalid authentication administration key.' };
+  }
+  return null;
+}
+
+function queueRankedTerminalDecision(session: MatchSessionView): void {
+  const decision = deriveRankedTerminalDecision(session);
+  if (!decision) {
+    return;
+  }
+  pendingRankedTerminalDecisions.set(decision.sessionId, decision);
+}
+
+function queuePersistedRankedTerminalDecisions(snapshot: MatchmakingQueueSnapshot): void {
+  const reconnectGraceSeconds = matchmakingQueueService.getConfig().reconnectGraceSeconds;
+  for (const storedSession of snapshot.sessions) {
+    if (storedSession.status !== 'resolved') {
+      continue;
+    }
+    queueRankedTerminalDecision({
+      sessionId: storedSession.sessionId,
+      queueType: storedSession.queueType,
+      region: storedSession.region,
+      buildVersion: storedSession.buildVersion ?? null,
+      rulesetVersion: storedSession.rulesetVersion ?? null,
+      balanceProfileId: storedSession.balanceProfileId ?? null,
+      status: storedSession.status,
+      resolvedReason: storedSession.resolvedReason,
+      resolvedAt: storedSession.resolvedAtMs
+        ? new Date(storedSession.resolvedAtMs).toISOString()
+        : undefined,
+      forfeitingAccountId: storedSession.forfeitingAccountId,
+      createdAt: new Date(storedSession.createdAtMs).toISOString(),
+      expiresAt: new Date(storedSession.expiresAtMs).toISOString(),
+      reconnectGraceSeconds,
+      transportAttempt: {
+        attemptId: storedSession.transportAttemptId ?? storedSession.sessionId,
+        generation: storedSession.transportAttemptGeneration ?? 1,
+        createdAt: new Date(
+          storedSession.transportAttemptCreatedAtMs ?? storedSession.createdAtMs,
+        ).toISOString(),
+      },
+      participants: storedSession.participants.map((participant) => ({
+        accountId: participant.accountId,
+        queueTicketId: participant.queueTicketId,
+        side: participant.side,
+        selectedCharacterId: participant.selectedCharacterId ?? null,
+        connectionStatus: participant.connectionStatus,
+        lastHeartbeatAt: new Date(participant.lastHeartbeatAtMs ?? snapshot.capturedAtMs).toISOString(),
+        disconnectedAt: participant.disconnectedAtMs
+          ? new Date(participant.disconnectedAtMs).toISOString()
+          : undefined,
+        reconnectDeadlineAt: participant.reconnectDeadlineAtMs
+          ? new Date(participant.reconnectDeadlineAtMs).toISOString()
+          : undefined,
+      })),
+    });
+  }
+}
+
+function toAuthoritativeResolutionCandidate(
+  decision: RankedTerminalDecision,
+): RankedAuthoritativeResolutionCandidate {
+  if (
+    decision.decisionType !== 'forfeit'
+    || !decision.winnerAccountId
+    || !decision.forfeitingAccountId
+    || (decision.reason !== 'reconnect_timeout' && decision.reason !== 'peer_left')
+  ) {
+    throw new Error(`Terminal decision ${decision.sessionId} is not a ranked forfeit.`);
+  }
+  return {
+    sessionId: decision.sessionId,
+    matchId: decision.sessionId,
+    reason: decision.reason,
+    forfeitingAccountId: decision.forfeitingAccountId,
+    winnerAccountId: decision.winnerAccountId,
+    participants: [
+      { accountId: decision.participantP1AccountId, side: 'P1' },
+      { accountId: decision.participantP2AccountId, side: 'P2' },
+    ],
+    resolvedAt: decision.dueAt,
+    metadata: {
+      source: 'ranked_terminal_decisions',
+      dueAt: decision.dueAt,
+      decidedAt: decision.decidedAt,
+    },
+  };
+}
+
+async function processRankedTerminalDecisionBatch(): Promise<void> {
+  const claimed = await rankedTerminalDecisionStore.claimBatch();
+  for (const decision of claimed) {
+    const claimToken = decision.claimToken;
+    if (!claimToken) {
+      app.log.error({ sessionId: decision.sessionId }, 'Claimed terminal decision has no claim token.');
+      continue;
+    }
+    try {
+      if (decision.decisionType === 'no_contest') {
+        const marked = await rankedTerminalDecisionStore.markSettled({
+          sessionId: decision.sessionId,
+          claimToken,
+        });
+        if (!marked) {
+          app.log.warn(
+            { sessionId: decision.sessionId },
+            'No-contest terminal decision lease expired before completion.',
+          );
+          continue;
+        }
+        app.log.info({
+          sessionId: decision.sessionId,
+          reason: decision.reason,
+        }, 'Recorded durable ranked no-contest decision.');
+        continue;
+      }
+
+      const candidate = toAuthoritativeResolutionCandidate(decision);
+      const result = await processRankedAuthoritativeResolution(db, candidate, rankedSettlementConfig);
+      const marked = result.status === 'settled'
+        ? await rankedTerminalDecisionStore.markSettled({
+          sessionId: decision.sessionId,
+          claimToken,
+          settledMatchId: decision.sessionId,
+        })
+        : await rankedTerminalDecisionStore.markSuperseded({
+          sessionId: decision.sessionId,
+          claimToken,
+        });
+      if (!marked) {
+        app.log.warn(
+          { sessionId: decision.sessionId, resolutionId: result.resolutionId },
+          'Ranked terminal decision lease expired after authoritative settlement.',
+        );
+        continue;
+      }
+      app.log.info({
+        sessionId: decision.sessionId,
+        resolutionId: result.resolutionId,
+        status: result.status,
+        reason: decision.reason,
+      }, 'Processed authoritative ranked session resolution.');
+    } catch (error) {
+      const retryQueued = await rankedTerminalDecisionStore.markRetry({
+        sessionId: decision.sessionId,
+        claimToken,
+        error,
+      }).catch((retryError) => {
+        app.log.error(
+          { err: retryError, sessionId: decision.sessionId },
+          'Failed to release ranked terminal decision lease for retry.',
+        );
+        return false;
+      });
+      app.log.error({
+        err: error,
+        sessionId: decision.sessionId,
+        retryQueued,
+      }, 'Failed to process ranked terminal decision.');
+    }
+  }
+}
+
+function scheduleRankedTerminalDecisionProcessing(): Promise<void> {
+  const processing = rankedTerminalDecisionProcessingChain
+    .catch(() => undefined)
+    .then(() => processRankedTerminalDecisionBatch())
+    .catch((error) => {
+      app.log.error({ err: error }, 'Failed to claim ranked terminal decisions.');
+    });
+  rankedTerminalDecisionProcessingChain = processing;
+  return processing;
+}
+
+function captureMatchmakingState(): MatchmakingQueueSnapshot {
+  return {
+    ...matchmakingQueueService.exportSnapshot(),
+    serviceDraining: matchmakingDraining,
+  };
+}
+
+function persistMatchmakingSnapshot(
+  snapshot: MatchmakingQueueSnapshot,
+  lease: MatchmakingRuntimeLease,
+): Promise<void> {
+  const fingerprint = fingerprintMatchmakingRuntimeSnapshot(snapshot);
+  const decisions = [...pendingRankedTerminalDecisions.values()];
+  const checkpoint = matchmakingPersistenceChain
+    .catch(() => undefined)
+    .then(async () => {
+      lease.assertActive();
+      const client = lease.database;
+      try {
+        await client.query('BEGIN');
+        await matchmakingRuntimeStateStore.save(snapshot, lease.fenceToken, client);
+        await matchmakingSessionAccessStore.replaceFromSnapshot(snapshot, client);
+        for (const decision of decisions) {
+          await rankedTerminalDecisionStore.enqueue(client, decision);
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // Preserve the original checkpoint error if the connection was also lost.
+        }
+        throw error;
+      }
+      lastPersistedMatchmakingFingerprint = fingerprint;
+      for (const decision of decisions) {
+        if (pendingRankedTerminalDecisions.get(decision.sessionId) === decision) {
+          pendingRankedTerminalDecisions.delete(decision.sessionId);
+        }
+      }
+      await scheduleRankedTerminalDecisionProcessing();
+    });
+  matchmakingPersistenceChain = checkpoint;
+  return checkpoint;
+}
+
+function persistMatchmakingState(lease: MatchmakingRuntimeLease): Promise<void> {
+  return persistMatchmakingSnapshot(captureMatchmakingState(), lease);
+}
+
+async function persistMatchmakingStateIfChanged(lease: MatchmakingRuntimeLease): Promise<void> {
+  await matchmakingPersistenceChain.catch(() => undefined);
+  lease.assertActive();
+  const snapshot = captureMatchmakingState();
+  if (
+    fingerprintMatchmakingRuntimeSnapshot(snapshot) === lastPersistedMatchmakingFingerprint
+    && pendingRankedTerminalDecisions.size === 0
+  ) {
+    return;
+  }
+  await persistMatchmakingSnapshot(snapshot, lease);
+}
+
+async function restoreMatchmakingState(lease: MatchmakingRuntimeLease): Promise<void> {
+  lease.assertActive();
+  const snapshot = await matchmakingRuntimeStateStore.load(lease.database);
+  if (!snapshot) {
+    await matchmakingSessionAccessStore.replaceFromSnapshot({
+      version: 1,
+      capturedAtMs: Date.now(),
+      serviceDraining: false,
+      tickets: [],
+      sessions: [],
+    }, lease.database);
+    app.log.info('No persisted matchmaking runtime snapshot found.');
+    return;
+  }
+  applyMatchmakingSnapshot(snapshot);
+  await persistMatchmakingState(lease);
+  app.log.info({
+    tickets: snapshot.tickets.length,
+    sessions: snapshot.sessions.length,
+    capturedAt: new Date(snapshot.capturedAtMs).toISOString(),
+  }, 'Restored persisted matchmaking runtime state.');
+}
+
+function applyMatchmakingSnapshot(snapshot: MatchmakingQueueSnapshot): void {
+  matchmakingDraining = snapshot.serviceDraining === true;
+  queuePersistedRankedTerminalDecisions(snapshot);
+  matchmakingQueueService.restoreSnapshot(snapshot);
+  for (const session of matchmakingQueueService.getResolvedSessions()) {
+    queueRankedTerminalDecision(session);
+  }
+}
+
+async function refreshMatchmakingState(lease: MatchmakingRuntimeLease): Promise<void> {
+  lease.assertActive();
+  const snapshot = await matchmakingRuntimeStateStore.load(lease.database);
+  lastPersistedMatchmakingFingerprint = snapshot
+    ? fingerprintMatchmakingRuntimeSnapshot(snapshot)
+    : null;
+  if (snapshot) {
+    applyMatchmakingSnapshot(snapshot);
+  }
+}
+
+function requireMatchmakingRuntimeLease(request: object): MatchmakingRuntimeLease {
+  const state = matchmakingRuntimeLeaseByRequest.get(request);
+  if (!state || state.finalization) {
+    throw new Error('Matchmaking request no longer owns the runtime lease.');
+  }
+  state.lease.assertActive();
+  return state.lease;
+}
+
+async function finalizeMatchmakingRuntimeLease(request: object): Promise<void> {
+  const state = matchmakingRuntimeLeaseByRequest.get(request);
+  if (!state) {
+    return;
+  }
+  if (!state.finalization) {
+    state.finalization = (async () => {
+      try {
+        await persistMatchmakingStateIfChanged(state.lease);
+      } finally {
+        matchmakingRuntimeLeaseByRequest.delete(request);
+        await state.lease.release();
+      }
+    })();
+  }
+  await state.finalization;
+}
+
+app.addHook('onRequest', async (request, reply) => {
+  if (!requestUsesMatchmakingRuntime(request.url)) {
+    return;
+  }
+  let lease: MatchmakingRuntimeLease | null = null;
+  try {
+    lease = await matchmakingRuntimeCoordinator.acquire();
+    matchmakingRuntimeLeaseByRequest.set(request, { lease, finalization: null });
+    await refreshMatchmakingState(lease);
+  } catch (error) {
+    if (lease) {
+      matchmakingRuntimeLeaseByRequest.delete(request);
+      await lease.release();
+    }
+    if (error instanceof MatchmakingRuntimeLockTimeoutError) {
+      (request as { _excludeFromSloAvailability?: boolean })._excludeFromSloAvailability = true;
+      reply.header('retry-after', '1');
+      await reply.code(503).send({
+        error: 'Matchmaking runtime is busy. Retry this request.',
+        code: 'matchmaking_runtime_busy',
+      });
+      return;
+    }
+    throw error;
+  }
+});
+
+app.addHook('onSend', async (request, _reply, payload) => {
+  await finalizeMatchmakingRuntimeLease(request);
+  return payload;
+});
+
+app.addHook('onResponse', async (request) => {
+  try {
+    await finalizeMatchmakingRuntimeLease(request);
+  } catch (error) {
+    request.log.error({ err: error }, 'Failed to finalize matchmaking runtime lease after response.');
+  }
+});
+
+app.addHook('onRequestAbort', async (request) => {
+  try {
+    await finalizeMatchmakingRuntimeLease(request);
+  } catch (error) {
+    request.log.error({ err: error }, 'Failed to finalize matchmaking runtime lease after request abort.');
+  }
+});
 
 function isAllowedCorsOrigin(origin: string, allowedOrigins: string[]): boolean {
   if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
@@ -659,8 +1520,10 @@ function mapSessionErrorToHttp(errorCode: SessionActionErrorCode): number {
     case 'forbidden':
       return 403;
     case 'session_resolved':
+    case 'participant_disconnected':
       return 409;
     case 'replayed_attempt':
+    case 'stale_transport_attempt':
       return 409;
     case 'invalid_token':
     case 'token_expired':
@@ -909,8 +1772,40 @@ function parseLeaderboardTrack(value: string | undefined): 'rating' | 'master' {
   return parsed === 'master' ? 'master' : 'rating';
 }
 
+async function withRepeatableReadSnapshot<T>(
+  operation: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await db.connect();
+  let transactionOpen = false;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    transactionOpen = true;
+    const result = await operation(client);
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return result;
+  } catch (error) {
+    if (transactionOpen) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Preserve the query error if the connection also fails during rollback.
+      }
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function getHeaderValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+}
+
+function getMatchSessionToken(headers: Record<string, unknown>): string {
+  return getHeaderValue(
+    headers['x-match-session-token'] as string | string[] | undefined,
+  ).trim();
 }
 
 function getAdminActorIdentity(headers: Record<string, unknown>): string {
@@ -1247,17 +2142,104 @@ async function logAccountAuthEvent(
   }
 }
 
-app.get('/health', async () => ({ ok: true }));
+app.addHook('preHandler', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    return;
+  }
+  const accountStatus = await resolveAccountAuthorizationStatus(db, accountId);
+  if (accountStatus === 'missing') {
+    return reply.code(401).send({
+      error: 'Authenticated account no longer exists.',
+      code: 'account_missing',
+    });
+  }
+  if (accountStatus === 'disabled') {
+    return reply.code(403).send({
+      error: 'Authenticated account is disabled.',
+      code: 'account_disabled',
+    });
+  }
+});
+
+app.get('/health', async () => ({
+  ok: true,
+  databaseTarget,
+  releaseSha,
+  matchmakingRuntimeCoordination: MATCHMAKING_RUNTIME_COORDINATION_MODE,
+  matchmakingRuntimeNamespace,
+}));
+
+app.get('/readyz', async (_request, reply) => {
+  try {
+    const [databaseResult, migrationResult] = await Promise.all([
+      db.query<{ connected: number }>('SELECT 1::int AS connected'),
+      db.query<{ filename: string; checksum: string | null }>(
+        'SELECT filename, checksum FROM schema_migrations ORDER BY filename ASC',
+      ),
+    ]);
+    const databaseConnected = databaseResult.rows[0]?.connected === 1;
+    const migrationHead = migrationResult.rows.at(-1)?.filename ?? null;
+    const migrationCount = migrationResult.rows.length;
+    const migrationChecksumsVerified = migrationResult.rows.length > 0
+      && migrationResult.rows.every((migration) => /^[a-f0-9]{64}$/.test(migration.checksum ?? ''));
+    const ok = databaseConnected && migrationHead !== null && migrationChecksumsVerified;
+    if (!ok) {
+      reply.code(503);
+    }
+    return {
+      ok,
+      databaseTarget,
+      deploymentEnvironment,
+      databaseId: deploymentDatabaseId,
+      releaseSha,
+      migrationHead,
+      migrationCount,
+      migrationChecksumsVerified,
+      replayBlobProvider: replayBlobStore.provider,
+      replayBlobDurable: replayBlobStore.durable,
+      matchmakingRuntimeCoordination: MATCHMAKING_RUNTIME_COORDINATION_MODE,
+      matchmakingRuntimeNamespace,
+    };
+  } catch (error) {
+    app.log.warn({ err: error }, 'Readiness database check failed.');
+    reply.code(503);
+    return {
+      ok: false,
+      databaseTarget,
+      deploymentEnvironment,
+      databaseId: deploymentDatabaseId,
+      releaseSha,
+      migrationHead: null,
+      migrationCount: 0,
+      migrationChecksumsVerified: false,
+      replayBlobProvider: replayBlobStore.provider,
+      replayBlobDurable: replayBlobStore.durable,
+      matchmakingRuntimeCoordination: MATCHMAKING_RUNTIME_COORDINATION_MODE,
+      matchmakingRuntimeNamespace,
+    };
+  }
+});
 
 app.post('/accounts', async (request, reply) => {
-  const body = request.body as { status?: string } | undefined;
-  const status = body?.status === 'disabled' ? 'disabled' : 'active';
+  const rateLimitRejection = await enforceAuthRateLimits(request, reply, [
+    buildAuthRateLimitRule('auth_global_source', request.ip, authRateLimitPolicies.globalSource),
+    buildAuthRateLimitRule('guest_create_source', request.ip, authRateLimitPolicies.guestSource),
+  ]);
+  if (rateLimitRejection) {
+    return rateLimitRejection;
+  }
+  const status = 'active';
   const result = await db.query(
     `INSERT INTO accounts(status) VALUES ($1) RETURNING id, status, created_at, updated_at`,
     [status],
   );
+  const account = result.rows[0] as { id: string; status: string; created_at: string; updated_at: string };
   reply.code(201);
-  return result.rows[0];
+  return {
+    ...account,
+    ...(account.status === 'active' ? authSessionTokenService.issue(account.id, 'guest') : {}),
+  };
 });
 
 app.get('/accounts/:accountId', async (request, reply) => {
@@ -1265,6 +2247,11 @@ app.get('/accounts/:accountId', async (request, reply) => {
   if (!isUuid(params.accountId)) {
     reply.code(400);
     return { error: 'Invalid account id.' };
+  }
+  const actorAccountId = getAuthenticatedAccountId(request);
+  if (actorAccountId !== params.accountId && !isAuthIdentityAdmin(request)) {
+    reply.code(403);
+    return { error: 'Only the authenticated account can read its account record.' };
   }
 
   const accountResult = await db.query(
@@ -1288,6 +2275,10 @@ app.get('/accounts/:accountId', async (request, reply) => {
 });
 
 app.post('/accounts/:accountId/identities', async (request, reply) => {
+  const adminRejection = requireAuthIdentityAdmin(request, reply);
+  if (adminRejection) {
+    return adminRejection;
+  }
   const params = request.params as { accountId?: string };
   if (!isUuid(params.accountId)) {
     reply.code(400);
@@ -1305,7 +2296,8 @@ app.post('/accounts/:accountId/identities', async (request, reply) => {
     reply.code(400);
     return { error: 'providerUserId is required.' };
   }
-  const actor = String(body.actor ?? 'system').trim() || 'system';
+  const actor = getHeaderValue(request.headers['x-admin-actor']).trim().slice(0, 128)
+    || 'auth_identity_admin';
 
   const accountExists = await db.query(`SELECT 1 FROM accounts WHERE id = $1`, [params.accountId]);
   if (!accountExists.rowCount) {
@@ -1425,6 +2417,10 @@ app.delete('/accounts/:accountId/identities/:provider', async (request, reply) =
 });
 
 app.get('/identities/:provider/:providerUserId', async (request, reply) => {
+  const adminRejection = requireAuthIdentityAdmin(request, reply);
+  if (adminRejection) {
+    return adminRejection;
+  }
   const params = request.params as { provider?: string; providerUserId?: string };
   const provider = normaliseProvider(params.provider);
   if (!provider) {
@@ -1460,6 +2456,18 @@ app.get('/identities/:provider/:providerUserId', async (request, reply) => {
 app.post('/auth/web/signup', async (request, reply) => {
   const body = (request.body ?? {}) as WebSignupBody;
   const email = normaliseWebEmail(body.email);
+  const rateLimitRejection = await enforceAuthRateLimits(request, reply, [
+    buildAuthRateLimitRule('auth_global_source', request.ip, authRateLimitPolicies.globalSource),
+    buildAuthRateLimitRule('web_signup_source', request.ip, authRateLimitPolicies.webSignupSource),
+    ...(email ? [buildAuthRateLimitRule(
+      'web_signup_principal',
+      email,
+      authRateLimitPolicies.webSignupPrincipal,
+    )] : []),
+  ]);
+  if (rateLimitRejection) {
+    return rateLimitRejection;
+  }
   if (!email) {
     reply.code(400);
     return { error: 'email must be a valid address.' };
@@ -1618,12 +2626,17 @@ app.post('/auth/web/signup', async (request, reply) => {
     eventType: upgradedFromGuest ? 'upgrade' : 'signup',
     emailNormalised: email,
   });
+  if (!accountId) {
+    throw new Error('Web sign-up completed without an account id.');
+  }
+  const sessionToken = authSessionTokenService.issue(accountId, 'web');
   reply.code(201);
   return {
     accountId,
     email,
     upgradedFromGuest,
     provider: 'web',
+    ...sessionToken,
     nextAction: 'Use /auth/web/signin to restore sessions on another device.',
   };
 });
@@ -1631,6 +2644,17 @@ app.post('/auth/web/signup', async (request, reply) => {
 app.post('/auth/web/signin', async (request, reply) => {
   const body = (request.body ?? {}) as WebSigninBody;
   const email = normaliseWebEmail(body.email);
+  const rateLimitRejection = await enforceAuthRateLimits(request, reply, [
+    buildAuthRateLimitRule('auth_global_source', request.ip, authRateLimitPolicies.globalSource),
+    ...(email ? [buildAuthRateLimitRule(
+      'web_signin_principal',
+      email,
+      authRateLimitPolicies.webSigninPrincipal,
+    )] : []),
+  ]);
+  if (rateLimitRejection) {
+    return rateLimitRejection;
+  }
   if (!email) {
     reply.code(400);
     return { error: 'email must be a valid address.' };
@@ -1721,124 +2745,99 @@ app.post('/auth/web/signin', async (request, reply) => {
     emailNormalised: email,
   });
 
+  await authRateLimiter.clear('web_signin_principal', email).catch((error) => {
+    request.log.warn({ err: error }, 'Failed to clear successful web sign-in rate-limit bucket.');
+  });
+
+  const sessionToken = authSessionTokenService.issue(row.account_id, 'web');
+
   return {
     accountId: row.account_id,
     displayName: row.display_name,
     provider: 'web',
     isAuthenticated: true,
+    ...sessionToken,
   };
 });
 
 app.post('/auth/steam/exchange', async (request, reply) => {
   const body = (request.body ?? {}) as SteamExchangeBody;
-  const ticketValidation = validateSteamExchangeTicket(body.steamTicket);
-  if (!ticketValidation.ok) {
+  const steamTicketSubject = typeof body.steamTicket === 'string'
+    ? body.steamTicket.trim().toLowerCase()
+    : '';
+  const rateLimitRejection = await enforceAuthRateLimits(request, reply, [
+    buildAuthRateLimitRule('auth_global_source', request.ip, authRateLimitPolicies.globalSource),
+    buildAuthRateLimitRule('steam_exchange_source', request.ip, authRateLimitPolicies.steamSource),
+    ...(steamTicketSubject ? [buildAuthRateLimitRule(
+      'steam_exchange_ticket',
+      steamTicketSubject,
+      authRateLimitPolicies.steamTicket,
+    )] : []),
+  ]);
+  if (rateLimitRejection) {
+    return rateLimitRejection;
+  }
+  if (body.mergeAccountId !== undefined) {
+    reply.code(400);
+    return {
+      error: 'Automatic account merging is no longer supported.',
+      code: 'automatic_account_merge_removed',
+      recovery: 'Authenticate the account to keep and resend with linkToAuthenticatedAccount=true.',
+    };
+  }
+  if (
+    body.linkToAuthenticatedAccount !== undefined
+    && typeof body.linkToAuthenticatedAccount !== 'boolean'
+  ) {
+    reply.code(400);
+    return { error: 'linkToAuthenticatedAccount must be a boolean when provided.' };
+  }
+  const linkToAuthenticatedAccount = body.linkToAuthenticatedAccount === true;
+  const authenticatedAccountId = getAuthenticatedAccountId(request);
+  if (linkToAuthenticatedAccount && !authenticatedAccountId) {
     reply.code(401);
     return {
+      error: 'Steam identity linking requires an authenticated target account.',
+      code: 'steam_link_authentication_required',
+    };
+  }
+  if (authenticatedAccountId && !linkToAuthenticatedAccount) {
+    reply.code(409);
+    return {
+      error: 'An authenticated account must explicitly confirm Steam identity linking.',
+      code: 'steam_link_confirmation_required',
+      recovery: 'Resend with linkToAuthenticatedAccount=true to keep the authenticated account.',
+    };
+  }
+  const ticketValidation = await steamTicketVerifier.verify(body.steamTicket);
+  if (!ticketValidation.ok) {
+    const statusCode = ticketValidation.code === 'invalid_request'
+      ? 400
+      : ticketValidation.code === 'invalid_ticket'
+        ? 401
+        : 503;
+    reply.code(statusCode);
+    return {
       error: ticketValidation.error,
-      recovery: 'Retry Steam sign-in and submit a fresh ticket.',
+      recovery: ticketValidation.code === 'invalid_ticket'
+        ? 'Retry Steam sign-in and submit a fresh ticket.'
+        : ticketValidation.code === 'invalid_request'
+          ? 'Request a GetAuthTicketForWebApi ticket with the configured service identity.'
+          : 'Keep the current Steam session and retry after server verification recovers.',
     };
   }
   const steamUserId = ticketValidation.steamUserId;
-
-  const mergeAccountIdRaw = String(body.mergeAccountId ?? '').trim();
-  const mergeAccountId = mergeAccountIdRaw || null;
-  if (mergeAccountId && !isUuid(mergeAccountId)) {
-    reply.code(400);
-    return { error: 'mergeAccountId must be a UUID when provided.' };
-  }
-
-  const authenticatedAccountId = getAuthenticatedAccountId(request);
-  if (mergeAccountId && authenticatedAccountId !== mergeAccountId) {
-    reply.code(403);
-    return { error: 'mergeAccountId must match authenticated x-account-id header.' };
-  }
-
-  const preferredLinkAccountId = mergeAccountId ?? authenticatedAccountId ?? null;
   const displayName = normaliseDisplayName(body.displayName);
 
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-
-    const existingSteamIdentity = await client.query(
-      `
-        SELECT i.account_id, a.status
-        FROM identities i
-        JOIN accounts a ON a.id = i.account_id
-        WHERE i.provider = 'steam' AND i.provider_user_id = $1
-        LIMIT 1
-      `,
-      [steamUserId],
-    );
-
-    let accountId: string;
-    let createdAccount = false;
-    let mergedFromAccountId: string | null = null;
-
-    if (existingSteamIdentity.rowCount) {
-      const existing = existingSteamIdentity.rows[0] as { account_id: string; status: string };
-      if (existing.status !== 'active') {
-        await client.query('ROLLBACK');
-        reply.code(403);
-        return {
-          error: 'Steam-linked account is disabled.',
-          recovery: 'Contact support to restore account access.',
-        };
-      }
-      accountId = existing.account_id;
-      if (preferredLinkAccountId && preferredLinkAccountId !== accountId) {
-        await mergeAccountIntoTarget(client, preferredLinkAccountId, accountId, authenticatedAccountId);
-        mergedFromAccountId = preferredLinkAccountId;
-      }
-    } else if (preferredLinkAccountId) {
-      const accountResult = await client.query(
-        'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE',
-        [preferredLinkAccountId],
-      );
-      if (!accountResult.rowCount) {
-        await client.query('ROLLBACK');
-        reply.code(404);
-        return { error: 'Merge account not found.' };
-      }
-      const accountRow = accountResult.rows[0] as { id: string; status: string };
-      if (accountRow.status !== 'active') {
-        await client.query('ROLLBACK');
-        reply.code(409);
-        return {
-          error: 'Merge account is disabled.',
-          recovery: 'Contact support to re-enable account access.',
-        };
-      }
-      accountId = accountRow.id;
-    } else {
-      const createdAccountResult = await client.query(
-        'INSERT INTO accounts(status) VALUES ($1) RETURNING id',
-        ['active'],
-      );
-      accountId = (createdAccountResult.rows[0] as { id: string }).id;
-      createdAccount = true;
-    }
-
-    if (!existingSteamIdentity.rowCount) {
-      await client.query(
-        `
-          INSERT INTO identities(account_id, provider, provider_user_id)
-          VALUES ($1, 'steam', $2)
-        `,
-        [accountId, steamUserId],
-      );
-      await logIdentityLinkEvent(client, {
-        accountId,
-        provider: 'steam',
-        providerUserId: steamUserId,
-        eventType: 'linked',
-        actor: authenticatedAccountId ?? 'steam_exchange',
-        metadata: {
-          reason: preferredLinkAccountId ? 'steam_link_existing_account' : 'steam_first_signin_create_account',
-        },
-      });
-    }
+    const linkResult = await resolveSteamAccountLink(client, {
+      steamUserId,
+      authenticatedAccountId,
+      linkToAuthenticatedAccount,
+    });
+    const accountId = linkResult.accountId;
 
     if (displayName) {
       await client.query(
@@ -1859,49 +2858,98 @@ app.post('/auth/steam/exchange', async (request, reply) => {
     await logAccountAuthEvent({
       accountId,
       provider: 'steam',
-      eventType: mergedFromAccountId ? 'upgrade' : (createdAccount ? 'signup' : 'signin'),
+      eventType: linkResult.linkedToExistingAccount
+        ? 'upgrade'
+        : (linkResult.createdAccount ? 'signup' : 'signin'),
       emailNormalised: `steam:${steamUserId}`,
-      reason: mergedFromAccountId ? `merged_from:${mergedFromAccountId}` : null,
+      reason: linkResult.linkedToExistingAccount ? 'explicit_identity_link' : null,
     });
 
     return {
       accountId,
       provider: 'steam',
       steamUserId,
-      createdAccount,
-      mergedFromAccountId,
+      createdAccount: linkResult.createdAccount,
+      linkedToExistingAccount: linkResult.linkedToExistingAccount,
+      identityAlreadyLinked: linkResult.identityAlreadyLinked,
       isAuthenticated: true,
+      ...authSessionTokenService.issue(accountId, 'steam'),
     };
   } catch (error: unknown) {
     await client.query('ROLLBACK');
     const message = error instanceof Error ? error.message : 'Steam token exchange failed.';
+    if (linkToAuthenticatedAccount && authenticatedAccountId) {
+      await logIdentityLinkEvent(db, {
+        accountId: authenticatedAccountId,
+        provider: 'steam',
+        providerUserId: steamUserId,
+        eventType: 'link_failed',
+        actor: authenticatedAccountId,
+        metadata: {
+          reason: error instanceof SteamAccountLinkError ? error.code : 'steam_link_failed',
+        },
+      }).catch((auditError) => {
+        request.log.warn({ err: auditError }, 'Failed to record Steam identity link failure.');
+      });
+    }
     await logAccountAuthEvent({
-      accountId: preferredLinkAccountId,
+      accountId: authenticatedAccountId,
       provider: 'steam',
       eventType: 'signin_failed',
       emailNormalised: `steam:${steamUserId}`,
       reason: message,
     });
+    if (error instanceof SteamAccountLinkError) {
+      switch (error.code) {
+        case 'steam_linked_account_disabled':
+          reply.code(403);
+          return {
+            error: error.message,
+            code: error.code,
+            recovery: 'Contact support to restore account access.',
+          };
+        case 'steam_identity_already_linked':
+          reply.code(409);
+          return {
+            error: error.message,
+            code: error.code,
+            recovery: 'Sign in to the already-linked account or contact support. No account data was moved.',
+          };
+        case 'steam_link_target_not_found':
+          reply.code(404);
+          return { error: error.message, code: error.code };
+        case 'steam_link_target_disabled':
+          reply.code(409);
+          return {
+            error: error.message,
+            code: error.code,
+            recovery: 'Contact support to re-enable the account before linking Steam.',
+          };
+        case 'steam_link_target_already_has_identity':
+          reply.code(409);
+          return {
+            error: error.message,
+            code: error.code,
+            recovery: 'Unlink the existing Steam identity before linking another.',
+          };
+        case 'steam_link_authentication_required':
+          reply.code(401);
+          return { error: error.message, code: error.code };
+      }
+    }
     if (message.includes('identities_provider_provider_user_id_key')) {
       reply.code(409);
       return {
         error: 'Steam identity is already linked to another account.',
-        recovery: 'Retry sign-in and allow merge with your authenticated account if prompted.',
+        code: 'steam_identity_already_linked',
+        recovery: 'Sign in to the already-linked account or contact support. No account data was moved.',
       };
     }
     if (message.includes('identities_account_id_provider_key')) {
       reply.code(409);
-      return { error: 'This account already has a linked steam identity.' };
-    }
-    if (message === 'Merge source account not found.') {
-      reply.code(404);
-      return { error: 'Merge account not found.' };
-    }
-    if (message === 'Merge source account is disabled.') {
-      reply.code(409);
       return {
-        error: 'Merge account is disabled.',
-        recovery: 'Contact support to re-enable account access.',
+        error: 'This account already has a linked Steam identity.',
+        code: 'steam_link_target_already_has_identity',
       };
     }
     throw error;
@@ -3055,13 +4103,41 @@ app.get('/friends/requests', async (request, reply) => {
 
 app.get('/matchmaking/queue/config', async () => matchmakingQueueService.getConfig());
 
-app.get('/matchmaking/network/ice-config', async (request) => {
-  const query = (request.query ?? {}) as MatchmakingIceConfigQuery;
-  const forceRelay = query.forceRelay?.toLowerCase() === 'true' || query.forceRelay === '1';
-  return {
-    ...matchmakingNetworkConfig,
-    iceTransportPolicy: forceRelay ? 'relay' : matchmakingNetworkConfig.iceTransportPolicy,
-  };
+app.get('/matchmaking/access/status', async () => matchmakingAccessPolicy.getStatus());
+
+app.get('/matchmaking/network/status', async () => matchmakingNetworkConfigService.getStatus());
+
+app.post('/matchmaking/network/ice-config', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid authentication.' };
+  }
+  const body = (request.body ?? {}) as MatchmakingIceConfigBody;
+  if (!isUuid(body.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+  if (body.forceRelay !== undefined && typeof body.forceRelay !== 'boolean') {
+    reply.code(400);
+    return { error: 'forceRelay must be a boolean when provided.' };
+  }
+  requireMatchmakingRuntimeLease(request);
+  const sessionValidation = matchmakingQueueService.validateSessionToken(
+    body.sessionId,
+    accountId,
+    sessionToken,
+  );
+  if (!sessionValidation.ok) {
+    reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
+    return { error: sessionValidation.error.message, code: sessionValidation.error.code };
+  }
+  return matchmakingNetworkConfigService.issueConfig(accountId, { forceRelay: body.forceRelay === true });
 });
 
 app.post('/matchmaking/queue/join', async (request, reply) => {
@@ -3069,6 +4145,26 @@ app.post('/matchmaking/queue/join', async (request, reply) => {
   if (!accountId) {
     reply.code(401);
     return { error: 'Missing or invalid x-account-id header.' };
+  }
+  if (matchmakingDraining) {
+    (request as { _excludeFromSloAvailability?: boolean })._excludeFromSloAvailability = true;
+    reply.header('retry-after', '15');
+    reply.code(503);
+    return {
+      error: 'Matchmaking is temporarily paused for a service deployment.',
+      code: 'matchmaking_draining',
+    };
+  }
+
+  const body = (request.body ?? {}) as MatchmakingQueueJoinBody;
+  const buildVersion = typeof body.buildVersion === 'string' ? body.buildVersion.trim() : null;
+  const accessDecision = matchmakingAccessPolicy.evaluate(accountId, buildVersion);
+  if (!accessDecision.allowed) {
+    reply.code(403);
+    return {
+      error: getMatchmakingAccessError(accessDecision.code),
+      code: accessDecision.code,
+    };
   }
 
   const accountExists = await db.query('SELECT 1 FROM accounts WHERE id = $1', [accountId]);
@@ -3091,7 +4187,6 @@ app.post('/matchmaking/queue/join', async (request, reply) => {
     };
   }
 
-  const body = (request.body ?? {}) as MatchmakingQueueJoinBody;
   const queueType = typeof body.queueType === 'string' ? body.queueType.toLowerCase().trim() : '';
   if (!isQueueType(queueType)) {
     reply.code(400);
@@ -3141,21 +4236,84 @@ app.post('/matchmaking/queue/join', async (request, reply) => {
       };
     }
   }
-  const ticket = matchmakingQueueService.join({
+  // A drain can begin while this request awaits account/rating queries.
+  if (matchmakingDraining) {
+    (request as { _excludeFromSloAvailability?: boolean })._excludeFromSloAvailability = true;
+    reply.header('retry-after', '15');
+    reply.code(503);
+    return {
+      error: 'Matchmaking is temporarily paused for a service deployment.',
+      code: 'matchmaking_draining',
+    };
+  }
+  const rulesetVersion = typeof body.rulesetVersion === 'string' ? body.rulesetVersion.trim() : null;
+  const balanceProfileId = typeof body.balanceProfileId === 'string' ? body.balanceProfileId.trim() : null;
+  const selectedCharacterId = parseOptionalCharacterId(body.characterId);
+  if (queueType === 'ranked' && !buildVersion) {
+    reply.code(400);
+    return { error: 'buildVersion is required for ranked matchmaking.' };
+  }
+  if (queueType === 'ranked' && !rulesetVersion) {
+    reply.code(400);
+    return { error: 'rulesetVersion is required for ranked matchmaking.' };
+  }
+  if (queueType === 'ranked' && !balanceProfileId) {
+    reply.code(400);
+    return { error: 'balanceProfileId is required for ranked matchmaking.' };
+  }
+  if (queueType === 'ranked' && !rankedSupportedRulesetVersions.has(rulesetVersion as string)) {
+    reply.code(409);
+    return { error: 'rulesetVersion is not supported for ranked verification.' };
+  }
+  if (queueType === 'ranked' && getRankedTuningFingerprint(balanceProfileId as string) === null) {
+    reply.code(409);
+    return { error: 'balanceProfileId is not supported for ranked verification.' };
+  }
+  if (queueType === 'ranked' && (!selectedCharacterId || !CHARACTER_BY_ID[selectedCharacterId])) {
+    reply.code(400);
+    return { error: 'characterId must identify a supported ranked character.' };
+  }
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
+  const existingTicket = matchmakingQueueService.getActiveTicketForAccountQueue(
     accountId,
     queueType,
-    regionPreferences,
-    playerMetadata: {
-      displayName,
-      buildVersion: typeof body.buildVersion === 'string' ? body.buildVersion.trim() : null,
-      platform: body.platform === 'steam' || body.platform === 'web' ? body.platform : null,
-      selectedCharacterId: parseOptionalCharacterId(body.characterId),
-      rankedSnapshot,
-    },
-  });
+  );
+  let ticket: ReturnType<typeof matchmakingQueueService.join>;
+  try {
+    ticket = matchmakingQueueService.join({
+      accountId,
+      queueType,
+      regionPreferences,
+      playerMetadata: {
+        displayName,
+        buildVersion,
+        rulesetVersion,
+        balanceProfileId,
+        platform: body.platform === 'steam' || body.platform === 'web' ? body.platform : null,
+        selectedCharacterId,
+        rankedSnapshot,
+      },
+    });
+  } catch (error) {
+    if (error instanceof MatchmakingCapacityError) {
+      (request as { _excludeFromSloAvailability?: boolean })._excludeFromSloAvailability = true;
+      reply.header('retry-after', '15');
+      reply.code(503);
+      return {
+        error: 'Matchmaking is temporarily at controlled-alpha capacity.',
+        code: error.code,
+        maxResidentTickets: error.maxResidentTickets,
+      };
+    }
+    throw error;
+  }
+  await persistMatchmakingState(runtimeLease);
 
   reply.code(201);
-  return ticket;
+  return {
+    ...ticket,
+    joinDisposition: existingTicket ? 'existing' : 'created',
+  };
 });
 
 app.get('/matchmaking/queue/tickets/:ticketId', async (request, reply) => {
@@ -3171,7 +4329,9 @@ app.get('/matchmaking/queue/tickets/:ticketId', async (request, reply) => {
     return { error: 'Invalid ticket id.' };
   }
 
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
   const ticket = matchmakingQueueService.getTicketForAccount(params.ticketId, accountId);
+  await persistMatchmakingState(runtimeLease);
   if (!ticket) {
     reply.code(404);
     return { error: 'Ticket not found.' };
@@ -3193,7 +4353,9 @@ app.post('/matchmaking/queue/leave', async (request, reply) => {
     return { error: 'ticketId is required and must be a UUID.' };
   }
 
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
   const ticket = matchmakingQueueService.leaveTicket(body.ticketId, accountId);
+  await persistMatchmakingState(runtimeLease);
   if (!ticket) {
     reply.code(404);
     return { error: 'Ticket not found.' };
@@ -3215,7 +4377,9 @@ app.get('/matchmaking/sessions/:sessionId', async (request, reply) => {
     return { error: 'Invalid session id.' };
   }
 
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
   const session = matchmakingQueueService.getSessionForAccount(params.sessionId, accountId);
+  await persistMatchmakingState(runtimeLease);
   if (!session) {
     reply.code(404);
     return { error: 'Session not found.' };
@@ -3236,7 +4400,40 @@ app.post('/matchmaking/sessions/disconnect', async (request, reply) => {
     return { error: 'sessionId is required and must be a UUID.' };
   }
 
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
   const result = matchmakingQueueService.markSessionDisconnected(body.sessionId, accountId);
+  await persistMatchmakingState(runtimeLease);
+  if (!result.ok) {
+    reply.code(mapSessionErrorToHttp(result.error.code));
+    return { error: result.error.message, code: result.error.code };
+  }
+  return result.value;
+});
+
+app.post('/matchmaking/sessions/heartbeat', async (request, reply) => {
+  // High-frequency liveness traffic is intentionally excluded from the
+  // durable per-request SLO table to avoid one PostgreSQL write per pulse.
+  (request as { _excludeFromSloAvailability?: boolean })._excludeFromSloAvailability = true;
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const body = (request.body ?? {}) as MatchmakingSessionHeartbeatBody;
+  if (!isUuid(body.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
+  const result = matchmakingQueueService.heartbeatSession(body.sessionId, accountId, sessionToken);
+  await persistMatchmakingState(runtimeLease);
   if (!result.ok) {
     reply.code(mapSessionErrorToHttp(result.error.code));
     return { error: result.error.message, code: result.error.code };
@@ -3267,12 +4464,14 @@ app.post('/matchmaking/sessions/reconnect', async (request, reply) => {
     return { error: 'reconnectAttemptId is required and must be 1-128 characters.' };
   }
 
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
   const result = matchmakingQueueService.reconnectSession({
     sessionId: body.sessionId,
     accountId,
     sessionToken,
     reconnectAttemptId,
   });
+  await persistMatchmakingState(runtimeLease);
   if (!result.ok) {
     reply.code(mapSessionErrorToHttp(result.error.code));
     return { error: result.error.message, code: result.error.code };
@@ -3298,7 +4497,9 @@ app.post('/matchmaking/sessions/complete', async (request, reply) => {
     return { error: 'sessionToken is required.' };
   }
 
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
   const result = matchmakingQueueService.completeSession(body.sessionId, accountId, sessionToken);
+  await persistMatchmakingState(runtimeLease);
   if (!result.ok) {
     reply.code(mapSessionErrorToHttp(result.error.code));
     return { error: result.error.message, code: result.error.code };
@@ -3306,7 +4507,191 @@ app.post('/matchmaking/sessions/complete', async (request, reply) => {
   return result.value;
 });
 
+app.post('/matchmaking/sessions/:sessionId/transport-attempts', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+  const params = request.params as { sessionId?: string };
+  if (!isUuid(params.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const body = (request.body ?? {}) as MatchmakingSessionTransportAttemptBody;
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+  if (!Number.isSafeInteger(body.expectedGeneration) || Number(body.expectedGeneration) < 1) {
+    reply.code(400);
+    return { error: 'expectedGeneration must be a positive safe integer.' };
+  }
+
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
+  const result = matchmakingQueueService.advanceTransportAttempt({
+    sessionId: params.sessionId,
+    accountId,
+    sessionToken,
+    expectedGeneration: Number(body.expectedGeneration),
+  });
+  await persistMatchmakingState(runtimeLease);
+  if (!result.ok) {
+    reply.code(mapSessionErrorToHttp(result.error.code));
+    return { error: result.error.message, code: result.error.code };
+  }
+  await sessionSignalStore.clearSupersededAttempts(
+    params.sessionId,
+    result.value.transportAttempt.attemptId,
+  );
+  return result.value;
+});
+
+app.post('/matchmaking/sessions/:sessionId/signals', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const params = request.params as { sessionId?: string };
+  if (!isUuid(params.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const body = (request.body ?? {}) as MatchmakingSessionSignalSubmitBody;
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+
+  const transportAttemptId = String(body.transportAttemptId ?? '').trim();
+  if (!isUuid(transportAttemptId)) {
+    reply.code(400);
+    return { error: 'transportAttemptId is required and must be a UUID.' };
+  }
+  const sessionAccess = await matchmakingSessionAccessStore.validateSignalAccess({
+    sessionId: params.sessionId,
+    accountId,
+    sessionToken,
+    transportAttemptId,
+  });
+  if (!sessionAccess.ok) {
+    reply.code(mapSessionErrorToHttp(sessionAccess.error.code));
+    return { error: sessionAccess.error.message, code: sessionAccess.error.code };
+  }
+  if (!isSessionSignalType(body.signalType)) {
+    reply.code(400);
+    return { error: 'signalType must be offer, answer, ice_candidate, or end_of_candidates.' };
+  }
+
+  try {
+    const signal = await sessionSignalStore.publishSignal({
+      sessionId: params.sessionId,
+      transportAttemptId,
+      senderAccountId: accountId,
+      recipientAccountId: sessionAccess.value.peerAccountId,
+      clientMessageId: String(body.clientMessageId ?? ''),
+      type: body.signalType,
+      payload: body.payload as SessionSignalJson,
+    });
+    return {
+      signalId: signal.signalId,
+      createdAt: signal.createdAt,
+      expiresAt: signal.expiresAt,
+    };
+  } catch (error) {
+    if (error instanceof SessionSignalConflictError) {
+      reply.code(409);
+      return { error: error.message, code: 'signal_id_conflict' };
+    }
+    if (error instanceof SessionSignalQuotaExceededError) {
+      reply.code(429);
+      return {
+        error: error.message,
+        code: 'signal_quota_exceeded',
+        quotaScope: error.scope,
+        recovery: 'Start a fresh transport attempt or wait for the signaling mailbox to expire.',
+      };
+    }
+    if (error instanceof TypeError) {
+      reply.code(400);
+      return { error: error.message };
+    }
+    throw error;
+  }
+});
+
+app.get('/matchmaking/sessions/:sessionId/signals', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const params = request.params as { sessionId?: string };
+  if (!isUuid(params.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const query = (request.query ?? {}) as MatchmakingSessionSignalsQuery;
+  const sessionToken = getMatchSessionToken(request.headers);
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'x-match-session-token header is required.' };
+  }
+
+  const transportAttemptId = String(query.transportAttemptId ?? '').trim();
+  if (!isUuid(transportAttemptId)) {
+    reply.code(400);
+    return { error: 'transportAttemptId is required and must be a UUID.' };
+  }
+  const sessionAccess = await matchmakingSessionAccessStore.validateSignalAccess({
+    sessionId: params.sessionId,
+    accountId,
+    sessionToken,
+    transportAttemptId,
+  });
+  if (!sessionAccess.ok) {
+    reply.code(mapSessionErrorToHttp(sessionAccess.error.code));
+    return { error: sessionAccess.error.message, code: sessionAccess.error.code };
+  }
+
+  try {
+    const result = await sessionSignalStore.readPeerSignals({
+      sessionId: params.sessionId,
+      transportAttemptId,
+      recipientAccountId: accountId,
+      afterSignalId: query.afterSignalId ?? '0',
+      limit: query.limit === undefined ? undefined : Number(query.limit),
+    });
+    return {
+      signals: result.signals.map((signal) => ({
+        signalId: signal.signalId,
+        transportAttemptId: signal.transportAttemptId,
+        senderAccountId: signal.senderAccountId,
+        signalType: signal.type,
+        payload: signal.payload,
+        createdAt: signal.createdAt,
+      })),
+      nextAfterSignalId: result.nextAfterSignalId,
+    };
+  } catch (error) {
+    if (error instanceof TypeError) {
+      reply.code(400);
+      return { error: error.message };
+    }
+    throw error;
+  }
+});
+
 app.post('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
+  if (!legacyHttpFrameRelayEnabled) {
+    reply.code(404);
+    return { error: 'Legacy HTTP frame relay is disabled; use the negotiated WebRTC DataChannel.' };
+  }
   const accountId = getAuthenticatedAccountId(request);
   if (!accountId) {
     reply.code(401);
@@ -3331,14 +4716,25 @@ app.post('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
     return { error: 'frames must contain between 1 and 30 entries.' };
   }
 
-  const sessionValidation = matchmakingQueueService.validateSessionToken(params.sessionId, accountId, sessionToken);
+  requireMatchmakingRuntimeLease(request);
+  const sessionValidation = matchmakingQueueService.validateSessionToken(
+    params.sessionId,
+    accountId,
+    sessionToken,
+    { allowResolved: true },
+  );
   if (!sessionValidation.ok) {
     reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
     return { error: sessionValidation.error.message, code: sessionValidation.error.code };
   }
 
-  const parsedFrames: Array<{ frame: number; input: RelayPlayerFrameInput }> = [];
+  const parsedFrames: Array<{ epoch: number; frame: number; input: RelayPlayerFrameInput }> = [];
   for (const item of frames) {
+    const epoch = Number(item?.epoch ?? 0);
+    if (!Number.isInteger(epoch) || epoch < 0) {
+      reply.code(400);
+      return { error: 'Each frame entry requires a non-negative integer epoch.' };
+    }
     const frame = Number(item?.frame);
     if (!Number.isInteger(frame) || frame < 0) {
       reply.code(400);
@@ -3349,7 +4745,7 @@ app.post('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
       reply.code(400);
       return { error: 'Each frame entry requires a valid input payload.' };
     }
-    parsedFrames.push({ frame, input });
+    parsedFrames.push({ epoch, frame, input });
   }
 
   liveSessionFrameRelay.submitFrames({
@@ -3360,7 +4756,68 @@ app.post('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
   return { acceptedFrames: parsedFrames.length };
 });
 
+app.post('/matchmaking/sessions/:sessionId/frames/confirm', async (request, reply) => {
+  if (!legacyHttpFrameRelayEnabled) {
+    reply.code(404);
+    return { error: 'Legacy HTTP frame relay is disabled; use the negotiated WebRTC DataChannel.' };
+  }
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid x-account-id header.' };
+  }
+
+  const params = request.params as { sessionId?: string };
+  if (!isUuid(params.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+
+  const body = (request.body ?? {}) as MatchmakingSessionFramesConfirmBody;
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+  const epoch = Number(body.epoch ?? 0);
+  if (!Number.isInteger(epoch) || epoch < 0) {
+    reply.code(400);
+    return { error: 'epoch must be a non-negative integer.' };
+  }
+  const confirmedThrough = Number(body.confirmedThrough ?? -1);
+  if (!Number.isInteger(confirmedThrough) || confirmedThrough < -1) {
+    reply.code(400);
+    return { error: 'confirmedThrough must be an integer greater than or equal to -1.' };
+  }
+
+  requireMatchmakingRuntimeLease(request);
+  const sessionValidation = matchmakingQueueService.validateSessionToken(
+    params.sessionId,
+    accountId,
+    sessionToken,
+    { allowResolved: true },
+  );
+  if (!sessionValidation.ok) {
+    reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
+    return { error: sessionValidation.error.message, code: sessionValidation.error.code };
+  }
+
+  return {
+    epoch,
+    confirmedThrough: liveSessionFrameRelay.confirmPeerFrames(
+      params.sessionId,
+      accountId,
+      epoch,
+      confirmedThrough,
+    ),
+  };
+});
+
 app.get('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
+  if (!legacyHttpFrameRelayEnabled) {
+    reply.code(404);
+    return { error: 'Legacy HTTP frame relay is disabled; use the negotiated WebRTC DataChannel.' };
+  }
   const accountId = getAuthenticatedAccountId(request);
   if (!accountId) {
     reply.code(401);
@@ -3374,10 +4831,16 @@ app.get('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
   }
 
   const query = (request.query ?? {}) as MatchmakingSessionFramesQuery;
-  const sessionToken = String(query.sessionToken ?? '').trim();
+  const sessionToken = getMatchSessionToken(request.headers);
   if (!sessionToken) {
     reply.code(400);
-    return { error: 'sessionToken is required.' };
+    return { error: 'x-match-session-token header is required.' };
+  }
+  const epochRaw = query.epoch ?? '0';
+  const epoch = Number(epochRaw);
+  if (!Number.isInteger(epoch) || epoch < 0) {
+    reply.code(400);
+    return { error: 'epoch must be a non-negative integer.' };
   }
   const sinceFrameRaw = query.sinceFrame ?? '-1';
   const sinceFrame = Number(sinceFrameRaw);
@@ -3386,16 +4849,22 @@ app.get('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
     return { error: 'sinceFrame must be an integer greater than or equal to -1.' };
   }
 
-  const sessionValidation = matchmakingQueueService.validateSessionToken(params.sessionId, accountId, sessionToken);
+  requireMatchmakingRuntimeLease(request);
+  const sessionValidation = matchmakingQueueService.validateSessionToken(
+    params.sessionId,
+    accountId,
+    sessionToken,
+    { allowResolved: true },
+  );
   if (!sessionValidation.ok) {
     reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
     return { error: sessionValidation.error.message, code: sessionValidation.error.code };
   }
 
-  return liveSessionFrameRelay.getPeerFrames(params.sessionId, accountId, sinceFrame);
+  return liveSessionFrameRelay.getPeerFrames(params.sessionId, accountId, epoch, sinceFrame);
 });
 
-app.post('/ranked/results', async (request, reply) => {
+app.post('/ranked/results', { bodyLimit: RANKED_PROOF_BODY_LIMIT_BYTES }, async (request, reply) => {
   const accountId = getAuthenticatedAccountId(request);
   if (!accountId) {
     reply.code(401);
@@ -3457,6 +4926,7 @@ app.post('/ranked/results', async (request, reply) => {
     return { error: 'winnerAccountId is required for forfeit outcomes.' };
   }
 
+  requireMatchmakingRuntimeLease(request);
   const sessionValidation = matchmakingQueueService.validateSessionToken(body.sessionId, accountId, sessionToken, {
     allowResolved: true,
     allowExpiredToken: true,
@@ -3469,12 +4939,110 @@ app.post('/ranked/results', async (request, reply) => {
     reply.code(409);
     return { error: 'Session is not a ranked queue session.' };
   }
+  const terminalDecision = await rankedTerminalDecisionStore.getBySession(body.sessionId);
+  if (terminalDecision) {
+    reply.code(409);
+    return {
+      error: terminalDecision.decisionType === 'no_contest'
+        ? 'Ranked session ended as a server-owned no-contest.'
+        : 'Ranked session has a server-owned authoritative resolution.',
+      code: terminalDecision.decisionType === 'no_contest'
+        ? 'ranked_session_no_contest'
+        : 'ranked_session_authoritative_resolution',
+      terminalStatus: terminalDecision.status,
+      reason: terminalDecision.reason,
+    };
+  }
+
+  const existingAccountSubmission = await db.query(
+    `
+    SELECT 1
+    FROM ranked_result_submissions
+    WHERE session_id = $1 AND submitted_by_account_id = $2
+    LIMIT 1
+    `,
+    [body.sessionId, accountId],
+  );
+  if (existingAccountSubmission.rowCount) {
+    reply.code(409);
+    return { error: 'Ranked result was already submitted for this session by this account.' };
+  }
 
   const p1Participant = sessionValidation.value.participants.find((participant) => participant.side === 'P1');
   const p2Participant = sessionValidation.value.participants.find((participant) => participant.side === 'P2');
   if (!p1Participant || !p2Participant) {
     reply.code(409);
     return { error: 'Session participants are invalid for ranked processing.' };
+  }
+  if (outcome === 'draw') {
+    reply.code(422);
+    return {
+      error: 'Ranked draws are no-contest during the controlled alpha and do not change progression.',
+      code: 'ranked_draw_no_contest',
+    };
+  }
+  if (outcome === 'forfeit') {
+    reply.code(422);
+    return {
+      error: 'Ranked forfeits are accepted only from the server-authoritative session resolver.',
+      code: 'ranked_proof_required',
+    };
+  }
+  const sessionBuildVersion = sessionValidation.value.buildVersion?.trim() ?? '';
+  const sessionRulesetVersion = sessionValidation.value.rulesetVersion?.trim() ?? '';
+  const sessionBalanceProfileId = sessionValidation.value.balanceProfileId?.trim() ?? '';
+  const p1CharacterId = p1Participant.selectedCharacterId;
+  const p2CharacterId = p2Participant.selectedCharacterId;
+  if (
+    !sessionBuildVersion
+    || !sessionRulesetVersion
+    || !sessionBalanceProfileId
+    || !p1CharacterId
+    || !p2CharacterId
+    || !CHARACTER_BY_ID[p1CharacterId]
+    || !CHARACTER_BY_ID[p2CharacterId]
+  ) {
+    reply.code(409);
+    return {
+      error: 'Ranked session is missing verifier-compatible build, ruleset, or loadout metadata.',
+      code: 'ranked_session_not_verifiable',
+    };
+  }
+  const rateLimitRejection = await enforceRankedProofRateLimits(
+    request,
+    reply,
+    accountId,
+    body.sessionId,
+  );
+  if (rateLimitRejection) {
+    return rateLimitRejection;
+  }
+  const proofVerification = await verifyRankedMatchProof(body.proof, {
+    sessionId: body.sessionId,
+    matchId: body.matchId,
+    buildVersion: sessionBuildVersion,
+    rulesetVersion: sessionRulesetVersion,
+    balanceProfileId: sessionBalanceProfileId,
+    seed: rankedSeedFromSessionId(body.sessionId),
+    loadout: {
+      P1: p1CharacterId as CharacterId,
+      P2: p2CharacterId as CharacterId,
+    },
+  });
+  if (!proofVerification.ok) {
+    reply.code(422);
+    return {
+      error: proofVerification.message,
+      code: 'invalid_ranked_proof',
+      proofErrorCode: proofVerification.code,
+    };
+  }
+  if (proofVerification.derivedOutcome !== outcome) {
+    reply.code(422);
+    return {
+      error: 'Submitted outcome does not match the server-replayed ranked proof.',
+      code: 'ranked_outcome_mismatch',
+    };
   }
 
   const expectedParticipants = [...new Set(sessionValidation.value.participants.map((participant) => participant.accountId))].sort();
@@ -3491,33 +5059,73 @@ app.post('/ranked/results', async (request, reply) => {
     },
   );
   const suspiciousReasons: RankedResultSuspiciousReason[] = [...evaluation.reasons];
-  let winnerAccountId: string | null = null;
-  if (outcome === 'p1_win') {
-    winnerAccountId = p1Participant.accountId;
-  } else if (outcome === 'p2_win') {
-    winnerAccountId = p2Participant.accountId;
-  } else if (outcome === 'forfeit') {
-    winnerAccountId = winnerAccountIdRaw && expectedParticipants.includes(winnerAccountIdRaw) ? winnerAccountIdRaw : null;
+  const winnerAccountId = proofVerification.winnerSide === 'P1'
+    ? p1Participant.accountId
+    : p2Participant.accountId;
+  if (winnerAccountIdRaw !== winnerAccountId) {
+    reply.code(422);
+    return {
+      error: 'winnerAccountId does not match the server-replayed ranked proof.',
+      code: 'ranked_winner_mismatch',
+    };
   }
+  const proofView = {
+    digest: proofVerification.proofDigest,
+    simulatorVersion: proofVerification.proof.simulatorVersion,
+    roundCount: proofVerification.roundCount,
+    frameCount: proofVerification.frameCount,
+    derivedOutcome: proofVerification.derivedOutcome,
+  };
   const reviewStatus = evaluation.suspicious ? 'pending' : 'none';
-  const participantByAccountId = new Map(sessionValidation.value.participants.map((participant) => [participant.accountId, participant]));
-
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [body.sessionId]);
+    await client.query(
+      `
+      INSERT INTO ranked_match_proofs(
+        proof_digest, session_id, match_id, schema_version, simulator_version,
+        build_version, ruleset_version, balance_profile_id, derived_outcome,
+        winner_side, round_count, frame_count, payload_json
+      )
+      VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, $9,
+        $10, $11, $12, $13::jsonb
+      )
+      ON CONFLICT (proof_digest) DO NOTHING
+      `,
+      [
+        proofVerification.proofDigest,
+        body.sessionId,
+        body.matchId,
+        proofVerification.proof.schemaVersion,
+        proofVerification.proof.simulatorVersion,
+        proofVerification.proof.buildVersion,
+        proofVerification.proof.rulesetVersion,
+        proofVerification.proof.balanceProfileId,
+        proofVerification.derivedOutcome,
+        proofVerification.winnerSide,
+        proofVerification.roundCount,
+        proofVerification.frameCount,
+        JSON.stringify(proofVerification.proof),
+      ],
+    );
     const submission = await client.query(
       `
       INSERT INTO ranked_result_submissions(
         session_id, match_id, queue_type, submitted_by_account_id,
         session_participants, submitted_participants, winner_account_id,
         outcome, valid_session_token, suspicious, suspicious_reasons,
-        review_status, payload_json
+        review_status, payload_json, proof_digest, proof_verification_status,
+        derived_outcome
       )
       VALUES (
         $1, $2, 'ranked', $3,
         $4::uuid[], $5::uuid[], $6,
         $7, TRUE, $8, $9::text[],
-        $10, $11::jsonb
+        $10, $11::jsonb, $12, 'verified',
+        $13
       )
       RETURNING submission_id, created_at
       `,
@@ -3535,7 +5143,12 @@ app.post('/ranked/results', async (request, reply) => {
         JSON.stringify({
           outcome,
           winnerAccountIdSubmitted: winnerAccountIdRaw,
+          proofDigest: proofVerification.proofDigest,
+          verifiedRoundCount: proofVerification.roundCount,
+          verifiedFrameCount: proofVerification.frameCount,
         }),
+        proofVerification.proofDigest,
+        proofVerification.derivedOutcome,
       ],
     );
 
@@ -3550,6 +5163,78 @@ app.post('/ranked/results', async (request, reply) => {
         suspicious: true,
         suspiciousReasons,
         reviewStatus,
+        proof: proofView,
+      };
+    }
+
+    const peerSubmissionResult = await client.query(
+      `
+      SELECT submission_id, submitted_by_account_id, outcome, winner_account_id, proof_digest
+      FROM ranked_result_submissions
+      WHERE session_id = $1
+        AND submitted_by_account_id <> $2
+        AND suspicious = FALSE
+      ORDER BY created_at ASC
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [body.sessionId, accountId],
+    );
+    if (!peerSubmissionResult.rowCount) {
+      await client.query('COMMIT');
+      reply.code(202);
+      return {
+        submissionId: row.submission_id,
+        createdAt: row.created_at,
+        status: 'awaiting_peer_confirmation',
+        suspicious: false,
+        suspiciousReasons: [],
+        reviewStatus,
+        proof: proofView,
+      };
+    }
+
+    const peerSubmission = peerSubmissionResult.rows[0] as {
+      submission_id: string;
+      submitted_by_account_id: string;
+      outcome: string;
+      winner_account_id: string | null;
+      proof_digest: string | null;
+    };
+    const consensus = evaluateRankedResultConsensus(
+      {
+        outcome: peerSubmission.outcome,
+        winnerAccountId: peerSubmission.winner_account_id,
+        proofDigest: peerSubmission.proof_digest,
+      },
+      {
+        outcome,
+        winnerAccountId,
+        proofDigest: proofVerification.proofDigest,
+      },
+    );
+    if (consensus.suspicious) {
+      const consensusReasons = consensus.reasons;
+      await client.query(
+        `
+        UPDATE ranked_result_submissions
+        SET suspicious = TRUE,
+            suspicious_reasons = $2::text[],
+            review_status = 'pending'
+        WHERE session_id = $1
+        `,
+        [body.sessionId, consensusReasons],
+      );
+      await client.query('COMMIT');
+      reply.code(202);
+      return {
+        submissionId: row.submission_id,
+        createdAt: row.created_at,
+        status: 'flagged_for_review',
+        suspicious: true,
+        suspiciousReasons: consensusReasons,
+        reviewStatus: 'pending',
+        proof: proofView,
       };
     }
 
@@ -3563,387 +5248,24 @@ app.post('/ranked/results', async (request, reply) => {
       return { error: 'Ranked match has already been processed.' };
     }
 
-    await client.query(
-      `
-      INSERT INTO ranked_player_ratings(account_id)
-      VALUES ($1), ($2)
-      ON CONFLICT (account_id) DO NOTHING
-      `,
-      [p1Participant.accountId, p2Participant.accountId],
-    );
-    const ratingRows = await client.query(
-      `
-      SELECT account_id, rating
-      FROM ranked_player_ratings
-      WHERE account_id = ANY($1::uuid[])
-      FOR UPDATE
-      `,
-      [[p1Participant.accountId, p2Participant.accountId]],
-    );
-    const ratingMap = new Map<string, number>();
-    for (const rawRow of ratingRows.rows as Array<{ account_id: string; rating: number }>) {
-      ratingMap.set(rawRow.account_id, Number(rawRow.rating));
-    }
-    const p1Rating = ratingMap.get(p1Participant.accountId);
-    const p2Rating = ratingMap.get(p2Participant.accountId);
-    if (!Number.isFinite(p1Rating) || !Number.isFinite(p2Rating)) {
-      await client.query('ROLLBACK');
-      reply.code(500);
-      return { error: 'Failed to resolve ranked ratings for session participants.' };
-    }
-    await client.query(
-      `
-      INSERT INTO ranked_league_progression(account_id, calibration_matches_required)
-      VALUES ($1, $3), ($2, $3)
-      ON CONFLICT (account_id) DO NOTHING
-      `,
-      [p1Participant.accountId, p2Participant.accountId, rankedCalibrationMatchesRequired],
-    );
-    const leagueRows = await client.query(
-      `
-      SELECT
-        account_id,
-        league_tier,
-        league_points,
-        calibration_matches_required,
-        calibration_matches_played,
-        placed_at
-      FROM ranked_league_progression
-      WHERE account_id = ANY($1::uuid[])
-      FOR UPDATE
-      `,
-      [[p1Participant.accountId, p2Participant.accountId]],
-    );
-    const leagueStateByAccount = new Map<string, {
-      leagueTier: LeagueTier | null;
-      leaguePoints: number | null;
-      calibrationMatchesRequired: number;
-      calibrationMatchesPlayed: number;
-      placedAt: string | null;
-    }>();
-    for (const rawRow of leagueRows.rows as Array<{
-      account_id: string;
-      league_tier: LeagueTier | null;
-      league_points: number | null;
-      calibration_matches_required: number;
-      calibration_matches_played: number;
-      placed_at: string | null;
-    }>) {
-      leagueStateByAccount.set(rawRow.account_id, {
-        leagueTier: rawRow.league_tier,
-        leaguePoints: rawRow.league_points,
-        calibrationMatchesRequired: Number(rawRow.calibration_matches_required),
-        calibrationMatchesPlayed: Number(rawRow.calibration_matches_played),
-        placedAt: rawRow.placed_at,
-      });
-    }
-    const activeSeason = await ensureActiveSeason(client, new Date(), rankedSeasonDurationDays);
-    const masterRows = await client.query(
-      `
-      SELECT
-        account_id,
-        mr_points,
-        matches_played,
-        wins,
-        losses,
-        draws,
-        forfeits,
-        entered_at
-      FROM ranked_master_ratings
-      WHERE season_id = $1
-        AND account_id = ANY($2::uuid[])
-      FOR UPDATE
-      `,
-      [
-        activeSeason.seasonId,
-        [p1Participant.accountId, p2Participant.accountId],
-      ],
-    );
-    const masterStateByAccount = new Map<string, {
-      mrPoints: number | null;
-      matchesPlayed: number;
-      wins: number;
-      losses: number;
-      draws: number;
-      forfeits: number;
-      enteredAt: string | null;
-    }>();
-    for (const rawRow of masterRows.rows as Array<{
-      account_id: string;
-      mr_points: number;
-      matches_played: number;
-      wins: number;
-      losses: number;
-      draws: number;
-      forfeits: number;
-      entered_at: string;
-    }>) {
-      masterStateByAccount.set(rawRow.account_id, {
-        mrPoints: Number(rawRow.mr_points),
-        matchesPlayed: Number(rawRow.matches_played),
-        wins: Number(rawRow.wins),
-        losses: Number(rawRow.losses),
-        draws: Number(rawRow.draws),
-        forfeits: Number(rawRow.forfeits),
-        enteredAt: rawRow.entered_at,
-      });
-    }
-    const previousMatchRows = await client.query(
-      `
-      SELECT account_id, MAX(created_at) AS previous_match_at
-      FROM ranked_match_rating_deltas
-      WHERE account_id = ANY($1::uuid[])
-      GROUP BY account_id
-      `,
-      [[p1Participant.accountId, p2Participant.accountId]],
-    );
-    const previousMatchAtByAccount = new Map<string, string | null>();
-    for (const rawRow of previousMatchRows.rows as Array<{ account_id: string; previous_match_at: string | null }>) {
-      previousMatchAtByAccount.set(rawRow.account_id, rawRow.previous_match_at);
-    }
-
-    const ratingResult = applyRankedRatingUpdate({
+    const settlement = await settleRankedMatch(client, {
+      matchId: body.matchId,
+      sessionId: body.sessionId,
       participants: [
-        { accountId: p1Participant.accountId, side: 'P1', rating: p1Rating as number },
-        { accountId: p2Participant.accountId, side: 'P2', rating: p2Rating as number },
+        { accountId: p1Participant.accountId, side: 'P1' },
+        { accountId: p2Participant.accountId, side: 'P2' },
       ],
       outcome,
       winnerAccountId,
+      occurredAtIso: row.created_at,
+      source: {
+        kind: 'player_consensus',
+        submissionId: row.submission_id,
+      },
+      config: rankedSettlementConfig,
     });
 
-    await client.query(
-      `
-      INSERT INTO ranked_matches(
-        match_id, session_id, season_id, queue_type, outcome, winner_account_id,
-        processed_submission_id, participant_p1_account_id, participant_p2_account_id
-      )
-      VALUES ($1, $2, $3, 'ranked', $4, $5, $6, $7, $8)
-      `,
-      [
-        body.matchId,
-        body.sessionId,
-        activeSeason.seasonId,
-        outcome,
-        winnerAccountId,
-        row.submission_id,
-        p1Participant.accountId,
-        p2Participant.accountId,
-      ],
-    );
-
-    const leagueDeltaViews: Array<{
-      accountId: string;
-      preLeagueTier: LeagueTier | null;
-      postLeagueTier: LeagueTier | null;
-      preLeaguePoints: number | null;
-      postLeaguePoints: number | null;
-      provisional: boolean;
-    }> = [];
-    const masterDeltaViews: Array<{
-      accountId: string;
-      preMrPoints: number | null;
-      postMrPoints: number | null;
-      enteredMasterTrack: boolean;
-    }> = [];
-    for (const update of ratingResult.updates) {
-      const currentLeagueState = leagueStateByAccount.get(update.accountId) ?? {
-        leagueTier: null,
-        leaguePoints: null,
-        calibrationMatchesRequired: 5,
-        calibrationMatchesPlayed: 0,
-        placedAt: null,
-      };
-      const leagueProgress = applyLeagueProgression({
-        state: currentLeagueState,
-        postRating: update.postRating,
-        ratingDelta: update.delta,
-        occurredAtIso: row.created_at,
-      });
-      leagueDeltaViews.push({
-        accountId: update.accountId,
-        preLeagueTier: leagueProgress.pre.leagueTier,
-        postLeagueTier: leagueProgress.post.leagueTier,
-        preLeaguePoints: leagueProgress.pre.leaguePoints,
-        postLeaguePoints: leagueProgress.post.leaguePoints,
-        provisional: leagueProgress.provisional,
-      });
-      leagueStateByAccount.set(update.accountId, leagueProgress.post);
-      const currentMasterState = masterStateByAccount.get(update.accountId) ?? {
-        mrPoints: null,
-        matchesPlayed: 0,
-        wins: 0,
-        losses: 0,
-        draws: 0,
-        forfeits: 0,
-        enteredAt: null,
-      };
-      const masterProgress = applyMasterRatingProgression({
-        state: currentMasterState,
-        postRating: update.postRating,
-        ratingDelta: update.delta,
-        result: update.result,
-        occurredAtIso: row.created_at,
-        entryRatingThreshold: rankedMasterEntryRating,
-        basePoints: rankedMasterBasePoints,
-        queueWeight: rankedMasterQueueWeight,
-      });
-      masterDeltaViews.push({
-        accountId: update.accountId,
-        preMrPoints: masterProgress.pre.mrPoints,
-        postMrPoints: masterProgress.post.mrPoints,
-        enteredMasterTrack: masterProgress.enteredMasterTrack,
-      });
-      masterStateByAccount.set(update.accountId, masterProgress.post);
-      const mrDelta = masterProgress.pre.mrPoints !== null && masterProgress.post.mrPoints !== null
-        ? masterProgress.post.mrPoints - masterProgress.pre.mrPoints
-        : null;
-      const anomalyAlerts = detectRankedAnomalies({
-        occurredAtIso: row.created_at,
-        previousMatchAtIso: previousMatchAtByAccount.get(update.accountId) ?? null,
-        ratingDelta: update.delta,
-        mrDelta,
-        minMatchIntervalSeconds: rankedAnomalyMinMatchIntervalSeconds,
-        ratingJumpThreshold: rankedAnomalyRatingJumpThreshold,
-        mrJumpThreshold: rankedAnomalyMrJumpThreshold,
-      });
-
-      await client.query(
-        `
-        INSERT INTO ranked_match_rating_deltas(
-          match_id, account_id, side, pre_rating, post_rating, rating_delta, result,
-          pre_league_tier, post_league_tier, pre_league_points, post_league_points,
-          pre_mr_points, post_mr_points
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        `,
-        [
-          body.matchId,
-          update.accountId,
-          update.side,
-          update.preRating,
-          update.postRating,
-          update.delta,
-          update.result,
-          leagueProgress.pre.leagueTier,
-          leagueProgress.post.leagueTier,
-          leagueProgress.pre.leaguePoints,
-          leagueProgress.post.leaguePoints,
-          masterProgress.pre.mrPoints,
-          masterProgress.post.mrPoints,
-        ],
-      );
-      for (const alert of anomalyAlerts) {
-        await client.query(
-          `
-          INSERT INTO ranked_anomaly_alerts(
-            alert_type, severity, status, account_id, match_id, message, metadata, detected_at
-          )
-          VALUES ($1, $2, 'open', $3, $4, $5, $6::jsonb, $7)
-          `,
-          [
-            alert.type,
-            alert.severity,
-            update.accountId,
-            body.matchId,
-            alert.message,
-            JSON.stringify({
-              ...alert.metadata,
-              outcome,
-              side: update.side,
-              result: update.result,
-              preRating: update.preRating,
-              postRating: update.postRating,
-              ratingDelta: update.delta,
-              preMrPoints: masterProgress.pre.mrPoints,
-              postMrPoints: masterProgress.post.mrPoints,
-            }),
-            row.created_at,
-          ],
-        );
-      }
-      previousMatchAtByAccount.set(update.accountId, row.created_at);
-
-      const isForfeitLoss = outcome === 'forfeit' && update.result === 'forfeit';
-      await client.query(
-        `
-        UPDATE ranked_player_ratings
-        SET
-          rating = $2,
-          matches_played = matches_played + 1,
-          wins = wins + $3,
-          losses = losses + $4,
-          draws = draws + $5,
-          forfeits = forfeits + $6,
-          updated_at = NOW()
-        WHERE account_id = $1
-        `,
-        [
-          update.accountId,
-          update.postRating,
-          update.result === 'win' ? 1 : 0,
-          update.result === 'loss' ? 1 : 0,
-          update.result === 'draw' ? 1 : 0,
-          isForfeitLoss ? 1 : 0,
-        ],
-      );
-      await client.query(
-        `
-        UPDATE ranked_league_progression
-        SET
-          league_tier = $2,
-          league_points = $3,
-          calibration_matches_required = $4,
-          calibration_matches_played = $5,
-          placed_at = $6,
-          updated_at = NOW()
-        WHERE account_id = $1
-        `,
-        [
-          update.accountId,
-          leagueProgress.post.leagueTier,
-          leagueProgress.post.leaguePoints,
-          leagueProgress.post.calibrationMatchesRequired,
-          leagueProgress.post.calibrationMatchesPlayed,
-          leagueProgress.post.placedAt,
-        ],
-      );
-      if (masterProgress.post.enteredAt) {
-        await client.query(
-          `
-          INSERT INTO ranked_master_ratings(
-            season_id, account_id, mr_points, matches_played,
-            wins, losses, draws, forfeits, entered_at, updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-          ON CONFLICT (season_id, account_id)
-          DO UPDATE SET
-            mr_points = EXCLUDED.mr_points,
-            matches_played = EXCLUDED.matches_played,
-            wins = EXCLUDED.wins,
-            losses = EXCLUDED.losses,
-            draws = EXCLUDED.draws,
-            forfeits = EXCLUDED.forfeits,
-            entered_at = LEAST(ranked_master_ratings.entered_at, EXCLUDED.entered_at),
-            updated_at = NOW()
-          `,
-          [
-            activeSeason.seasonId,
-            update.accountId,
-            masterProgress.post.mrPoints,
-            masterProgress.post.matchesPlayed,
-            masterProgress.post.wins,
-            masterProgress.post.losses,
-            masterProgress.post.draws,
-            masterProgress.post.forfeits,
-            masterProgress.post.enteredAt,
-          ],
-        );
-      }
-    }
-
     await client.query('COMMIT');
-    const leagueDeltaByAccount = new Map(leagueDeltaViews.map((entry) => [entry.accountId, entry]));
-    const masterDeltaByAccount = new Map(masterDeltaViews.map((entry) => [entry.accountId, entry]));
     reply.code(201);
     return {
       submissionId: row.submission_id,
@@ -3952,26 +5274,25 @@ app.post('/ranked/results', async (request, reply) => {
       suspicious: false,
       suspiciousReasons: [],
       reviewStatus,
-      ratingDeltas: ratingResult.updates.map((update) => ({
-        ...leagueDeltaByAccount.get(update.accountId),
-        ...masterDeltaByAccount.get(update.accountId),
-        accountId: update.accountId,
-        side: participantByAccountId.get(update.accountId)?.side ?? update.side,
-        preRating: update.preRating,
-        postRating: update.postRating,
-        ratingDelta: update.delta,
-        result: update.result,
-      })),
+      proof: proofView,
+      ratingDeltas: settlement.ratingDeltas,
     };
   } catch (error: unknown) {
     await client.query('ROLLBACK');
-    const code = (error as { code?: string } | undefined)?.code;
-    const message = error instanceof Error ? error.message : '';
-    if (code === '23505' && message.includes('ranked_result_submissions_session_id_submitted_by_account_id_key')) {
+    const databaseError = error as { code?: string; constraint?: string } | undefined;
+    const code = databaseError?.code;
+    const constraint = databaseError?.constraint ?? '';
+    if (
+      code === '23505'
+      && constraint.startsWith('ranked_result_submissions_session_id_submitted_by_account')
+    ) {
       reply.code(409);
       return { error: 'Ranked result was already submitted for this session by this account.' };
     }
-    if (code === '23505' && message.includes('ranked_matches_pkey')) {
+    if (
+      code === '23505'
+      && (constraint === 'ranked_matches_pkey' || constraint === 'ranked_matches_session_id_key')
+    ) {
       reply.code(409);
       return { error: 'Ranked match has already been processed.' };
     }
@@ -3979,6 +5300,239 @@ app.post('/ranked/results', async (request, reply) => {
   } finally {
     client.release();
   }
+});
+
+app.get('/ranked/results/:sessionId', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid authentication credential.' };
+  }
+  const params = request.params as { sessionId?: string };
+  if (!isUuid(params.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const [terminalDecision, processedMatch] = await Promise.all([
+    rankedTerminalDecisionStore.getBySession(params.sessionId),
+    db.query(
+    `
+    SELECT
+      m.match_id,
+      m.created_at,
+      m.outcome,
+      m.winner_account_id,
+      m.participant_p1_account_id,
+      m.participant_p2_account_id,
+      m.settlement_source,
+      p.proof_digest,
+      p.simulator_version,
+      p.round_count,
+      p.frame_count,
+      p.derived_outcome,
+      ar.reason AS authoritative_reason,
+      ar.forfeiting_account_id
+    FROM ranked_matches m
+    LEFT JOIN ranked_result_submissions s ON s.submission_id = m.processed_submission_id
+    LEFT JOIN ranked_match_proofs p ON p.proof_digest = s.proof_digest
+    LEFT JOIN ranked_authoritative_resolutions ar
+      ON ar.resolution_id = m.authoritative_resolution_id
+    WHERE m.session_id = $1
+    LIMIT 1
+    `,
+    [params.sessionId],
+    ),
+  ]);
+  const durableMatchParticipants = processedMatch.rows[0]
+    ? {
+      participantP1AccountId: String(
+        (processedMatch.rows[0] as { participant_p1_account_id: unknown })
+          .participant_p1_account_id,
+      ),
+      participantP2AccountId: String(
+        (processedMatch.rows[0] as { participant_p2_account_id: unknown })
+          .participant_p2_account_id,
+      ),
+    }
+    : null;
+  const durableAccess = resolveDurableRankedResultAccess(
+    accountId,
+    terminalDecision,
+    durableMatchParticipants,
+  );
+  if (durableAccess.hasDurableRecord) {
+    if (!durableAccess.authorized) {
+      reply.code(403);
+      return { error: 'Ranked result belongs to another session participant.' };
+    }
+  } else {
+    const sessionToken = getMatchSessionToken(request.headers);
+    if (!sessionToken) {
+      reply.code(400);
+      return { error: 'x-match-session-token header is required.' };
+    }
+    requireMatchmakingRuntimeLease(request);
+    const sessionValidation = matchmakingQueueService.validateSessionToken(
+      params.sessionId,
+      accountId,
+      sessionToken,
+      { allowResolved: true, allowExpiredToken: true },
+    );
+    if (!sessionValidation.ok) {
+      reply.code(mapSessionErrorToHttp(sessionValidation.error.code));
+      return { error: sessionValidation.error.message, code: sessionValidation.error.code };
+    }
+    if (sessionValidation.value.queueType !== 'ranked') {
+      reply.code(409);
+      return { error: 'Session is not a ranked queue session.' };
+    }
+  }
+
+  if (processedMatch.rowCount) {
+    const match = processedMatch.rows[0] as {
+      match_id: string;
+      created_at: string;
+      outcome: 'p1_win' | 'p2_win' | 'draw' | 'forfeit';
+      winner_account_id: string | null;
+      settlement_source: 'player_consensus' | 'server_authoritative';
+      proof_digest: string | null;
+      simulator_version: string | null;
+      round_count: number | null;
+      frame_count: number | null;
+      derived_outcome: 'p1_win' | 'p2_win' | null;
+      authoritative_reason: 'reconnect_timeout' | 'peer_left' | null;
+      forfeiting_account_id: string | null;
+    };
+    const deltas = await db.query(
+      `
+      SELECT
+        account_id, side, pre_rating, post_rating, rating_delta, result,
+        pre_league_tier, post_league_tier, pre_league_points, post_league_points,
+        pre_mr_points, post_mr_points
+      FROM ranked_match_rating_deltas
+      WHERE match_id = $1
+      ORDER BY side ASC
+      `,
+      [match.match_id],
+    );
+    return {
+      submissionId: match.match_id,
+      createdAt: match.created_at,
+      status: 'accepted',
+      suspicious: false,
+      suspiciousReasons: [],
+      reviewStatus: 'none',
+      outcome: match.outcome,
+      winnerAccountId: match.winner_account_id,
+      settlementSource: match.settlement_source,
+      authoritativeResolution: match.authoritative_reason ? {
+        reason: match.authoritative_reason,
+        forfeitingAccountId: match.forfeiting_account_id,
+      } : undefined,
+      proof: match.proof_digest ? {
+        digest: match.proof_digest,
+        simulatorVersion: match.simulator_version,
+        roundCount: Number(match.round_count),
+        frameCount: Number(match.frame_count),
+        derivedOutcome: match.derived_outcome,
+      } : undefined,
+      ratingDeltas: deltas.rows.map((rawRow) => {
+        const delta = rawRow as Record<string, unknown>;
+        return {
+          accountId: String(delta.account_id),
+          side: delta.side,
+          preRating: Number(delta.pre_rating),
+          postRating: Number(delta.post_rating),
+          ratingDelta: Number(delta.rating_delta),
+          result: delta.result,
+          preLeagueTier: delta.pre_league_tier,
+          postLeagueTier: delta.post_league_tier,
+          preLeaguePoints: delta.pre_league_points === null ? null : Number(delta.pre_league_points),
+          postLeaguePoints: delta.post_league_points === null ? null : Number(delta.post_league_points),
+          preMrPoints: delta.pre_mr_points === null ? null : Number(delta.pre_mr_points),
+          postMrPoints: delta.post_mr_points === null ? null : Number(delta.post_mr_points),
+        };
+      }),
+    };
+  }
+
+  if (terminalDecision) {
+    const noContest = terminalDecision.decisionType === 'no_contest';
+    return {
+      submissionId: terminalDecision.sessionId,
+      createdAt: terminalDecision.decidedAt,
+      status: noContest ? 'no_contest' : 'authoritative_pending',
+      suspicious: false,
+      suspiciousReasons: [],
+      reviewStatus: 'none',
+      outcome: noContest ? undefined : 'forfeit',
+      winnerAccountId: terminalDecision.winnerAccountId,
+      settlementSource: 'server_authoritative',
+      authoritativeResolution: {
+        reason: terminalDecision.reason,
+        forfeitingAccountId: terminalDecision.forfeitingAccountId,
+      },
+      terminalDecision: {
+        type: terminalDecision.decisionType,
+        status: terminalDecision.status,
+        dueAt: terminalDecision.dueAt,
+        decidedAt: terminalDecision.decidedAt,
+      },
+      ratingDeltas: [],
+    };
+  }
+
+  const submissions = await db.query(
+    `
+    SELECT
+      s.submission_id,
+      s.submitted_by_account_id,
+      s.created_at,
+      s.suspicious,
+      s.suspicious_reasons,
+      s.review_status,
+      p.proof_digest,
+      p.simulator_version,
+      p.round_count,
+      p.frame_count,
+      p.derived_outcome
+    FROM ranked_result_submissions s
+    LEFT JOIN ranked_match_proofs p ON p.proof_digest = s.proof_digest
+    WHERE s.session_id = $1
+    ORDER BY s.created_at ASC
+    `,
+    [params.sessionId],
+  );
+  const ownSubmission = submissions.rows.find((rawRow) => (
+    (rawRow as { submitted_by_account_id?: string }).submitted_by_account_id === accountId
+  )) ?? submissions.rows[0];
+  const flagged = submissions.rows.find((rawRow) => Boolean((rawRow as { suspicious?: boolean }).suspicious));
+  const selected = (flagged ?? ownSubmission) as {
+    submission_id?: string;
+    created_at?: string;
+    suspicious_reasons?: RankedResultSuspiciousReason[];
+    review_status?: string;
+    proof_digest?: string | null;
+    simulator_version?: string | null;
+    round_count?: number | null;
+    frame_count?: number | null;
+    derived_outcome?: 'p1_win' | 'p2_win' | null;
+  } | undefined;
+  return {
+    submissionId: selected?.submission_id ?? params.sessionId,
+    createdAt: selected?.created_at ?? new Date().toISOString(),
+    status: flagged ? 'flagged_for_review' : 'awaiting_peer_confirmation',
+    suspicious: Boolean(flagged),
+    suspiciousReasons: selected?.suspicious_reasons ?? [],
+    reviewStatus: selected?.review_status ?? 'none',
+    proof: selected?.proof_digest ? {
+      digest: selected.proof_digest,
+      simulatorVersion: selected.simulator_version ?? null,
+      roundCount: Number(selected.round_count),
+      frameCount: Number(selected.frame_count),
+      derivedOutcome: selected.derived_outcome ?? null,
+    } : undefined,
+  };
 });
 
 app.get('/ranked/progression', async (request, reply) => {
@@ -4000,6 +5554,14 @@ app.get('/ranked/progression', async (request, reply) => {
   if (!season) {
     reply.code(404);
     return { error: 'Ranked season not found.' };
+  }
+  if (season.state === 'scheduled') {
+    reply.code(409);
+    return {
+      error: 'Ranked season has not started.',
+      code: 'ranked_season_not_started',
+      startsAt: season.startsAt,
+    };
   }
 
   let ratingRow: {
@@ -4180,13 +5742,24 @@ app.get('/ranked/leaderboard', async (request, reply) => {
 
   const query = (request.query ?? {}) as RankedLeaderboardQuery;
   const requestedSeasonId = typeof query.seasonId === 'string' ? query.seasonId.trim() : '';
-  const season = requestedSeasonId
-    ? await getSeasonById(db, requestedSeasonId)
-    : await ensureActiveSeason(db, new Date(), rankedSeasonDurationDays);
-  if (!season) {
-    reply.code(404);
-    return { error: 'Ranked season not found.' };
-  }
+  const seasonId = requestedSeasonId || (
+    await ensureActiveSeason(db, new Date(), rankedSeasonDurationDays)
+  ).seasonId;
+
+  return withRepeatableReadSnapshot(async (leaderboardDb) => {
+    const season = await getSeasonById(leaderboardDb, seasonId);
+    if (!season) {
+      reply.code(404);
+      return { error: 'Ranked season not found.' };
+    }
+    if (season.state === 'scheduled') {
+      reply.code(409);
+      return {
+        error: 'Ranked season has not started.',
+        code: 'ranked_season_not_started',
+        startsAt: season.startsAt,
+      };
+    }
 
   const parsedLimit = parsePositiveInteger(query.limit);
   const limit = parsedLimit ? Math.min(parsedLimit, 100) : 25;
@@ -4197,44 +5770,13 @@ app.get('/ranked/leaderboard', async (request, reply) => {
 
   if (track === 'master') {
     if (season.state === 'archived') {
-      const totalResult = await db.query(
-        `
-          SELECT COUNT(*) AS count
-          FROM ranked_master_season_standings s
-          LEFT JOIN profiles p ON p.account_id = s.account_id
-          WHERE s.season_id = $1
-            AND (
-              $2::text IS NULL
-              OR COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') = $2
-            )
-        `,
+      const totalResult = await leaderboardDb.query(
+        ARCHIVED_MASTER_LEADERBOARD_TOTAL_SQL,
         [season.seasonId, region],
       );
       const total = Number((totalResult.rows[0] as { count: string }).count);
-      const rows = await db.query(
-        `
-          SELECT
-            s.rank_position,
-            s.account_id,
-            COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') AS region,
-            s.mr_points,
-            s.matches_played,
-            s.wins,
-            s.losses,
-            s.draws,
-            s.forfeits,
-            s.entered_at,
-            s.captured_at
-          FROM ranked_master_season_standings s
-          LEFT JOIN profiles p ON p.account_id = s.account_id
-          WHERE s.season_id = $1
-            AND (
-              $2::text IS NULL
-              OR COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') = $2
-            )
-          ORDER BY s.rank_position ASC, s.account_id ASC
-          LIMIT $3 OFFSET $4
-        `,
+      const rows = await leaderboardDb.query(
+        ARCHIVED_MASTER_LEADERBOARD_PAGE_SQL,
         [season.seasonId, region, limit, offset],
       );
       return {
@@ -4255,8 +5797,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
         },
         items: rows.rows.map((row) => {
           const entry = row as {
-            rank_position: number;
+            rank_position: number | string;
             account_id: string;
+            display_name: string | null;
             region: string;
             mr_points: number;
             matches_played: number;
@@ -4268,8 +5811,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
             captured_at: string;
           };
           return {
-            rank: entry.rank_position,
+            rank: Number(entry.rank_position),
             accountId: entry.account_id,
+            displayName: entry.display_name,
             region: entry.region,
             mrPoints: entry.mr_points,
             matchesPlayed: entry.matches_played,
@@ -4284,12 +5828,14 @@ app.get('/ranked/leaderboard', async (request, reply) => {
       };
     }
 
-    const totalResult = await db.query(
+    const totalResult = await leaderboardDb.query(
       `
         SELECT COUNT(*) AS count
         FROM ranked_master_ratings m
+        JOIN accounts a ON a.id = m.account_id
         LEFT JOIN profiles p ON p.account_id = m.account_id
         WHERE m.season_id = $1
+          AND a.status = 'active'
           AND (
             $2::text IS NULL
             OR COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') = $2
@@ -4298,7 +5844,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
       [season.seasonId, region],
     );
     const total = Number((totalResult.rows[0] as { count: string }).count);
-    const rows = await db.query(
+    const rows = await leaderboardDb.query(
       `
         WITH ranked_rows AS (
           SELECT
@@ -4306,6 +5852,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
               ORDER BY m.mr_points DESC, m.wins DESC, m.matches_played DESC, m.account_id ASC
             ) AS rank_position,
             m.account_id,
+            p.display_name,
             COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') AS region,
             m.mr_points,
             m.matches_played,
@@ -4316,8 +5863,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
             m.entered_at,
             m.updated_at
           FROM ranked_master_ratings m
+          JOIN accounts a ON a.id = m.account_id
           LEFT JOIN profiles p ON p.account_id = m.account_id
-          WHERE m.season_id = $1
+          WHERE m.season_id = $1 AND a.status = 'active'
         )
         SELECT *
         FROM ranked_rows
@@ -4345,8 +5893,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
       },
       items: rows.rows.map((row) => {
         const entry = row as {
-          rank_position: number;
+          rank_position: number | string;
           account_id: string;
+          display_name: string | null;
           region: string;
           mr_points: number;
           matches_played: number;
@@ -4358,8 +5907,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
           updated_at: string;
         };
         return {
-          rank: entry.rank_position,
+          rank: Number(entry.rank_position),
           accountId: entry.account_id,
+          displayName: entry.display_name,
           region: entry.region,
           mrPoints: entry.mr_points,
           matchesPlayed: entry.matches_played,
@@ -4375,37 +5925,39 @@ app.get('/ranked/leaderboard', async (request, reply) => {
   }
 
   if (season.state === 'archived') {
-    const totalResult = await db.query(
+    const totalResult = await leaderboardDb.query(
       `
         SELECT COUNT(*) AS count
-        FROM ranked_season_standings
-        WHERE season_id = $1
-          AND ($2::text IS NULL OR region = $2)
+        FROM ranked_season_standings s
+        WHERE s.season_id = $1
+          AND ($2::text IS NULL OR s.region = $2)
       `,
       [season.seasonId, region],
     );
     const total = Number((totalResult.rows[0] as { count: string }).count);
-    const rows = await db.query(
+    const rows = await leaderboardDb.query(
       `
         SELECT
-          rank_position,
-          account_id,
-          region,
-          rating,
-          matches_played,
-          wins,
-          losses,
-          draws,
-          forfeits,
-          league_tier,
-          league_points,
-          mr_points,
-          provisional,
-          captured_at
-        FROM ranked_season_standings
-        WHERE season_id = $1
-          AND ($2::text IS NULL OR region = $2)
-        ORDER BY rank_position ASC, account_id ASC
+          s.rank_position,
+          s.account_id,
+          p.display_name,
+          s.region,
+          s.rating,
+          s.matches_played,
+          s.wins,
+          s.losses,
+          s.draws,
+          s.forfeits,
+          s.league_tier,
+          s.league_points,
+          s.mr_points,
+          s.provisional,
+          s.captured_at
+        FROM ranked_season_standings s
+        LEFT JOIN profiles p ON p.account_id = s.account_id
+        WHERE s.season_id = $1
+          AND ($2::text IS NULL OR s.region = $2)
+        ORDER BY s.rank_position ASC, s.account_id ASC
         LIMIT $3 OFFSET $4
       `,
       [season.seasonId, region, limit, offset],
@@ -4428,8 +5980,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
       },
       items: rows.rows.map((row) => {
         const entry = row as {
-          rank_position: number;
+          rank_position: number | string;
           account_id: string;
+          display_name: string | null;
           region: string;
           rating: number;
           matches_played: number;
@@ -4444,8 +5997,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
           captured_at: string;
         };
         return {
-          rank: entry.rank_position,
+          rank: Number(entry.rank_position),
           accountId: entry.account_id,
+          displayName: entry.display_name,
           region: entry.region,
           rating: entry.rating,
           matchesPlayed: entry.matches_played,
@@ -4463,12 +6017,14 @@ app.get('/ranked/leaderboard', async (request, reply) => {
     };
   }
 
-  const totalResult = await db.query(
+  const totalResult = await leaderboardDb.query(
     `
       SELECT COUNT(*) AS count
       FROM ranked_player_ratings r
+      JOIN accounts a ON a.id = r.account_id
       LEFT JOIN profiles p ON p.account_id = r.account_id
-      WHERE (
+      WHERE a.status = 'active'
+        AND (
         $1::text IS NULL
         OR COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') = $1
       )
@@ -4476,7 +6032,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
     [region],
   );
   const total = Number((totalResult.rows[0] as { count: string }).count);
-  const rows = await db.query(
+  const rows = await leaderboardDb.query(
     `
       WITH ranked_rows AS (
         SELECT
@@ -4484,6 +6040,7 @@ app.get('/ranked/leaderboard', async (request, reply) => {
             ORDER BY r.rating DESC, r.wins DESC, r.matches_played DESC, r.account_id ASC
           ) AS rank_position,
           r.account_id,
+          p.display_name,
           COALESCE(NULLIF(LOWER(TRIM(p.settings_json->>'region')), ''), 'global') AS region,
           r.rating,
           r.matches_played,
@@ -4497,15 +6054,17 @@ app.get('/ranked/leaderboard', async (request, reply) => {
           CASE WHEN l.placed_at IS NULL THEN TRUE ELSE FALSE END AS provisional,
           r.updated_at
         FROM ranked_player_ratings r
+        JOIN accounts a ON a.id = r.account_id
         LEFT JOIN profiles p ON p.account_id = r.account_id
         LEFT JOIN ranked_league_progression l ON l.account_id = r.account_id
         LEFT JOIN ranked_master_ratings m ON m.season_id = $2 AND m.account_id = r.account_id
+        WHERE a.status = 'active'
       )
       SELECT *
       FROM ranked_rows
       WHERE ($1::text IS NULL OR region = $1)
       ORDER BY rank_position ASC, account_id ASC
-      LIMIT $2 OFFSET $3
+      LIMIT $3 OFFSET $4
     `,
     [region, season.seasonId, limit, offset],
   );
@@ -4528,8 +6087,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
     },
     items: rows.rows.map((row) => {
       const entry = row as {
-        rank_position: number;
+        rank_position: number | string;
         account_id: string;
+        display_name: string | null;
         region: string;
         rating: number;
         matches_played: number;
@@ -4544,8 +6104,9 @@ app.get('/ranked/leaderboard', async (request, reply) => {
         updated_at: string;
       };
       return {
-        rank: entry.rank_position,
+        rank: Number(entry.rank_position),
         accountId: entry.account_id,
+        displayName: entry.display_name,
         region: entry.region,
         rating: entry.rating,
         matchesPlayed: entry.matches_played,
@@ -4560,6 +6121,58 @@ app.get('/ranked/leaderboard', async (request, reply) => {
         updatedAt: entry.updated_at,
       };
     }),
+  };
+  });
+});
+
+app.get('/ops/matchmaking/runtime', async (request, reply) => {
+  if (!sloAdminKey) {
+    reply.code(501);
+    return { error: 'Matchmaking operations are not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (adminKey !== sloAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
+  const summary = matchmakingQueueService.getRuntimeSummary();
+  await persistMatchmakingState(runtimeLease);
+  return {
+    acceptingJoins: !matchmakingDraining,
+    draining: matchmakingDraining,
+    ...summary,
+  };
+});
+
+app.post('/ops/matchmaking/drain', async (request, reply) => {
+  if (!sloAdminKey) {
+    reply.code(501);
+    return { error: 'Matchmaking operations are not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (adminKey !== sloAdminKey) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+  const body = (request.body ?? {}) as MatchmakingDrainBody;
+  if (typeof body.draining !== 'boolean') {
+    reply.code(400);
+    return { error: 'draining must be a boolean.' };
+  }
+
+  const runtimeLease = requireMatchmakingRuntimeLease(request);
+  matchmakingDraining = body.draining;
+  const closedQueuedTickets = matchmakingDraining
+    ? matchmakingQueueService.drainQueuedTickets()
+    : 0;
+  await persistMatchmakingState(runtimeLease);
+  return {
+    acceptingJoins: !matchmakingDraining,
+    draining: matchmakingDraining,
+    closedQueuedTickets,
+    ...matchmakingQueueService.getRuntimeSummary(),
   };
 });
 
@@ -5510,13 +7123,33 @@ app.post('/ranked/seasons/reset', async (request, reply) => {
   }
 
   const client = await db.connect();
+  let transactionOpen = false;
   try {
     await client.query('BEGIN');
+    transactionOpen = true;
     const result = await runRankedSeasonReset(client, new Date(), rankedSeasonDurationDays);
+    if (result.status === 'locked') {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      reply.header('retry-after', '5');
+      reply.code(503);
+      return {
+        error: 'Ranked season reset is already in progress.',
+        code: 'ranked_season_reset_locked',
+        retryAfterSeconds: 5,
+      };
+    }
     await client.query('COMMIT');
+    transactionOpen = false;
     return result;
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (transactionOpen) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Preserve the reset error if the connection also fails during rollback.
+      }
+    }
     throw error;
   } finally {
     client.release();
@@ -5604,12 +7237,18 @@ app.post('/rooms', async (request, reply) => {
     reply.code(401);
     return { error: 'Missing or invalid x-account-id header.' };
   }
+  const body = (request.body ?? {}) as CreateRoomBody;
+  const buildVersion = typeof body.buildVersion === 'string' ? body.buildVersion.trim() : null;
+  const accessDecision = matchmakingAccessPolicy.evaluate(accountId, buildVersion);
+  if (!accessDecision.allowed) {
+    reply.code(403);
+    return { error: getMatchmakingAccessError(accessDecision.code), code: accessDecision.code };
+  }
   if (!await ensureAccountExists(accountId)) {
     reply.code(404);
     return { error: 'Account not found.' };
   }
 
-  const body = (request.body ?? {}) as CreateRoomBody;
   const platform = (body.platform ?? 'web').toLowerCase().trim();
   if (!isRoomPlatform(platform)) {
     reply.code(400);
@@ -5620,8 +7259,6 @@ app.post('/rooms', async (request, reply) => {
     return { error: 'allowSpectators must be a boolean when provided.' };
   }
   const requiredRegion = typeof body.requiredRegion === 'string' ? body.requiredRegion.trim().toLowerCase() : null;
-  const buildVersion = typeof body.buildVersion === 'string' ? body.buildVersion.trim() : null;
-
   const room = roomService.createRoom({
     hostAccountId: accountId,
     hostPlatform: platform,
@@ -5659,6 +7296,13 @@ app.post('/rooms/:roomCode/join', async (request, reply) => {
     reply.code(401);
     return { error: 'Missing or invalid x-account-id header.' };
   }
+  const body = (request.body ?? {}) as JoinRoomBody;
+  const buildVersion = typeof body.buildVersion === 'string' ? body.buildVersion.trim() : null;
+  const accessDecision = matchmakingAccessPolicy.evaluate(accountId, buildVersion);
+  if (!accessDecision.allowed) {
+    reply.code(403);
+    return { error: getMatchmakingAccessError(accessDecision.code), code: accessDecision.code };
+  }
   if (!await ensureAccountExists(accountId)) {
     reply.code(404);
     return { error: 'Account not found.' };
@@ -5670,7 +7314,6 @@ app.post('/rooms/:roomCode/join', async (request, reply) => {
     reply.code(400);
     return { error: 'roomCode is required.' };
   }
-  const body = (request.body ?? {}) as JoinRoomBody;
   const platform = (body.platform ?? 'web').toLowerCase().trim();
   if (!isRoomPlatform(platform)) {
     reply.code(400);
@@ -5683,8 +7326,6 @@ app.post('/rooms/:roomCode/join', async (request, reply) => {
   }
   const role = roleRaw as RoomParticipantRole;
   const region = typeof body.region === 'string' ? body.region.trim().toLowerCase() : null;
-  const buildVersion = typeof body.buildVersion === 'string' ? body.buildVersion.trim() : null;
-
   const result = roomService.joinRoom({
     roomCode,
     accountId,
@@ -5937,7 +7578,7 @@ app.get('/rooms/:roomCode/invite', async (request, reply) => {
   return result.value;
 });
 
-app.post('/replays/ingest', async (request, reply) => {
+app.post('/replays/ingest', { bodyLimit: replayIngestBodyLimitBytes }, async (request, reply) => {
   const accountId = getAuthenticatedAccountId(request);
   if (!accountId) {
     reply.code(401);
@@ -5946,6 +7587,10 @@ app.post('/replays/ingest', async (request, reply) => {
   if (!await ensureAccountExists(accountId)) {
     reply.code(404);
     return { error: 'Account not found.' };
+  }
+  const replayRateLimitRejection = await enforceReplayIngestRateLimits(request, reply, accountId);
+  if (replayRateLimitRejection) {
+    return replayRateLimitRejection;
   }
 
   const body = (request.body ?? {}) as ReplayIngestBody;
@@ -5986,6 +7631,30 @@ app.post('/replays/ingest', async (request, reply) => {
     return { error: validation.errorMessage, code: validation.errorCode };
   }
   const payload = validation.payload;
+  if (queueType === 'ranked' && !payload.header.onlineMatch) {
+    reply.code(400);
+    return {
+      error: 'Ranked replay archives require canonical online match identity.',
+      code: 'ranked_replay_identity_required',
+    };
+  }
+  if (payload.header.onlineMatch) {
+    const deterministicValidation = validateDeterministicReplayPayload(payload);
+    if (!deterministicValidation.ok) {
+      reply.code(400);
+      return {
+        error: `Canonical replay simulation verification failed: ${deterministicValidation.error.message}`,
+        code: deterministicValidation.error.code,
+      };
+    }
+  }
+
+  const requestedMatchId = String(body.matchId ?? '').trim();
+  if (payload.header.onlineMatch && !isUuid(requestedMatchId)) {
+    reply.code(400);
+    return { error: 'Canonical online replay matchId must be a UUID.' };
+  }
+  const matchId = isUuid(requestedMatchId) ? requestedMatchId : randomUUID();
 
   const rulesetVersion = String(body.rulesetVersion ?? payload.header.rulesetVersion).trim();
   const simBuildHash = String(body.simBuildHash ?? payload.header.simBuildHash).trim();
@@ -6056,8 +7725,170 @@ app.post('/replays/ingest', async (request, reply) => {
     return { error: 'One or more replay participants do not exist.' };
   }
 
+  const existingMatchArchive = await db.query(
+    'SELECT replay_id FROM replays WHERE match_id = $1 LIMIT 1',
+    [matchId],
+  );
+  if (!existingMatchArchive.rowCount) {
+    const quotaUsage = await db.query(
+      `
+        SELECT
+          COUNT(*)::integer AS active_archives,
+          COALESCE(SUM(r.compressed_bytes), 0)::bigint AS active_compressed_bytes
+        FROM replays r
+        JOIN replay_participants rp ON rp.replay_id = r.replay_id
+        WHERE rp.account_id = $1
+          AND r.deleted_at IS NULL
+          AND r.retention_until > NOW()
+      `,
+      [accountId],
+    );
+    const usageRow = quotaUsage.rows[0] as {
+      active_archives?: number | string;
+      active_compressed_bytes?: number | string;
+    } | undefined;
+    const quotaDecision = evaluateReplayIngestQuota({
+      activeArchives: Number(usageRow?.active_archives ?? 0),
+      activeCompressedBytes: Number(usageRow?.active_compressed_bytes ?? 0),
+      incomingEstimatedBytes: Buffer.byteLength(JSON.stringify(payload), 'utf8'),
+    }, replayIngestQuotaPolicy);
+    if (!quotaDecision.allowed) {
+      reply.code(429);
+      return {
+        error: quotaDecision.error,
+        code: quotaDecision.code,
+        recovery: 'Delete old replay archives or wait for their retention period to expire.',
+      };
+    }
+  }
+
+  const canonicalIdentity = payload.header.onlineMatch;
+  const canonicalParticipants = normalisedParticipants as NormalisedReplayParticipant[];
+  if (canonicalIdentity) {
+    requireMatchmakingRuntimeLease(request);
+    const session = matchmakingQueueService.getSessionForAccount(
+      canonicalIdentity.sessionId,
+      accountId,
+    );
+    if (!session) {
+      reply.code(409);
+      return {
+        error: 'Canonical replay matchmaking session is unavailable for this account.',
+        code: 'replay_session_unavailable',
+      };
+    }
+    const canonicalBinding: CanonicalReplayBindingInput = {
+      accountId,
+      matchId,
+      queueType,
+      matchType,
+      region,
+      outcome,
+      winnerAccountId,
+      participants: canonicalParticipants,
+      payload,
+      session,
+    };
+    const bindingValidation = validateCanonicalReplayBinding(canonicalBinding);
+    if (!bindingValidation.ok) {
+      reply.code(400);
+      return { error: bindingValidation.error, code: 'invalid_replay_binding' };
+    }
+
+    if (queueType === 'ranked') {
+      const rankedMatch = await db.query(
+        `
+          SELECT
+            m.match_id,
+            m.session_id,
+            m.outcome,
+            m.winner_account_id,
+            m.settlement_source,
+            m.participant_p1_account_id,
+            m.participant_p2_account_id,
+            p.proof_digest,
+            p.payload_json AS proof_payload,
+            p.round_count AS proof_round_count,
+            p.frame_count AS proof_frame_count,
+            p.derived_outcome AS proof_derived_outcome
+          FROM ranked_matches m
+          LEFT JOIN ranked_result_submissions s
+            ON s.submission_id = m.processed_submission_id
+          LEFT JOIN ranked_match_proofs p
+            ON p.proof_digest = s.proof_digest
+          WHERE m.match_id = $1 AND m.session_id = $2
+          LIMIT 1
+        `,
+        [matchId, canonicalIdentity.sessionId],
+      );
+      if (!rankedMatch.rowCount) {
+        reply.code(409);
+        return {
+          error: 'Ranked replay cannot be archived before its match is settled.',
+          code: 'ranked_match_not_settled',
+        };
+      }
+      const row = rankedMatch.rows[0] as {
+        match_id: string;
+        session_id: string;
+        outcome: string;
+        winner_account_id: string | null;
+        settlement_source: string;
+        participant_p1_account_id: string;
+        participant_p2_account_id: string;
+        proof_digest: string | null;
+        proof_payload: unknown;
+        proof_round_count: number | null;
+        proof_frame_count: number | null;
+        proof_derived_outcome: string | null;
+      };
+      const settlement: RankedReplaySettlement = {
+        matchId: row.match_id,
+        sessionId: row.session_id,
+        outcome: row.outcome,
+        winnerAccountId: row.winner_account_id,
+        settlementSource: row.settlement_source,
+        p1AccountId: row.participant_p1_account_id,
+        p2AccountId: row.participant_p2_account_id,
+        proofRoundCount: row.proof_round_count,
+        proofFrameCount: row.proof_frame_count,
+        proofDerivedOutcome: row.proof_derived_outcome,
+      };
+      const settlementValidation = validateRankedReplaySettlement(
+        canonicalBinding,
+        bindingValidation.value,
+        settlement,
+      );
+      if (!settlementValidation.ok) {
+        reply.code(409);
+        return { error: settlementValidation.error, code: 'ranked_replay_mismatch' };
+      }
+      if (!row.proof_digest || !row.proof_payload) {
+        reply.code(409);
+        return {
+          error: 'Canonical ranked replay has no persisted verified proof payload.',
+          code: 'ranked_replay_proof_missing',
+        };
+      }
+      const proofBindingValidation = await validateRankedReplayProofBinding(
+        payload,
+        bindingValidation.value,
+        {
+          proofDigest: row.proof_digest,
+          proofPayload: row.proof_payload,
+        },
+      );
+      if (!proofBindingValidation.ok) {
+        reply.code(409);
+        return {
+          error: proofBindingValidation.error,
+          code: 'ranked_replay_proof_mismatch',
+        };
+      }
+    }
+  }
+
   const replayId = randomUUID();
-  const matchId = isUuid(body.matchId) ? body.matchId : randomUUID();
   const retentionUntil = computeReplayRetentionUntil(queueType, body.retentionClass, new Date());
   const blobRecord = await replayBlobStore.putReplayPayload(replayId, payload);
 
@@ -6120,9 +7951,118 @@ app.post('/replays/ingest', async (request, reply) => {
     await client.query('ROLLBACK');
     await replayBlobStore.deleteReplayPayload(blobRecord.storageKey);
     const message = error instanceof Error ? error.message : 'Replay ingest failed.';
-    if (message.includes('replays_match_id_key')) {
-      reply.code(409);
-      return { error: 'Replay already exists for this matchId.' };
+    const databaseError = error as { code?: string; constraint?: string };
+    const duplicateMatchId = (
+      databaseError.code === '23505'
+      && databaseError.constraint === 'replays_match_id_key'
+    ) || message.includes('replays_match_id_key');
+    if (duplicateMatchId) {
+      const existingReplay = await db.query(
+        `
+          SELECT
+            replay_id, match_id, queue_type, match_type, region, patch_version,
+            ruleset_version, sim_build_hash, payload_version, outcome, winner_account_id,
+            storage_key, compressed_bytes, sha256, retention_until, deleted_at
+          FROM replays
+          WHERE match_id = $1
+          LIMIT 1
+        `,
+        [matchId],
+      );
+      if (!existingReplay.rowCount) {
+        throw error;
+      }
+      const existingRow = existingReplay.rows[0] as {
+        replay_id: string;
+        match_id: string;
+        queue_type: string;
+        match_type: string;
+        region: string;
+        patch_version: string;
+        ruleset_version: string;
+        sim_build_hash: string;
+        payload_version: number;
+        outcome: string;
+        winner_account_id: string | null;
+        storage_key: string;
+        compressed_bytes: number;
+        sha256: string;
+        retention_until: unknown;
+        deleted_at: unknown;
+      };
+      if (existingRow.deleted_at) {
+        reply.code(409);
+        return { error: 'Replay for this matchId was deleted and cannot be replaced.' };
+      }
+
+      const existingParticipantRows = await db.query(
+        `
+          SELECT account_id, side, character_id, result
+          FROM replay_participants
+          WHERE replay_id = $1
+          ORDER BY side
+        `,
+        [existingRow.replay_id],
+      );
+      let existingPayload: unknown;
+      try {
+        existingPayload = await replayBlobStore.getReplayPayload(existingRow.storage_key);
+      } catch {
+        reply.code(409);
+        return { error: 'Existing replay archive is missing its canonical payload.' };
+      }
+      const existingValidation = validateReplayPayloadForArchive(existingPayload);
+      if (!existingValidation.ok) {
+        reply.code(409);
+        return { error: 'Existing replay archive payload is invalid and cannot be replaced.' };
+      }
+
+      const existingIdentity: ReplayArchiveIdentity = {
+        queueType: existingRow.queue_type,
+        matchType: existingRow.match_type,
+        region: existingRow.region,
+        patchVersion: existingRow.patch_version,
+        rulesetVersion: existingRow.ruleset_version,
+        simBuildHash: existingRow.sim_build_hash,
+        outcome: existingRow.outcome,
+        winnerAccountId: existingRow.winner_account_id,
+        payloadDigest: computeReplayCanonicalDigestForArchive(existingValidation.payload),
+        participants: existingParticipantRows.rows.map((participant) => ({
+          accountId: String(participant.account_id),
+          side: String(participant.side) as 'P1' | 'P2',
+          characterId: String(participant.character_id),
+          result: String(participant.result) as NormalisedReplayParticipant['result'],
+        })),
+      };
+      const incomingIdentity: ReplayArchiveIdentity = {
+        queueType,
+        matchType,
+        region,
+        patchVersion,
+        rulesetVersion,
+        simBuildHash,
+        outcome,
+        winnerAccountId,
+        payloadDigest: computeReplayCanonicalDigestForArchive(payload),
+        participants: canonicalParticipants,
+      };
+      const identityComparison = compareReplayArchiveIdentity(existingIdentity, incomingIdentity);
+      if (!identityComparison.ok) {
+        reply.code(409);
+        return { error: identityComparison.error, code: 'replay_identity_conflict' };
+      }
+
+      reply.code(200);
+      return {
+        replayId: existingRow.replay_id,
+        matchId: existingRow.match_id,
+        storageKey: existingRow.storage_key,
+        compressedBytes: existingRow.compressed_bytes,
+        sha256: existingRow.sha256,
+        payloadVersion: existingRow.payload_version,
+        retentionUntil: toIsoString(existingRow.retention_until),
+        existing: true,
+      };
     }
     throw error;
   } finally {
@@ -6459,12 +8399,26 @@ app.delete('/replays/:replayId', async (request, reply) => {
 });
 
 function getAuthenticatedAccountId(request: { headers: Record<string, unknown> }): string | null {
-  const headerValue = request.headers['x-account-id'] as string | string[] | undefined;
-  const accountId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  if (!isUuid(accountId)) {
-    return null;
+  return resolveAuthenticatedAccountId(
+    request.headers,
+    authSessionTokenService,
+    allowInsecureAccountHeader,
+  );
+}
+
+function getMatchmakingAccessError(code: MatchmakingAccessDenialCode): string {
+  switch (code) {
+    case 'matchmaking_closed':
+      return 'Online match entry is currently closed.';
+    case 'account_not_allowlisted':
+      return 'This account is not enabled for the controlled alpha.';
+    case 'build_version_required':
+      return 'An approved build version is required for online play.';
+    case 'build_not_allowlisted':
+      return 'This build is not enabled for the controlled alpha.';
+    default:
+      return 'Online match entry is unavailable.';
   }
-  return accountId as string;
 }
 
 app.get('/profile', async (request, reply) => {
@@ -6541,7 +8495,166 @@ app.put('/profile', async (request, reply) => {
 });
 
 const port = Number(process.env.PORT ?? process.env.API_PORT ?? 8787);
-app.listen({ port, host: '0.0.0.0' }).catch((error) => {
+const matchmakingCheckpointIntervalMs = parsePositiveIntegerEnv(
+  process.env.MATCHMAKING_SNAPSHOT_INTERVAL_MS,
+) ?? 5_000;
+const rankedTerminalDecisionProcessingIntervalMs = Math.min(
+  60_000,
+  Math.max(
+    250,
+    parsePositiveIntegerEnv(process.env.RANKED_TERMINAL_DECISION_PROCESS_INTERVAL_MS) ?? 1_000,
+  ),
+);
+let matchmakingCheckpointTimer: NodeJS.Timeout | null = null;
+let rankedTerminalDecisionProcessingTimer: NodeJS.Timeout | null = null;
+let authRateLimitCleanupTimer: NodeJS.Timeout | null = null;
+let replayRetentionCleanupTimer: NodeJS.Timeout | null = null;
+let matchmakingSignalCleanupTimer: NodeJS.Timeout | null = null;
+let sloSampleCleanupTimer: NodeJS.Timeout | null = null;
+let shuttingDown = false;
+
+async function runSloSampleCleanup(): Promise<void> {
+  const result = await sloSampleStore.pruneBounded();
+  if (result.deleted > 0) {
+    app.log.info(
+      { batches: result.batches, deleted: result.deleted },
+      'Pruned retained SLO request samples.',
+    );
+  }
+}
+
+async function runReplayRetentionCleanup(): Promise<void> {
+  let selected = 0;
+  let deleted = 0;
+  for (let batch = 0; batch < 10; batch += 1) {
+    const result = await pruneExpiredReplayArchives(db, replayBlobStore, 100);
+    selected += result.selected;
+    deleted += result.deleted;
+    if (result.selected < 100) {
+      break;
+    }
+  }
+  if (selected > 0) {
+    app.log.info({ selected, deleted }, 'Pruned expired replay archives.');
+  }
+}
+
+async function runMatchmakingSignalCleanup(): Promise<void> {
+  let deleted = 0;
+  for (let batch = 0; batch < 10; batch += 1) {
+    const batchDeleted = await sessionSignalStore.deleteExpiredSignals(
+      DEFAULT_EXPIRED_SIGNAL_DELETE_LIMIT,
+    );
+    deleted += batchDeleted;
+    if (batchDeleted < DEFAULT_EXPIRED_SIGNAL_DELETE_LIMIT) {
+      break;
+    }
+  }
+  if (deleted > 0) {
+    app.log.info({ deleted }, 'Pruned expired WebRTC signaling messages.');
+  }
+}
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  app.log.info({ signal }, 'Shutting down API.');
+  if (matchmakingCheckpointTimer) {
+    clearInterval(matchmakingCheckpointTimer);
+    matchmakingCheckpointTimer = null;
+  }
+  if (rankedTerminalDecisionProcessingTimer) {
+    clearInterval(rankedTerminalDecisionProcessingTimer);
+    rankedTerminalDecisionProcessingTimer = null;
+  }
+  if (authRateLimitCleanupTimer) {
+    clearInterval(authRateLimitCleanupTimer);
+    authRateLimitCleanupTimer = null;
+  }
+  if (replayRetentionCleanupTimer) {
+    clearInterval(replayRetentionCleanupTimer);
+    replayRetentionCleanupTimer = null;
+  }
+  if (matchmakingSignalCleanupTimer) {
+    clearInterval(matchmakingSignalCleanupTimer);
+    matchmakingSignalCleanupTimer = null;
+  }
+  if (sloSampleCleanupTimer) {
+    clearInterval(sloSampleCleanupTimer);
+    sloSampleCleanupTimer = null;
+  }
+  try {
+    await app.close();
+    await matchmakingRuntimeCoordinator.withLease(async (lease) => {
+      await refreshMatchmakingState(lease);
+      await persistMatchmakingState(lease);
+    });
+    await db.end();
+    process.exit(0);
+  } catch (error) {
+    app.log.error(error, 'API shutdown failed.');
+    process.exit(1);
+  }
+}
+
+async function startServer(): Promise<void> {
+  await matchmakingRuntimeCoordinator.withLease((lease) => restoreMatchmakingState(lease));
+  await processRankedTerminalDecisionBatch();
+  await authRateLimiter.pruneExpired();
+  await runReplayRetentionCleanup();
+  await runMatchmakingSignalCleanup();
+  await runSloSampleCleanup();
+  await app.listen({ port, host: '0.0.0.0' });
+  authRateLimitCleanupTimer = setInterval(() => {
+    void authRateLimiter.pruneExpired().catch((error) => {
+      app.log.warn({ err: error }, 'Failed to prune expired authentication rate-limit buckets.');
+    });
+  }, authRateLimitCleanupIntervalMs);
+  authRateLimitCleanupTimer.unref();
+  replayRetentionCleanupTimer = setInterval(() => {
+    void runReplayRetentionCleanup().catch((error) => {
+      app.log.warn({ err: error }, 'Failed to prune expired replay archives.');
+    });
+  }, replayRetentionCleanupIntervalMs);
+  replayRetentionCleanupTimer.unref();
+  matchmakingSignalCleanupTimer = setInterval(() => {
+    void runMatchmakingSignalCleanup().catch((error) => {
+      app.log.warn({ err: error }, 'Failed to prune expired WebRTC signaling messages.');
+    });
+  }, matchmakingSignalCleanupIntervalMs);
+  matchmakingSignalCleanupTimer.unref();
+  sloSampleCleanupTimer = setInterval(() => {
+    void runSloSampleCleanup().catch((error) => {
+      app.log.warn({ err: error }, 'Failed to prune retained SLO request samples.');
+    });
+  }, sloSampleStore.config.cleanupIntervalMs);
+  sloSampleCleanupTimer.unref();
+  matchmakingCheckpointTimer = setInterval(() => {
+    void matchmakingRuntimeCoordinator.withLease(async (lease) => {
+      await refreshMatchmakingState(lease);
+      await persistMatchmakingState(lease);
+    }).catch((error) => {
+      app.log.error(error, 'Periodic matchmaking state checkpoint failed.');
+    });
+  }, matchmakingCheckpointIntervalMs);
+  matchmakingCheckpointTimer.unref();
+  rankedTerminalDecisionProcessingTimer = setInterval(() => {
+    void scheduleRankedTerminalDecisionProcessing();
+  }, rankedTerminalDecisionProcessingIntervalMs);
+  rankedTerminalDecisionProcessingTimer.unref();
+}
+
+process.once('SIGTERM', () => {
+  void shutdown('SIGTERM');
+});
+process.once('SIGINT', () => {
+  void shutdown('SIGINT');
+});
+
+startServer().catch(async (error) => {
   app.log.error(error);
+  await db.end().catch(() => undefined);
   process.exit(1);
 });

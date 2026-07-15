@@ -2,6 +2,37 @@ export interface SqlClient {
   query(text: string, values?: unknown[]): Promise<{ rowCount: number | null; rows: unknown[] }>;
 }
 
+export type SteamAccountLinkErrorCode =
+  | 'steam_link_authentication_required'
+  | 'steam_linked_account_disabled'
+  | 'steam_identity_already_linked'
+  | 'steam_link_target_not_found'
+  | 'steam_link_target_disabled'
+  | 'steam_link_target_already_has_identity';
+
+export class SteamAccountLinkError extends Error {
+  public constructor(
+    public readonly code: SteamAccountLinkErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SteamAccountLinkError';
+  }
+}
+
+export interface ResolveSteamAccountLinkInput {
+  steamUserId: string;
+  authenticatedAccountId: string | null;
+  linkToAuthenticatedAccount: boolean;
+}
+
+export interface SteamAccountLinkResult {
+  accountId: string;
+  createdAccount: boolean;
+  linkedToExistingAccount: boolean;
+  identityAlreadyLinked: boolean;
+}
+
 export async function logIdentityLinkEvent(
   client: SqlClient,
   event: {
@@ -29,199 +60,130 @@ export async function logIdentityLinkEvent(
   );
 }
 
-export async function mergeAccountIntoTarget(
+export async function resolveSteamAccountLink(
   client: SqlClient,
-  sourceAccountId: string,
-  targetAccountId: string,
-  actorAccountId: string | null,
-): Promise<{ merged: boolean; transferredWebIdentity: boolean; transferredWebCredential: boolean; mergedProfile: boolean }> {
-  if (sourceAccountId === targetAccountId) {
-    return {
-      merged: false,
-      transferredWebIdentity: false,
-      transferredWebCredential: false,
-      mergedProfile: false,
-    };
-  }
-
-  const sourceAccountResult = await client.query(
-    'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE',
-    [sourceAccountId],
-  );
-  if (!sourceAccountResult.rowCount) {
-    throw new Error('Merge source account not found.');
-  }
-  const sourceAccount = sourceAccountResult.rows[0] as { id: string; status: string };
-  if (sourceAccount.status !== 'active') {
-    throw new Error('Merge source account is disabled.');
-  }
-
-  const targetAccountResult = await client.query(
-    'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE',
-    [targetAccountId],
-  );
-  if (!targetAccountResult.rowCount) {
-    throw new Error('Merge target account not found.');
-  }
-  const targetAccount = targetAccountResult.rows[0] as { id: string; status: string };
-  if (targetAccount.status !== 'active') {
-    throw new Error('Merge target account is disabled.');
-  }
-
-  let transferredWebIdentity = false;
-  let transferredWebCredential = false;
-  let mergedProfile = false;
-  const actor = actorAccountId ?? 'system';
-
-  const targetWebIdentityResult = await client.query(
-    `SELECT 1 FROM identities WHERE account_id = $1 AND provider = 'web' LIMIT 1`,
-    [targetAccountId],
-  );
-  const sourceWebIdentityResult = await client.query(
-    `
-      SELECT id, provider_user_id
-      FROM identities
-      WHERE account_id = $1 AND provider = 'web'
-      LIMIT 1
-      FOR UPDATE
-    `,
-    [sourceAccountId],
-  );
-  if (sourceWebIdentityResult.rowCount) {
-    const sourceIdentity = sourceWebIdentityResult.rows[0] as { id: number; provider_user_id: string };
-    if (targetWebIdentityResult.rowCount) {
-      await client.query('DELETE FROM identities WHERE id = $1', [sourceIdentity.id]);
-      await logIdentityLinkEvent(client, {
-        accountId: sourceAccountId,
-        provider: 'web',
-        providerUserId: sourceIdentity.provider_user_id,
-        eventType: 'unlinked',
-        actor,
-        metadata: {
-          reason: 'merge_discard_duplicate_web_identity',
-          targetAccountId,
-        },
-      });
-    } else {
-      await client.query('UPDATE identities SET account_id = $1 WHERE id = $2', [targetAccountId, sourceIdentity.id]);
-      transferredWebIdentity = true;
-      await logIdentityLinkEvent(client, {
-        accountId: targetAccountId,
-        provider: 'web',
-        providerUserId: sourceIdentity.provider_user_id,
-        eventType: 'linked',
-        actor,
-        metadata: {
-          reason: 'merge_transfer_web_identity',
-          sourceAccountId,
-        },
-      });
-    }
-  }
-
-  const sourceOtherIdentities = await client.query(
-    `
-      SELECT id, provider, provider_user_id
-      FROM identities
-      WHERE account_id = $1 AND provider <> 'web'
-      FOR UPDATE
-    `,
-    [sourceAccountId],
-  );
-  for (const row of sourceOtherIdentities.rows as Array<{ id: number; provider: 'web' | 'steam'; provider_user_id: string }>) {
-    await client.query('DELETE FROM identities WHERE id = $1', [row.id]);
-    await logIdentityLinkEvent(client, {
-      accountId: sourceAccountId,
-      provider: row.provider,
-      providerUserId: row.provider_user_id,
-      eventType: 'unlinked',
-      actor,
-      metadata: {
-        reason: 'merge_discard_non_web_identity',
-        targetAccountId,
-      },
-    });
-  }
-
-  const targetCredentialsResult = await client.query(
-    'SELECT 1 FROM web_auth_credentials WHERE account_id = $1 LIMIT 1',
-    [targetAccountId],
-  );
-  const sourceCredentialsResult = await client.query(
-    'SELECT account_id FROM web_auth_credentials WHERE account_id = $1 LIMIT 1 FOR UPDATE',
-    [sourceAccountId],
-  );
-  if (sourceCredentialsResult.rowCount) {
-    if (targetCredentialsResult.rowCount) {
-      await client.query('DELETE FROM web_auth_credentials WHERE account_id = $1', [sourceAccountId]);
-    } else {
-      await client.query('UPDATE web_auth_credentials SET account_id = $1 WHERE account_id = $2', [targetAccountId, sourceAccountId]);
-      transferredWebCredential = true;
-    }
-  }
-
-  const sourceProfileResult = await client.query(
-    'SELECT display_name, settings_json FROM profiles WHERE account_id = $1 LIMIT 1 FOR UPDATE',
-    [sourceAccountId],
-  );
-  if (sourceProfileResult.rowCount) {
-    const sourceProfile = sourceProfileResult.rows[0] as {
-      display_name: string | null;
-      settings_json: Record<string, unknown>;
-    };
-    const targetProfileResult = await client.query(
-      'SELECT account_id, display_name, settings_json FROM profiles WHERE account_id = $1 LIMIT 1 FOR UPDATE',
-      [targetAccountId],
+  input: ResolveSteamAccountLinkInput,
+): Promise<SteamAccountLinkResult> {
+  if (input.linkToAuthenticatedAccount && !input.authenticatedAccountId) {
+    throw new SteamAccountLinkError(
+      'steam_link_authentication_required',
+      'Steam identity linking requires an authenticated target account.',
     );
-    if (targetProfileResult.rowCount) {
-      await client.query(
-        `
-          UPDATE profiles
-          SET
-            display_name = COALESCE(NULLIF(display_name, ''), $2),
-            settings_json = COALESCE($3::jsonb, '{}'::jsonb) || COALESCE(settings_json, '{}'::jsonb),
-            updated_at = NOW()
-          WHERE account_id = $1
-        `,
-        [targetAccountId, sourceProfile.display_name, JSON.stringify(sourceProfile.settings_json ?? {})],
+  }
+
+  // Serialise first-use exchanges for one Steam identity before checking the unique row.
+  await client.query(
+    'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+    [`steam:${input.steamUserId}`],
+  );
+
+  const existingSteamIdentity = await client.query(
+    `
+      SELECT i.account_id, a.status
+      FROM identities i
+      JOIN accounts a ON a.id = i.account_id
+      WHERE i.provider = 'steam' AND i.provider_user_id = $1
+      LIMIT 1
+      FOR UPDATE OF i, a
+    `,
+    [input.steamUserId],
+  );
+
+  if (existingSteamIdentity.rowCount) {
+    const existing = existingSteamIdentity.rows[0] as { account_id: string; status: string };
+    if (existing.status !== 'active') {
+      throw new SteamAccountLinkError(
+        'steam_linked_account_disabled',
+        'Steam-linked account is disabled.',
       );
-      await client.query('DELETE FROM profiles WHERE account_id = $1', [sourceAccountId]);
-    } else {
-      await client.query('UPDATE profiles SET account_id = $1 WHERE account_id = $2', [targetAccountId, sourceAccountId]);
     }
-    mergedProfile = true;
+    if (
+      input.linkToAuthenticatedAccount
+      && input.authenticatedAccountId !== existing.account_id
+    ) {
+      throw new SteamAccountLinkError(
+        'steam_identity_already_linked',
+        'Steam identity is already linked to another account.',
+      );
+    }
+    return {
+      accountId: existing.account_id,
+      createdAccount: false,
+      linkedToExistingAccount: false,
+      identityAlreadyLinked: true,
+    };
+  }
+
+  let accountId: string;
+  let createdAccount = false;
+  if (input.linkToAuthenticatedAccount) {
+    accountId = input.authenticatedAccountId as string;
+    const targetAccount = await client.query(
+      'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE',
+      [accountId],
+    );
+    if (!targetAccount.rowCount) {
+      throw new SteamAccountLinkError(
+        'steam_link_target_not_found',
+        'Steam link target account was not found.',
+      );
+    }
+    const target = targetAccount.rows[0] as { id: string; status: string };
+    if (target.status !== 'active') {
+      throw new SteamAccountLinkError(
+        'steam_link_target_disabled',
+        'Steam link target account is disabled.',
+      );
+    }
+    const targetSteamIdentity = await client.query(
+      `
+        SELECT provider_user_id
+        FROM identities
+        WHERE account_id = $1 AND provider = 'steam'
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [accountId],
+    );
+    if (targetSteamIdentity.rowCount) {
+      throw new SteamAccountLinkError(
+        'steam_link_target_already_has_identity',
+        'Authenticated account already has a different Steam identity.',
+      );
+    }
+  } else {
+    const createdAccountResult = await client.query(
+      'INSERT INTO accounts(status) VALUES ($1) RETURNING id',
+      ['active'],
+    );
+    accountId = (createdAccountResult.rows[0] as { id: string }).id;
+    createdAccount = true;
   }
 
   await client.query(
     `
-      UPDATE accounts
-      SET status = 'disabled', updated_at = NOW()
-      WHERE id = $1
+      INSERT INTO identities(account_id, provider, provider_user_id)
+      VALUES ($1, 'steam', $2)
     `,
-    [sourceAccountId],
+    [accountId, input.steamUserId],
   );
-  await client.query(
-    `
-      INSERT INTO account_merge_events(source_account_id, target_account_id, actor_account_id, reason, metadata)
-      VALUES ($1, $2, $3, $4, $5::jsonb)
-    `,
-    [
-      sourceAccountId,
-      targetAccountId,
-      actorAccountId,
-      'steam_link_merge',
-      JSON.stringify({
-        transferredWebIdentity,
-        transferredWebCredential,
-        mergedProfile,
-      }),
-    ],
-  );
+  await logIdentityLinkEvent(client, {
+    accountId,
+    provider: 'steam',
+    providerUserId: input.steamUserId,
+    eventType: 'linked',
+    actor: input.authenticatedAccountId ?? 'steam_exchange',
+    metadata: {
+      reason: input.linkToAuthenticatedAccount
+        ? 'explicit_authenticated_steam_link'
+        : 'steam_first_signin_create_account',
+    },
+  });
 
   return {
-    merged: true,
-    transferredWebIdentity,
-    transferredWebCredential,
-    mergedProfile,
+    accountId,
+    createdAccount,
+    linkedToExistingAccount: input.linkToAuthenticatedAccount,
+    identityAlreadyLinked: false,
   };
 }

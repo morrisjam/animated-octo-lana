@@ -9,8 +9,12 @@ import { createConfiguredEntitlementService, parseEntitlementMode } from './enti
 import { createStorageBackedPersistenceService } from './persistence';
 
 const GUEST_ACCOUNT_KEY = 'gravity_well.guest_account_id';
+const GUEST_ACCESS_TOKEN_KEY = 'gravity_well.guest_access_token';
+const GUEST_ACCESS_TOKEN_EXPIRES_AT_KEY = 'gravity_well.guest_access_token_expires_at';
 const AUTH_ACCOUNT_KEY = 'gravity_well.auth_account_id';
 const AUTH_DISPLAY_NAME_KEY = 'gravity_well.auth_display_name';
+const AUTH_ACCESS_TOKEN_KEY = 'gravity_well.auth_access_token';
+const AUTH_ACCESS_TOKEN_EXPIRES_AT_KEY = 'gravity_well.auth_access_token_expires_at';
 const PROFILE_CACHE_KEY_PREFIX = 'gravity_well.profile.';
 const profileApiBase = (
   (import.meta.env.VITE_PROFILE_API_BASE as string | undefined)?.trim()
@@ -128,6 +132,30 @@ function normaliseDisplayName(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function readUsableAccessToken(
+  storage: PlatformStorageService,
+  tokenKey: string,
+  expiresAtKey: string,
+): string | null {
+  const token = storage.getItem(tokenKey)?.trim() ?? '';
+  const expiresAt = Date.parse(storage.getItem(expiresAtKey) ?? '');
+  if (!token || !Number.isFinite(expiresAt) || expiresAt <= Date.now() + 5_000) {
+    return null;
+  }
+  return token;
+}
+
+function writeAccessToken(
+  storage: PlatformStorageService,
+  tokenKey: string,
+  expiresAtKey: string,
+  accessToken: string,
+  accessTokenExpiresAt: string,
+): void {
+  storage.setItem(tokenKey, accessToken);
+  storage.setItem(expiresAtKey, accessTokenExpiresAt);
+}
+
 async function parseApiError(response: Response): Promise<string> {
   try {
     const payload = await response.json() as {
@@ -160,7 +188,12 @@ export function createWebPlatformServices(): PlatformServices {
 
   async function ensureGuestAccountId(): Promise<string> {
     const stored = storage.getItem(GUEST_ACCOUNT_KEY);
-    if (isUuid(stored) || !profileApiBase) {
+    const storedToken = readUsableAccessToken(
+      storage,
+      GUEST_ACCESS_TOKEN_KEY,
+      GUEST_ACCESS_TOKEN_EXPIRES_AT_KEY,
+    );
+    if ((isUuid(stored) && storedToken) || !profileApiBase) {
       if (stored) {
         return stored;
       }
@@ -178,9 +211,22 @@ export function createWebPlatformServices(): PlatformServices {
             body: JSON.stringify({ status: 'active' }),
           });
           if (response.ok) {
-            const payload = await response.json() as { id?: string };
+            const payload = await response.json() as {
+              id?: string;
+              accessToken?: string;
+              accessTokenExpiresAt?: string;
+            };
             if (isUuid(payload.id)) {
               storage.setItem(GUEST_ACCOUNT_KEY, payload.id);
+              if (payload.accessToken && payload.accessTokenExpiresAt) {
+                writeAccessToken(
+                  storage,
+                  GUEST_ACCESS_TOKEN_KEY,
+                  GUEST_ACCESS_TOKEN_EXPIRES_AT_KEY,
+                  payload.accessToken,
+                  payload.accessTokenExpiresAt,
+                );
+              }
               return payload.id;
             }
           }
@@ -198,7 +244,15 @@ export function createWebPlatformServices(): PlatformServices {
 
   function getAuthenticatedSession(): PlatformAuthSession | null {
     const accountId = storage.getItem(AUTH_ACCOUNT_KEY);
-    if (!isUuid(accountId)) {
+    const accessToken = readUsableAccessToken(
+      storage,
+      AUTH_ACCESS_TOKEN_KEY,
+      AUTH_ACCESS_TOKEN_EXPIRES_AT_KEY,
+    );
+    if (!isUuid(accountId) || !accessToken) {
+      if (accountId) {
+        clearAuthenticatedSession();
+      }
       return null;
     }
     return {
@@ -208,8 +262,20 @@ export function createWebPlatformServices(): PlatformServices {
     };
   }
 
-  function setAuthenticatedSession(accountId: string, displayName: string | null): void {
+  function setAuthenticatedSession(
+    accountId: string,
+    displayName: string | null,
+    accessToken: string,
+    accessTokenExpiresAt: string,
+  ): void {
     storage.setItem(AUTH_ACCOUNT_KEY, accountId);
+    writeAccessToken(
+      storage,
+      AUTH_ACCESS_TOKEN_KEY,
+      AUTH_ACCESS_TOKEN_EXPIRES_AT_KEY,
+      accessToken,
+      accessTokenExpiresAt,
+    );
     if (displayName) {
       storage.setItem(AUTH_DISPLAY_NAME_KEY, displayName);
     } else {
@@ -220,6 +286,46 @@ export function createWebPlatformServices(): PlatformServices {
   function clearAuthenticatedSession(): void {
     storage.removeItem(AUTH_ACCOUNT_KEY);
     storage.removeItem(AUTH_DISPLAY_NAME_KEY);
+    storage.removeItem(AUTH_ACCESS_TOKEN_KEY);
+    storage.removeItem(AUTH_ACCESS_TOKEN_EXPIRES_AT_KEY);
+  }
+
+  function getAccessTokenForAccount(accountId: string): string | null {
+    if (storage.getItem(AUTH_ACCOUNT_KEY) === accountId) {
+      return readUsableAccessToken(
+        storage,
+        AUTH_ACCESS_TOKEN_KEY,
+        AUTH_ACCESS_TOKEN_EXPIRES_AT_KEY,
+      );
+    }
+    if (storage.getItem(GUEST_ACCOUNT_KEY) === accountId) {
+      return readUsableAccessToken(
+        storage,
+        GUEST_ACCESS_TOKEN_KEY,
+        GUEST_ACCESS_TOKEN_EXPIRES_AT_KEY,
+      );
+    }
+    return null;
+  }
+
+  function getAccessToken(): string | null {
+    const authenticatedAccountId = storage.getItem(AUTH_ACCOUNT_KEY);
+    if (isUuid(authenticatedAccountId)) {
+      return getAccessTokenForAccount(authenticatedAccountId);
+    }
+    const guestAccountId = storage.getItem(GUEST_ACCOUNT_KEY);
+    return isUuid(guestAccountId) ? getAccessTokenForAccount(guestAccountId) : null;
+  }
+
+  function authenticatedHeaders(accountId: string, includeJson = false): Record<string, string> {
+    const headers: Record<string, string> = includeJson ? { 'content-type': 'application/json' } : {};
+    const accessToken = getAccessTokenForAccount(accountId);
+    if (accessToken) {
+      headers.authorization = `Bearer ${accessToken}`;
+    } else {
+      headers['x-account-id'] = accountId;
+    }
+    return headers;
   }
 
   async function resolveSession(): Promise<PlatformAuthSession> {
@@ -244,6 +350,7 @@ export function createWebPlatformServices(): PlatformServices {
       async getSession() {
         return await resolveSession();
       },
+      getAccessToken,
       async signUp(request: WebAuthSignupRequest) {
         if (!profileApiBase) {
           throw new Error('Web auth is unavailable until VITE_PROFILE_API_BASE is configured.');
@@ -262,11 +369,14 @@ export function createWebPlatformServices(): PlatformServices {
         const upgradeAccountId = request.upgradeCurrentGuest && !currentSession.isAuthenticated && isUuid(currentSession.accountId)
           ? currentSession.accountId
           : null;
-        const headers: Record<string, string> = {
-          'content-type': 'application/json',
-        };
+        const headers: Record<string, string> = { 'content-type': 'application/json' };
         if (upgradeAccountId) {
-          headers['x-account-id'] = upgradeAccountId;
+          const accessToken = getAccessToken();
+          if (accessToken) {
+            headers.authorization = `Bearer ${accessToken}`;
+          } else {
+            headers['x-account-id'] = upgradeAccountId;
+          }
         }
         const response = await fetch(`${profileApiBase}/auth/web/signup`, {
           method: 'POST',
@@ -281,11 +391,20 @@ export function createWebPlatformServices(): PlatformServices {
         if (!response.ok) {
           throw new Error(await parseApiError(response));
         }
-        const payload = await response.json() as { accountId?: string };
-        if (!isUuid(payload.accountId)) {
-          throw new Error('Web signup did not return a valid account id.');
+        const payload = await response.json() as {
+          accountId?: string;
+          accessToken?: string;
+          accessTokenExpiresAt?: string;
+        };
+        if (!isUuid(payload.accountId) || !payload.accessToken || !payload.accessTokenExpiresAt) {
+          throw new Error('Web signup did not return a valid authenticated session.');
         }
-        setAuthenticatedSession(payload.accountId, displayName);
+        setAuthenticatedSession(
+          payload.accountId,
+          displayName,
+          payload.accessToken,
+          payload.accessTokenExpiresAt,
+        );
         return {
           accountId: payload.accountId,
           displayName,
@@ -321,12 +440,24 @@ export function createWebPlatformServices(): PlatformServices {
           accountId?: string;
           displayName?: string | null;
           isAuthenticated?: boolean;
+          accessToken?: string;
+          accessTokenExpiresAt?: string;
         };
-        if (!isUuid(payload.accountId) || !payload.isAuthenticated) {
+        if (
+          !isUuid(payload.accountId)
+          || !payload.isAuthenticated
+          || !payload.accessToken
+          || !payload.accessTokenExpiresAt
+        ) {
           throw new Error('Web sign-in response was invalid.');
         }
         const displayName = normaliseDisplayName(payload.displayName);
-        setAuthenticatedSession(payload.accountId, displayName);
+        setAuthenticatedSession(
+          payload.accountId,
+          displayName,
+          payload.accessToken,
+          payload.accessTokenExpiresAt,
+        );
         return {
           accountId: payload.accountId,
           displayName,
@@ -364,9 +495,7 @@ export function createWebPlatformServices(): PlatformServices {
         try {
           const response = await fetch(`${profileApiBase}/profile`, {
             method: 'GET',
-            headers: {
-              'x-account-id': accountId,
-            },
+            headers: authenticatedHeaders(accountId),
           });
           if (!response.ok) {
             throw new Error(`Profile fetch failed: ${response.status}`);
@@ -410,10 +539,7 @@ export function createWebPlatformServices(): PlatformServices {
         try {
           const response = await fetch(`${profileApiBase}/profile`, {
             method: 'PUT',
-            headers: {
-              'content-type': 'application/json',
-              'x-account-id': accountId,
-            },
+            headers: authenticatedHeaders(accountId, true),
             body: JSON.stringify({
               displayName: payload.displayName ?? null,
               settings: payload.settings ?? {},

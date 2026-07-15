@@ -68,6 +68,16 @@ function assertManifestEntryBase(kind: AssetKind, entry: AssetManifestEntryBase,
   if (normaliseText(entry.id).length === 0) {
     throw new AssetManifestValidationError(`Invalid asset manifest: ${kind}[${index}] is missing a non-empty id.`);
   }
+  if (
+    entry.readiness !== undefined
+    && entry.readiness !== 'prototype'
+    && entry.readiness !== 'alpha'
+    && entry.readiness !== 'production'
+  ) {
+    throw new AssetManifestValidationError(
+      `Invalid asset manifest: ${kind}[${index}] (${entry.id}) has invalid readiness.`,
+    );
+  }
   if (!entry.budget) {
     return;
   }

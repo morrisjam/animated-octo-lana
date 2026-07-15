@@ -1,12 +1,17 @@
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { CharacterDefinition } from '../src/sim/characters';
 import { CHARACTER_BY_ID } from '../src/sim/characters';
+import { discoverNodeCharacterPackageFiles } from '../src/content/characterPackageLoader';
 import { parseCharacterPackage } from '../src/content/characterPackageSchema';
 import { computeStateChecksum } from '../src/sim/checksum';
 import { createInitialState, step } from '../src/sim/sim';
 import type { FrameInput } from '../src/sim/types';
 import { DEFAULT_ASSET_MANIFEST } from '../src/view/assets/defaultManifest';
+import type { AssetReadiness } from '../src/view/assets/types';
+import { hasVoiceProfile } from '../src/view/audio/voiceLines';
+import { hasCharacterVfxProfile } from '../src/view/vfx/presets';
 
 interface CharacterQaIssue {
   path: string;
@@ -33,6 +38,9 @@ interface CharacterAssetBudgetReport {
   pass: boolean;
   violations: CharacterQaIssue[];
   unresolvedManifestRefs: string[];
+  belowAlphaReadinessRefs: string[];
+  unresolvedProfileRefs: string[];
+  alphaContentReady: boolean;
 }
 
 interface CharacterPackageQaResult {
@@ -80,33 +88,7 @@ function parseDirArg(argv: string[]): string {
   return DEFAULT_ROOT_DIR;
 }
 
-function walkFiles(rootDir: string): string[] {
-  const files: string[] = [];
-  const stack = [rootDir];
-  while (stack.length > 0) {
-    const current = stack.pop() as string;
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(current);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const fullPath = join(current, entry);
-      const stats = statSync(fullPath);
-      if (stats.isDirectory()) {
-        stack.push(fullPath);
-        continue;
-      }
-      if (entry.toLowerCase().endsWith('.character.package.json')) {
-        files.push(fullPath);
-      }
-    }
-  }
-  return files.sort();
-}
-
-function readJson(path: string): unknown {
+function readJson(path: URL): unknown {
   const raw = readFileSync(path, 'utf8');
   return JSON.parse(raw) as unknown;
 }
@@ -277,6 +259,8 @@ function checkFrameAndBalance(character: CharacterDefinition): CharacterQaIssue[
   checkBound(issues, 'moves.dunk.recoveryOnHitFrames', moves.dunk.recoveryOnHitFrames, 0, 300);
   checkBound(issues, 'moves.dunk.recoveryOnWhiffFrames', moves.dunk.recoveryOnWhiffFrames, 0, 360);
   checkBound(issues, 'moves.dunk.hitRange', moves.dunk.hitRange, 0.5, 30);
+  checkBound(issues, 'moves.dunk.startupPursuitSpeed', moves.dunk.startupPursuitSpeed, 0, 200);
+  checkBound(issues, 'moves.dunk.startupTracking', moves.dunk.startupTracking, 0, 1);
   if (moves.dunk.recoveryOnWhiffFrames < moves.dunk.recoveryOnHitFrames) {
     issues.push({
       path: 'moves.dunk.recoveryOnWhiffFrames',
@@ -314,28 +298,34 @@ function checkFrameAndBalance(character: CharacterDefinition): CharacterQaIssue[
   return issues;
 }
 
-function sumBudgetById(kind: 'models' | 'textures' | 'audio', id: string): {
+function sumBudgetById(kind: 'models' | 'sprites' | 'textures' | 'audio', id: string): {
   bytes: number;
   triangles: number;
   vfxEmitters: number;
   resolved: boolean;
+  readiness: AssetReadiness;
 } {
   const entry = DEFAULT_ASSET_MANIFEST[kind].find((candidate) => candidate.id === id);
   if (!entry) {
-    if (kind === 'models') {
-      return { bytes: 128 * 1024, triangles: 2400, vfxEmitters: 2, resolved: false };
-    }
-    if (kind === 'textures') {
-      return { bytes: 512 * 1024, triangles: 0, vfxEmitters: 0, resolved: false };
-    }
-    return { bytes: 64 * 1024, triangles: 0, vfxEmitters: 0, resolved: false };
+    return {
+      bytes: 0,
+      triangles: 0,
+      vfxEmitters: 0,
+      resolved: false,
+      readiness: 'prototype',
+    };
   }
   return {
     bytes: entry.budget?.estimatedBytes ?? 0,
     triangles: entry.budget?.estimatedTriangles ?? 0,
     vfxEmitters: entry.budget?.estimatedVfxEmitters ?? 0,
     resolved: true,
+    readiness: entry.readiness ?? 'prototype',
   };
+}
+
+function isAlphaReady(readiness: AssetReadiness): boolean {
+  return readiness === 'alpha' || readiness === 'production';
 }
 
 function buildAssetBudget(character: CharacterDefinition): CharacterAssetBudgetReport {
@@ -346,18 +336,40 @@ function buildAssetBudget(character: CharacterDefinition): CharacterAssetBudgetR
     referencedAssetIds: 0,
   };
   const unresolvedManifestRefs: string[] = [];
-  const refs: Array<{ id: string; kind: 'models' | 'textures' | 'audio' }> = [
-    { id: character.visuals.modelId, kind: 'models' },
-    { id: character.visuals.projectileVisualId, kind: 'textures' },
-    { id: character.visuals.hudPortraitId, kind: 'textures' },
-    { id: character.audio.sfxProfileId, kind: 'audio' },
-    { id: character.audio.voiceProfileId, kind: 'audio' },
-    { id: character.audio.musicThemeId, kind: 'audio' },
-  ];
+  const belowAlphaReadinessRefs: string[] = [];
+  const unresolvedProfileRefs: string[] = [];
+  const refs: Array<{ id: string; kind: 'models' | 'sprites' | 'textures' | 'audio' }> = [];
+  if (
+    (character.visuals.presentation === '3d' || character.visuals.presentation === 'hybrid')
+    && character.visuals.modelId
+  ) {
+    refs.push({ id: character.visuals.modelId, kind: 'models' });
+  }
+  if (
+    (character.visuals.presentation === 'sprite' || character.visuals.presentation === 'hybrid')
+    && character.visuals.animationSetId
+  ) {
+    refs.push({ id: character.visuals.animationSetId, kind: 'sprites' });
+  }
+  refs.push({ id: character.visuals.hudPortraitId, kind: 'textures' });
   if (character.moves.special.projectile?.visualId) {
     refs.push({ id: character.moves.special.projectile.visualId, kind: 'textures' });
   }
-  const uniqueRefs = new Map<string, 'models' | 'textures' | 'audio'>();
+
+  if (character.visuals.vfxProfileId && !hasCharacterVfxProfile(character.visuals.vfxProfileId)) {
+    unresolvedProfileRefs.push(`vfx:${character.visuals.vfxProfileId}`);
+  }
+  if (character.audio.voiceProfileId && !hasVoiceProfile(character.audio.voiceProfileId)) {
+    unresolvedProfileRefs.push(`voice:${character.audio.voiceProfileId}`);
+  }
+  if (character.audio.sfxProfileId) {
+    unresolvedProfileRefs.push(`sfx:${character.audio.sfxProfileId}`);
+  }
+  if (character.audio.musicThemeId) {
+    unresolvedProfileRefs.push(`music:${character.audio.musicThemeId}`);
+  }
+
+  const uniqueRefs = new Map<string, 'models' | 'sprites' | 'textures' | 'audio'>();
   for (const ref of refs) {
     if (!uniqueRefs.has(ref.id)) {
       uniqueRefs.set(ref.id, ref.kind);
@@ -373,6 +385,8 @@ function buildAssetBudget(character: CharacterDefinition): CharacterAssetBudgetR
     usage.vfxEmitters += budget.vfxEmitters;
     if (!budget.resolved) {
       unresolvedManifestRefs.push(id);
+    } else if (!isAlphaReady(budget.readiness)) {
+      belowAlphaReadinessRefs.push(id);
     }
   }
 
@@ -403,12 +417,19 @@ function buildAssetBudget(character: CharacterDefinition): CharacterAssetBudgetR
     });
   }
 
+  const alphaContentReady = unresolvedManifestRefs.length === 0
+    && belowAlphaReadinessRefs.length === 0
+    && unresolvedProfileRefs.length === 0;
+
   return {
     limits,
     usage,
-    pass: violations.length === 0,
+    pass: violations.length === 0 && alphaContentReady,
     violations,
     unresolvedManifestRefs,
+    belowAlphaReadinessRefs,
+    unresolvedProfileRefs,
+    alphaContentReady,
   };
 }
 
@@ -422,8 +443,18 @@ function writeReport(report: CharacterPackageQaReport): string {
 
 function run(): void {
   const rootDirArg = parseDirArg(process.argv.slice(2));
-  const absoluteRoot = join(process.cwd(), rootDirArg);
-  const packageFiles = walkFiles(absoluteRoot);
+  const absoluteRoot = resolve(process.cwd(), rootDirArg);
+  let packageFiles;
+  try {
+    packageFiles = discoverNodeCharacterPackageFiles({
+      rootUrl: pathToFileURL(`${absoluteRoot}${sep}`),
+      sourceRoot: rootDirArg,
+    });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : '[character-package:qa] package discovery failed.');
+    process.exitCode = 1;
+    return;
+  }
 
   if (packageFiles.length === 0) {
     console.error(`[character-package:qa] no package files found under ${rootDirArg}`);
@@ -437,9 +468,9 @@ function run(): void {
   let assetBudgetFailures = 0;
 
   for (const file of packageFiles) {
-    const fileLabel = relative(process.cwd(), file).replace(/\\/g, '/');
+    const fileLabel = file.source;
     try {
-      const payload = readJson(file);
+      const payload = readJson(file.url);
       const character = toCharacterDefinition(payload);
       const checksumSmoke = runChecksumSmoke(character);
       const frameAndBalanceIssues = checkFrameAndBalance(character);
@@ -463,12 +494,14 @@ function run(): void {
         assetBudget,
       });
 
-      const unresolvedCount = assetBudget.unresolvedManifestRefs.length;
-      const unresolvedSuffix = unresolvedCount > 0
-        ? ` (${unresolvedCount} unresolved asset refs, using fallback estimates)`
+      const contentIssueCount = assetBudget.unresolvedManifestRefs.length
+        + assetBudget.belowAlphaReadinessRefs.length
+        + assetBudget.unresolvedProfileRefs.length;
+      const contentSuffix = contentIssueCount > 0
+        ? ` contentIssues=${contentIssueCount}`
         : '';
-      const checksSuffix = `checksum=${checksumSmoke.pass ? 'ok' : 'fail'} frameBounds=${frameAndBalanceIssues.length} assetBudget=${assetBudget.pass ? 'ok' : 'fail'}`;
-      console.info(`[character-package:qa] ${character.id} ${checksSuffix}${unresolvedSuffix}`);
+      const checksSuffix = `checksum=${checksumSmoke.pass ? 'ok' : 'fail'} frameBounds=${frameAndBalanceIssues.length} assetBudget=${assetBudget.violations.length === 0 ? 'ok' : 'fail'} alphaAssets=${assetBudget.alphaContentReady ? 'ok' : 'fail'}`;
+      console.info(`[character-package:qa] ${character.id} ${checksSuffix}${contentSuffix}`);
     } catch (error) {
       checksumFailures += 1;
       results.push({
@@ -498,6 +531,9 @@ function run(): void {
             message: 'Asset budget check skipped due to parse failure.',
           }],
           unresolvedManifestRefs: [],
+          belowAlphaReadinessRefs: [],
+          unresolvedProfileRefs: [],
+          alphaContentReady: false,
         },
       });
       console.error(`[character-package:qa] invalid ${fileLabel}`);

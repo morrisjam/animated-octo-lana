@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="d-bg" cx="40%" cy="34%" r="82%">
+      <stop offset="0" stop-color="#25335d"/>
+      <stop offset="0.58" stop-color="#0c142b"/>
+      <stop offset="1" stop-color="#030711"/>
+    </radialGradient>
+    <linearGradient id="d-armor" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#dbe3f0"/>
+      <stop offset="1" stop-color="#7885a0"/>
+    </linearGradient>
+    <linearGradient id="d-blue" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#356fcb"/>
+      <stop offset="1" stop-color="#9ee5ff"/>
+    </linearGradient>
+    <filter id="d-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="4.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="d-frame"><rect x="8" y="8" width="240" height="240" rx="28"/></clipPath>
+  </defs>
+  <g clip-path="url(#d-frame)">
+    <rect x="8" y="8" width="240" height="240" rx="28" fill="url(#d-bg)"/>
+    <path d="M-20 218 L203 -5" stroke="#84d7ff" stroke-width="22" opacity="0.07"/>
+    <path d="M22 246 L247 21" stroke="#bcecff" stroke-width="2" opacity="0.2"/>
+    <path d="M72 246 L256 62" stroke="#76bfff" stroke-width="1" opacity="0.12"/>
+    <circle cx="125" cy="128" r="82" fill="none" stroke="#8acfff" stroke-width="1" stroke-dasharray="4 10" opacity="0.14"/>
+
+    <path d="M40 244 L67 168 L100 142 L118 158 L104 244 Z" fill="#1f3558"/>
+    <path d="M109 244 L113 166 L139 146 L170 168 L188 244 Z" fill="url(#d-armor)"/>
+    <path d="M127 244 L127 179 L145 164 L158 179 L163 244 Z" fill="#71809e"/>
+    <path d="M51 205 L74 156 L101 143 L111 165 L82 192 Z" fill="url(#d-blue)"/>
+    <path d="M178 207 L168 159 L149 143 L137 164 L151 191 Z" fill="#cdd7e6"/>
+
+    <path d="M88 77 L109 53 L143 58 L158 83 L148 128 L128 146 L105 135 L93 113 Z" fill="url(#d-armor)"/>
+    <path d="M104 68 L117 55 L140 60 L149 72 L142 86 L105 82 Z" fill="#f8fbff"/>
+    <path d="M101 84 L145 88 L139 105 L105 101 Z" fill="#263b60"/>
+    <path d="M111 89 L139 92 L135 99 L109 96 Z" fill="#95e3ff" filter="url(#d-glow)"/>
+    <path d="M107 106 L139 109 L132 132 L113 128 Z" fill="#7b88a3"/>
+    <path d="M115 50 L128 31 L141 53 L137 62 L119 58 Z" fill="#edf5ff"/>
+    <path d="M122 49 L135 47 L136 53 L122 55 Z" fill="#53678b"/>
+
+    <path d="M164 31 L172 34 L125 224 L116 221 Z" fill="#eaf8ff"/>
+    <path d="M168 22 L179 39 L166 35 Z" fill="#ffffff"/>
+    <path d="M117 218 L134 224 L120 231 Z" fill="#8bdcff" filter="url(#d-glow)"/>
+    <path d="M31 191 Q97 152 153 90" fill="none" stroke="#a8e6ff" stroke-width="5" stroke-linecap="round" opacity="0.52"/>
+    <path d="M26 202 Q98 163 164 85" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.34"/>
+  </g>
+  <rect x="8" y="8" width="240" height="240" rx="28" fill="none" stroke="#8bcfff" stroke-width="2" opacity="0.62"/>
+</svg>

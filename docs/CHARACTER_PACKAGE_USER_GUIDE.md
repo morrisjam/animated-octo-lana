@@ -36,6 +36,11 @@ Template reference (commented JSONC, not loaded at runtime):
   - `schemaVersion` = `gw.character-package.v1`
   - `id` lowercase with letters, numbers, underscore
 - In `moves.special`, set allow-listed `behaviorId` and matching `kind`.
+- Tune `moves.dunk.startupPursuitSpeed` and `moves.dunk.startupTracking` for the character's launched-target chase identity. Use `0` for either value to disable startup pursuit.
+- Tune `stats.naturalRecoveryResetMultiplier` only when the class should receive more or less of the global natural-recovery spacing reset. Keep `1` for neutral behavior; test changes with the Human recovery agency probe before promotion.
+- Tune only `moves.break.recoveryFrames` and `moves.break.velocityRetain` for the current launch-break runtime. Startup and active fields are reserved but do not yet change simulation behavior.
+- Keep unused model, VFX, projectile, SFX, voice, or music profile slots as `null`. Do not invent ids to fill optional fields.
+- Register every required file in `src/view/assets/defaultManifest.ts` and mark an alpha candidate `readiness: "alpha"` only after review.
 
 ## 3. Validate package data
 From repo root:
@@ -65,6 +70,8 @@ npm run character:qa -w @gravity-well/game-web
 What you get:
 - deterministic checksum smoke replay per package
 - frame/balance bounds checks
+- required-file and implemented-profile checks
+- explicit `alphaAssets=ok|fail` output with no fallback estimates
 - report JSON:
   - `apps/game-web/build-artifacts/character-package-qa-report.json`
 
@@ -72,6 +79,8 @@ What you get:
 - `npm run dev -w @gravity-well/game-web`
 - Open local setup in menu.
 - Your packaged character is loaded into runtime registry and can be selected.
+
+For sprite presentation, set `visuals.presentation` to `sprite`, keep `visuals.modelId` as `null`, register the package's `visuals.animationSetId` and `visuals.hudPortraitId`, and follow `docs/SPRITE_ATLAS_RUNTIME.md`.
 
 ## 6. Build and CI checks
 - Package validation is included in:
@@ -92,3 +101,6 @@ What you get:
 - Character does not appear
   - Ensure file name ends with `.character.package.json`.
   - Re-run validator and fix any invalid package warnings.
+- `alphaAssets=fail`
+  - Inspect `unresolvedManifestRefs`, `belowAlphaReadinessRefs`, and `unresolvedProfileRefs` in the QA report.
+  - Add or review the real required file/profile; do not silence the failure with a placeholder id.

@@ -92,7 +92,7 @@ async function main(): Promise<void> {
 
   const replayRaw = await readJsonFile<unknown>(options.inputPath);
   const validation = validateReplayPayload(replayRaw);
-  if (!validation.ok) {
+  if (validation.ok === false) {
     console.error(`Replay payload validation failed [${validation.error.code}]: ${validation.error.message}`);
     process.exitCode = 1;
     return;

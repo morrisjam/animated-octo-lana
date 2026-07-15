@@ -22,10 +22,38 @@ export interface OnlineDiagnosticsOverlayController {
   dispose(): void;
 }
 
+export type DiagnosticsDisplayMode = 'expanded' | 'collapsed' | 'hidden';
+
+const DIAGNOSTICS_DISPLAY_STORAGE_KEY = 'gravity_well.online_diagnostics.display.v1';
+
+export function resolveDiagnosticsDisplayMode(stored: string | null): DiagnosticsDisplayMode {
+  return stored === 'expanded' || stored === 'collapsed' || stored === 'hidden'
+    ? stored
+    : 'collapsed';
+}
+
+function readStoredDisplayMode(): DiagnosticsDisplayMode {
+  try {
+    return resolveDiagnosticsDisplayMode(sessionStorage.getItem(DIAGNOSTICS_DISPLAY_STORAGE_KEY));
+  } catch {
+    return 'collapsed';
+  }
+}
+
+function storeDisplayMode(mode: DiagnosticsDisplayMode): void {
+  try {
+    sessionStorage.setItem(DIAGNOSTICS_DISPLAY_STORAGE_KEY, mode);
+  } catch {
+    // Diagnostics visibility is non-critical when storage is unavailable.
+  }
+}
+
 class OnlineDiagnosticsOverlay implements OnlineDiagnosticsOverlayController {
   private readonly root: HTMLDivElement;
   private readonly status: HTMLDivElement;
   private readonly body: HTMLPreElement;
+  private readonly collapseButton: HTMLButtonElement;
+  private readonly launcher: HTMLButtonElement;
   private latestSnapshot: OnlineDiagnosticsSnapshot | null = null;
 
   public constructor() {
@@ -39,14 +67,35 @@ class OnlineDiagnosticsOverlay implements OnlineDiagnosticsOverlayController {
     title.textContent = 'Online Diagnostics';
     header.appendChild(title);
 
+    const actions = document.createElement('div');
+    actions.className = 'online-diagnostics-actions';
+
+    this.collapseButton = document.createElement('button');
+    this.collapseButton.type = 'button';
+    this.collapseButton.className = 'online-diagnostics-action';
+    this.collapseButton.addEventListener('click', () => {
+      this.setDisplayMode(this.root.classList.contains('is-collapsed') ? 'expanded' : 'collapsed');
+    });
+    actions.appendChild(this.collapseButton);
+
     const exportButton = document.createElement('button');
     exportButton.type = 'button';
-    exportButton.className = 'online-diagnostics-export';
+    exportButton.className = 'online-diagnostics-action';
     exportButton.textContent = 'Export JSON';
     exportButton.addEventListener('click', () => {
       void this.copySnapshot();
     });
-    header.appendChild(exportButton);
+    actions.appendChild(exportButton);
+
+    const hideButton = document.createElement('button');
+    hideButton.type = 'button';
+    hideButton.className = 'online-diagnostics-action';
+    hideButton.textContent = 'Hide';
+    hideButton.addEventListener('click', () => {
+      this.setDisplayMode('hidden');
+    });
+    actions.appendChild(hideButton);
+    header.appendChild(actions);
 
     this.status = document.createElement('div');
     this.status.className = 'online-diagnostics-status';
@@ -56,8 +105,17 @@ class OnlineDiagnosticsOverlay implements OnlineDiagnosticsOverlayController {
     this.body.className = 'online-diagnostics-body';
     this.body.textContent = '-';
 
+    this.launcher = document.createElement('button');
+    this.launcher.type = 'button';
+    this.launcher.className = 'online-diagnostics-launcher';
+    this.launcher.textContent = 'Show Diagnostics';
+    this.launcher.addEventListener('click', () => {
+      this.setDisplayMode('expanded');
+    });
+
     this.root.append(header, this.status, this.body);
-    document.body.appendChild(this.root);
+    document.body.append(this.root, this.launcher);
+    this.setDisplayMode(readStoredDisplayMode());
   }
 
   public update(snapshot: OnlineDiagnosticsSnapshot): void {
@@ -90,6 +148,20 @@ class OnlineDiagnosticsOverlay implements OnlineDiagnosticsOverlayController {
 
   public dispose(): void {
     this.root.remove();
+    this.launcher.remove();
+  }
+
+  private setDisplayMode(mode: DiagnosticsDisplayMode): void {
+    const collapsed = mode === 'collapsed';
+    const hidden = mode === 'hidden';
+    this.root.hidden = hidden;
+    this.launcher.hidden = !hidden;
+    this.root.classList.toggle('is-collapsed', collapsed);
+    this.status.hidden = collapsed;
+    this.body.hidden = collapsed;
+    this.collapseButton.textContent = collapsed ? 'Expand' : 'Collapse';
+    this.collapseButton.setAttribute('aria-expanded', String(!collapsed));
+    storeDisplayMode(mode);
   }
 
   private async copySnapshot(): Promise<void> {

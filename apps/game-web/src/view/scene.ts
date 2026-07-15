@@ -9,6 +9,11 @@ import {
   DEFAULT_STAGE_ATMOSPHERE_ID,
   resolveStageAtmosphere,
 } from './stageAtmosphere';
+import {
+  createArenaLipSegmentPoints,
+  createArenaGuideSegmentPoints,
+  MAX_STAGE_CAMERA_PITCH_DEGREES,
+} from './stagePresentation';
 
 const MAX_RENDER_PIXEL_RATIO = 1.25;
 
@@ -36,8 +41,14 @@ export interface SceneContext {
   lookAtTarget: THREE.Vector3;
   cameraPlayerTracks: PlayersById<THREE.Vector2>;
   launchCameraActive: boolean;
+  cameraPitchDegrees: number;
+  cameraLaunchPitchBoostDegrees: number;
+  cameraLookAtYOffset: number;
   gravityWell: THREE.Mesh;
   ring: THREE.Mesh;
+  arenaMouth: THREE.Mesh;
+  arenaRim: THREE.LineSegments;
+  arenaDepthTicks: THREE.LineSegments;
   playerVisuals: PlayersById<CharacterVisualHandle>;
   playerMeshes: PlayersById<THREE.Object3D>;
   playerIndicators: PlayersById<PlayerIndicatorMeshes>;
@@ -62,10 +73,136 @@ function getClampedPixelRatio(): number {
   return Math.min(window.devicePixelRatio || 1, MAX_RENDER_PIXEL_RATIO);
 }
 
+function createGravityWellMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uOpacity: { value: 0.34 },
+      uFarFade: { value: 0.46 },
+      uColorA: { value: new THREE.Color('#27388e') },
+      uColorB: { value: new THREE.Color('#5b1fcf') },
+      uHighlight: { value: new THREE.Color('#61d9ff') },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      varying vec3 vPosition;
+
+      void main() {
+        vUv = uv;
+        vPosition = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      precision highp float;
+
+      uniform float uTime;
+      uniform float uOpacity;
+      uniform float uFarFade;
+      uniform vec3 uColorA;
+      uniform vec3 uColorB;
+      uniform vec3 uHighlight;
+      varying vec2 vUv;
+      varying vec3 vPosition;
+
+      float filament(float value, float width) {
+        return pow(0.5 + 0.5 * sin(value), width);
+      }
+
+      void main() {
+        float depth = clamp(1.0 - vUv.y, 0.0, 1.0);
+        float circumference = vUv.x * 6.28318530718;
+        float slowTime = uTime * 0.34;
+        float twistA = filament(circumference * 3.0 + depth * 18.0 - slowTime, 7.0);
+        float twistB = filament(-circumference * 5.0 + depth * 27.0 + slowTime * 0.72, 10.0);
+        float rib = filament(depth * 92.0 + sin(circumference * 4.0) * 2.4 - slowTime * 0.45, 12.0);
+        float turbulence = 0.5 + 0.5 * sin(
+          circumference * 11.0
+          + depth * 43.0
+          + sin(circumference * 3.0 + depth * 9.0) * 2.0
+        );
+        float energy = clamp(twistA * 0.78 + twistB * 0.48 + rib * 0.34 + turbulence * 0.12, 0.0, 1.0);
+        float mouthFade = smoothstep(0.015, 0.14, depth);
+        float deepFade = 1.0 - smoothstep(0.72, 1.0, depth) * uFarFade;
+        vec3 baseColor = mix(uColorA, uColorB, clamp(depth * 0.9 + twistA * 0.2, 0.0, 1.0));
+        vec3 color = mix(baseColor, uHighlight, energy * 0.46);
+        float alpha = uOpacity * mouthFade * deepFade * (0.18 + energy * 0.78);
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  });
+}
+
+function createArenaMouthMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uOpacity: { value: 0 },
+      uColorA: { value: new THREE.Color('#56bfff') },
+      uColorB: { value: new THREE.Color('#8d4cff') },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      precision highp float;
+
+      uniform float uOpacity;
+      uniform vec3 uColorA;
+      uniform vec3 uColorB;
+      varying vec2 vUv;
+
+      float filament(float value, float width) {
+        return pow(0.5 + 0.5 * sin(value), width);
+      }
+
+      void main() {
+        vec2 p = (vUv - 0.5) * 2.0;
+        float radius = length(p);
+        float angle = atan(p.y, p.x);
+        float warpedRadius = radius
+          + sin(angle * 5.0) * 0.012
+          + sin(angle * 11.0 + radius * 3.0) * 0.006;
+        float outerFade = 1.0 - smoothstep(0.84, 0.99, warpedRadius);
+        float pitFade = smoothstep(0.12, 0.36, warpedRadius);
+        float shearA = filament(angle * 6.0 - warpedRadius * 23.0 + sin(angle * 3.0) * 0.9, 15.0);
+        float shearB = filament(-angle * 9.0 - warpedRadius * 17.0, 19.0);
+        float dash = 0.35 + filament(warpedRadius * 78.0 + angle * 2.0, 18.0) * 0.65;
+        float lane = filament(angle * 14.0 + warpedRadius * 6.0, 34.0) * dash;
+        float contour = filament(warpedRadius * 54.0 + sin(angle * 4.0) * 1.4, 28.0);
+        float sectorBreak = smoothstep(0.18, 0.82, 0.5 + 0.5 * sin(angle * 11.0 + warpedRadius * 5.0));
+        float energy = 0.032
+          + shearA * 0.2
+          + shearB * 0.09
+          + lane * 0.3
+          + contour * sectorBreak * 0.24;
+        vec3 color = mix(uColorA, uColorB, 0.42 + 0.28 * sin(angle * 2.0 + radius * 5.0));
+        float alpha = uOpacity * outerFade * pitFade * energy;
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  });
+}
+
 function addArena(scene: THREE.Scene): {
   boundary: THREE.LineLoop;
   gravityWell: THREE.Mesh;
   ring: THREE.Mesh;
+  arenaMouth: THREE.Mesh;
+  arenaRim: THREE.LineSegments;
+  arenaDepthTicks: THREE.LineSegments;
 } {
   const boundaryPoints: THREE.Vector3[] = [];
   const segments = 128;
@@ -81,31 +218,70 @@ function addArena(scene: THREE.Scene): {
   boundary.position.z = 0.2;
   scene.add(boundary);
 
-  const gravityWell = new THREE.Mesh(
-    new THREE.CylinderGeometry(ARENA_RADIUS * 1.02, 16, 220, 96, 1, true),
-    new THREE.MeshStandardMaterial({
-      color: '#27388e',
-      emissive: '#5b1fcf',
-      emissiveIntensity: 1.2,
-      metalness: 0.2,
-      roughness: 0.62,
+  const arenaMouth = new THREE.Mesh(
+    new THREE.CircleGeometry(ARENA_RADIUS * 1.01, 160),
+    createArenaMouthMaterial(),
+  );
+  arenaMouth.name = 'arena-mouth-shear';
+  arenaMouth.position.z = -0.12;
+  arenaMouth.renderOrder = -2;
+  scene.add(arenaMouth);
+
+  const arenaLipPoints = createArenaLipSegmentPoints(ARENA_RADIUS).map(
+    (point) => new THREE.Vector3(point.x, point.y, point.z),
+  );
+  const arenaRim = new THREE.LineSegments(
+    new THREE.BufferGeometry().setFromPoints(arenaLipPoints),
+    new THREE.LineBasicMaterial({
+      color: '#8f78ff',
       transparent: true,
-      opacity: 0.22,
-      side: THREE.DoubleSide,
+      opacity: 0.12,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
     }),
+  );
+  arenaRim.name = 'arena-broken-lip';
+  arenaRim.position.z = -0.32;
+  scene.add(arenaRim);
+
+  const tickPoints = createArenaGuideSegmentPoints(ARENA_RADIUS).map(
+    (point) => new THREE.Vector3(point.x, point.y, point.z),
+  );
+  const arenaDepthTicks = new THREE.LineSegments(
+    new THREE.BufferGeometry().setFromPoints(tickPoints),
+    new THREE.LineBasicMaterial({
+      color: '#8f78ff',
+      transparent: true,
+      opacity: 0.16,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  arenaDepthTicks.name = 'arena-broken-depth-guides';
+  scene.add(arenaDepthTicks);
+
+  const gravityWell = new THREE.Mesh(
+    new THREE.CylinderGeometry(ARENA_RADIUS * 1.02, 8, 220, 128, 32, true),
+    createGravityWellMaterial(),
   );
   gravityWell.rotation.x = Math.PI / 2;
   gravityWell.position.z = -108;
   scene.add(gravityWell);
 
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(ARENA_RADIUS * 1.005, 0.95, 24, 128),
-    new THREE.MeshBasicMaterial({ color: '#9f82ff', transparent: true, opacity: 0.26 }),
+    new THREE.TorusGeometry(ARENA_RADIUS * 1.005, 0.32, 12, 160),
+    new THREE.MeshBasicMaterial({
+      color: '#9f82ff',
+      transparent: true,
+      opacity: 0.18,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
   );
   ring.position.z = 0.1;
   scene.add(ring);
 
-  return { boundary, gravityWell, ring };
+  return { boundary, gravityWell, ring, arenaMouth, arenaRim, arenaDepthTicks };
 }
 
 function addStars(scene: THREE.Scene): THREE.Points {
@@ -165,13 +341,29 @@ function createWormholeRing(index: number): THREE.Mesh {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
-  const radius = Math.max(16, ARENA_RADIUS * 0.9 - index * 5.4);
+  const radius = Math.max(12, ARENA_RADIUS * 0.9 - index * 5.4);
+  const phase = index * 0.83;
+  const points: THREE.Vector3[] = [];
+  for (let segment = 0; segment < 96; segment += 1) {
+    const angle = (segment / 96) * Math.PI * 2;
+    const wobble = 1
+      + Math.sin(angle * 3 + phase) * 0.024
+      + Math.sin(angle * 7 - phase * 0.7) * 0.012;
+    points.push(new THREE.Vector3(
+      Math.cos(angle) * radius * wobble,
+      Math.sin(angle) * radius * wobble,
+      Math.sin(angle * 5 + phase) * 0.55,
+    ));
+  }
+  const curve = new THREE.CatmullRomCurve3(points, true, 'centripetal');
   const mesh = new THREE.Mesh(
-    new THREE.TorusGeometry(radius, Math.max(0.22, 0.8 - index * 0.05), 18, 96),
+    new THREE.TubeGeometry(curve, 128, Math.max(0.18, 0.58 - index * 0.035), 7, true),
     material,
   );
-  mesh.position.z = -18 - index * 14;
+  const baseDepth = -18 - index * 14;
+  mesh.position.z = baseDepth;
   mesh.userData.baseScale = 1;
+  mesh.userData.baseDepth = baseDepth;
   return mesh;
 }
 
@@ -215,17 +407,18 @@ function addWormholeBackdrop(scene: THREE.Scene): WormholeBackdrop {
   group.visible = false;
 
   const core = new THREE.Mesh(
-    new THREE.RingGeometry(5, 11, 96),
+    new THREE.CircleGeometry(18, 96),
     new THREE.MeshBasicMaterial({
       color: '#8e6bff',
       transparent: true,
-      opacity: 0.08,
+      opacity: 0.14,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
+      fog: false,
     }),
   );
-  core.position.z = -198;
+  core.position.z = -185;
   group.add(core);
 
   const rings: THREE.Mesh[] = [];
@@ -243,6 +436,7 @@ function addWormholeBackdrop(scene: THREE.Scene): WormholeBackdrop {
   }
 
   const particlePoints: number[] = [];
+  const particleBaseDepths = new Float32Array(420);
   for (let i = 0; i < 420; i += 1) {
     const radius = 12 + Math.random() * (ARENA_RADIUS * 0.82);
     const angle = Math.random() * Math.PI * 2;
@@ -252,6 +446,7 @@ function addWormholeBackdrop(scene: THREE.Scene): WormholeBackdrop {
       Math.sin(angle) * radius,
       depth,
     );
+    particleBaseDepths[i] = depth;
   }
   const particles = new THREE.Points(
     new THREE.BufferGeometry(),
@@ -265,6 +460,7 @@ function addWormholeBackdrop(scene: THREE.Scene): WormholeBackdrop {
     }),
   );
   particles.geometry.setAttribute('position', new THREE.Float32BufferAttribute(particlePoints, 3));
+  particles.userData.baseDepths = particleBaseDepths;
   group.add(particles);
 
   scene.add(group);
@@ -343,7 +539,14 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
   keyLight.position.set(24, 16, 35);
   scene.add(ambient, keyLight);
 
-  const { boundary, gravityWell, ring } = addArena(scene);
+  const {
+    boundary,
+    gravityWell,
+    ring,
+    arenaMouth,
+    arenaRim,
+    arenaDepthTicks,
+  } = addArena(scene);
   const stars = addStars(scene);
   const stageBackgroundImage = addStageBackgroundImage(scene);
   const stageBackgroundModel = addStageBackgroundModel(scene);
@@ -365,8 +568,14 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
       P2: new THREE.Vector2(30, -6),
     },
     launchCameraActive: false,
+    cameraPitchDegrees: 8,
+    cameraLaunchPitchBoostDegrees: 1.5,
+    cameraLookAtYOffset: 2.2,
     gravityWell,
     ring,
+    arenaMouth,
+    arenaRim,
+    arenaDepthTicks,
     playerVisuals,
     playerMeshes,
     playerIndicators,
@@ -413,25 +622,66 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   context.keyLight.color.set(tokens.keyLightColor);
   context.keyLight.intensity = tokens.keyLightIntensity;
   context.keyLight.position.set(tokens.keyLightPositionX, tokens.keyLightPositionY, tokens.keyLightPositionZ);
+  context.cameraPitchDegrees = THREE.MathUtils.clamp(
+    tokens.cameraPitchDegrees,
+    0,
+    MAX_STAGE_CAMERA_PITCH_DEGREES,
+  );
+  context.cameraLaunchPitchBoostDegrees = THREE.MathUtils.clamp(
+    tokens.cameraLaunchPitchBoostDegrees,
+    0,
+    10,
+  );
+  context.cameraLookAtYOffset = THREE.MathUtils.clamp(tokens.cameraLookAtYOffset, -12, 12);
 
   const boundaryMaterial = context.arenaBoundary.material as THREE.LineBasicMaterial;
   boundaryMaterial.color.set(tokens.ringColor);
   boundaryMaterial.opacity = clampOpacity(tokens.ringOpacity) * 0.24;
+  context.arenaBoundary.visible = boundaryMaterial.opacity > 0;
 
-  const gravityWellMaterial = context.gravityWell.material as THREE.MeshStandardMaterial;
-  gravityWellMaterial.color.set(tokens.gravityWellColor);
-  gravityWellMaterial.emissive.set(tokens.gravityWellEmissive);
-  gravityWellMaterial.emissiveIntensity = tokens.gravityWellEmissiveIntensity * 0.42;
-  gravityWellMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * 0.26;
+  const arenaMouthMaterial = context.arenaMouth.material;
+  if (arenaMouthMaterial instanceof THREE.ShaderMaterial) {
+    arenaMouthMaterial.uniforms.uColorA.value.set(tokens.backgroundEffectTint);
+    arenaMouthMaterial.uniforms.uColorB.value.set(tokens.backgroundEffectSecondaryTint);
+    arenaMouthMaterial.uniforms.uOpacity.value = clampOpacity(tokens.arenaMouthOpacity);
+  }
+  context.arenaMouth.visible = tokens.arenaMouthOpacity > 0;
+
+  const arenaRimMaterial = context.arenaRim.material as THREE.LineBasicMaterial;
+  arenaRimMaterial.color.set(tokens.ringColor);
+  arenaRimMaterial.opacity = clampOpacity(tokens.arenaRimOpacity);
+  context.arenaRim.visible = arenaRimMaterial.opacity > 0;
+
+  const arenaDepthTickMaterial = context.arenaDepthTicks.material as THREE.LineBasicMaterial;
+  arenaDepthTickMaterial.color.set(tokens.ringColor);
+  arenaDepthTickMaterial.opacity = clampOpacity(tokens.arenaDepthTickOpacity);
+  context.arenaDepthTicks.visible = arenaDepthTickMaterial.opacity > 0;
+
+  const gravityWellMaterial = context.gravityWell.material;
+  if (gravityWellMaterial instanceof THREE.ShaderMaterial) {
+    gravityWellMaterial.uniforms.uColorA.value.set(tokens.gravityWellColor);
+    gravityWellMaterial.uniforms.uColorB.value.set(tokens.gravityWellEmissive);
+    gravityWellMaterial.uniforms.uHighlight.value.set(tokens.backgroundEffectTint);
+    gravityWellMaterial.uniforms.uOpacity.value = clampOpacity(tokens.backgroundEffectOpacity) * 0.5;
+    gravityWellMaterial.uniforms.uFarFade.value = THREE.MathUtils.clamp(
+      tokens.backgroundEffectFarFade,
+      0,
+      1,
+    );
+  }
 
   const ringMaterial = context.ring.material as THREE.MeshBasicMaterial;
   ringMaterial.color.set(tokens.ringColor);
   ringMaterial.opacity = clampOpacity(tokens.ringOpacity);
+  context.ring.visible = ringMaterial.opacity > 0;
+  context.ring.userData.baseOpacity = ringMaterial.opacity;
 
   const starsMaterial = context.stars.material as THREE.PointsMaterial;
   starsMaterial.color.set(tokens.starsColor);
   starsMaterial.size = tokens.starsSize * 1.5;
   starsMaterial.opacity = 0.92;
+  context.stars.userData.baseSize = starsMaterial.size;
+  context.stars.userData.baseOpacity = starsMaterial.opacity;
 
   const imageMaterial = context.stageBackgroundImage.material as THREE.MeshBasicMaterial;
   imageMaterial.color.set(tokens.backgroundImageTint);
@@ -450,11 +700,19 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   context.wormholeBackdrop.group.scale.setScalar(tokens.backgroundEffectScale);
   context.wormholeBackdrop.group.userData.effectId = tokens.backgroundEffectId ?? null;
   context.wormholeBackdrop.group.userData.effectOpacity = clampOpacity(tokens.backgroundEffectOpacity);
+  context.wormholeBackdrop.group.userData.effectCoreOpacity = clampOpacity(
+    tokens.backgroundEffectCoreOpacity,
+  );
   context.wormholeBackdrop.group.userData.effectSpeed = Math.max(0, tokens.backgroundEffectSpeed);
+  context.wormholeBackdrop.group.userData.effectDepthTravel = Math.max(
+    0,
+    tokens.backgroundEffectDepthTravel,
+  );
 
   const coreMaterial = context.wormholeBackdrop.core.material as THREE.MeshBasicMaterial;
   coreMaterial.color.set(tokens.backgroundEffectSecondaryTint);
-  coreMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * 0.24;
+  coreMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity)
+    * clampOpacity(tokens.backgroundEffectCoreOpacity);
 
   context.wormholeBackdrop.rings.forEach((ring, index) => {
     const ringMaterial = ring.material as THREE.MeshBasicMaterial;

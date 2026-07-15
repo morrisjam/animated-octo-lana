@@ -1,0 +1,223 @@
+export const MAX_STAGE_CAMERA_PITCH_DEGREES = 28;
+export const WORMHOLE_NEAR_DEPTH = -14;
+export const WORMHOLE_FAR_DEPTH = -198;
+export const ARENA_GUIDE_DEPTH = 0.24;
+
+export interface ArenaGuidePoint {
+  x: number;
+  y: number;
+  z: number;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function finiteOr(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function positiveModulo(value: number, divisor: number): number {
+  return ((value % divisor) + divisor) % divisor;
+}
+
+function arenaPoint(radius: number, angle: number): ArenaGuidePoint {
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
+    z: ARENA_GUIDE_DEPTH,
+  };
+}
+
+export function createArenaGuideSegmentPoints(arenaRadius: number): ArenaGuidePoint[] {
+  const radius = Math.max(0, finiteOr(arenaRadius, 0));
+  if (radius === 0) {
+    return [];
+  }
+
+  const points: ArenaGuidePoint[] = [];
+  const outerTickCount = 64;
+  for (let index = 0; index < outerTickCount; index += 1) {
+    const angle = (index / outerTickCount) * Math.PI * 2;
+    const majorTick = index % 8 === 0;
+    points.push(
+      arenaPoint(radius * (majorTick ? 0.925 : 0.958), angle),
+      arenaPoint(radius * (majorTick ? 1.045 : 1.025), angle),
+    );
+  }
+
+  // Broken, slightly irregular contours make camera pitch legible without drawing a flat perfect circle.
+  const contourRadii = [0.42, 0.62, 0.82];
+  const contourSegmentCount = 96;
+  contourRadii.forEach((radiusScale, contourIndex) => {
+    for (let segment = 0; segment < contourSegmentCount; segment += 1) {
+      if ((segment + contourIndex * 5) % 16 >= 10) {
+        continue;
+      }
+      const angleStart = (segment / contourSegmentCount) * Math.PI * 2;
+      const angleEnd = ((segment + 1) / contourSegmentCount) * Math.PI * 2;
+      const startRadius = radius * radiusScale * (
+        1 + Math.sin(angleStart * 3 + contourIndex * 1.7) * 0.008
+      );
+      const endRadius = radius * radiusScale * (
+        1 + Math.sin(angleEnd * 3 + contourIndex * 1.7) * 0.008
+      );
+      points.push(
+        arenaPoint(startRadius, angleStart),
+        arenaPoint(endRadius, angleEnd),
+      );
+    }
+  });
+
+  const railRanges: ReadonlyArray<readonly [number, number]> = [
+    [0.32, 0.43],
+    [0.5, 0.6],
+    [0.68, 0.78],
+    [0.86, 0.94],
+  ];
+  for (let index = 0; index < 16; index += 1) {
+    const angle = (index / 16) * Math.PI * 2 + (index % 2 === 0 ? -0.012 : 0.012);
+    for (const [innerScale, outerScale] of railRanges) {
+      points.push(
+        arenaPoint(radius * innerScale, angle),
+        arenaPoint(radius * outerScale, angle),
+      );
+    }
+  }
+
+  return points;
+}
+
+export function createArenaLipSegmentPoints(arenaRadius: number): ArenaGuidePoint[] {
+  const radius = Math.max(0, finiteOr(arenaRadius, 0));
+  if (radius === 0) {
+    return [];
+  }
+
+  const points: ArenaGuidePoint[] = [];
+  const contourScales = [0.945, 0.985, 1.025];
+  const segmentCount = 144;
+  contourScales.forEach((radiusScale, contourIndex) => {
+    for (let segment = 0; segment < segmentCount; segment += 1) {
+      const angleStart = (segment / segmentCount) * Math.PI * 2;
+      const angleEnd = ((segment + 1) / segmentCount) * Math.PI * 2;
+      const angleMid = (angleStart + angleEnd) * 0.5;
+      const nearEdge = 0.5 - Math.sin(angleMid) * 0.5;
+      const clusterPosition = (segment + contourIndex * 2) % 32;
+      const visibleSegments = nearEdge > 0.64 ? 21 : nearEdge > 0.28 ? 15 : 9;
+      if (clusterPosition >= visibleSegments) {
+        continue;
+      }
+
+      const startRadius = radius * radiusScale * (
+        1
+        + Math.sin(angleStart * 3 + contourIndex * 1.35) * 0.007
+        + Math.sin(angleStart * 7 - contourIndex * 0.8) * 0.003
+      );
+      const endRadius = radius * radiusScale * (
+        1
+        + Math.sin(angleEnd * 3 + contourIndex * 1.35) * 0.007
+        + Math.sin(angleEnd * 7 - contourIndex * 0.8) * 0.003
+      );
+      points.push(
+        arenaPoint(startRadius, angleStart),
+        arenaPoint(endRadius, angleEnd),
+      );
+    }
+  });
+
+  // Short near-edge braces imply thickness without closing the lip into a perfect ring.
+  for (let index = 0; index < 11; index += 1) {
+    const angle = Math.PI * (1.08 + index * 0.084);
+    points.push(
+      arenaPoint(radius * 0.932, angle),
+      arenaPoint(radius * 1.038, angle),
+    );
+  }
+
+  return points;
+}
+
+export function resolveWormholeCoreOpacity(
+  effectOpacity: number,
+  coreOpacity: number,
+  effectTime: number,
+): number {
+  const effect = clamp(finiteOr(effectOpacity, 0), 0, 1);
+  const core = clamp(finiteOr(coreOpacity, 0), 0, 1);
+  const time = Math.max(0, finiteOr(effectTime, 0));
+  return effect * core * (1 + Math.abs(Math.sin(time * 1.25)) * 0.36);
+}
+
+export function resolveStageCameraPitchDegrees(
+  authoredPitchDegrees: number,
+  launchPitchBoostDegrees: number,
+  launchActive: boolean,
+): number {
+  const authored = finiteOr(authoredPitchDegrees, 0);
+  const launchBoost = launchActive ? Math.max(0, finiteOr(launchPitchBoostDegrees, 0)) : 0;
+  return clamp(authored + launchBoost, 0, MAX_STAGE_CAMERA_PITCH_DEGREES);
+}
+
+export function resolveStageCameraYOffset(
+  cameraDistance: number,
+  pitchDegrees: number,
+): number {
+  const safeDistance = Math.max(0, finiteOr(cameraDistance, 0));
+  const safePitch = clamp(
+    finiteOr(pitchDegrees, 0),
+    0,
+    MAX_STAGE_CAMERA_PITCH_DEGREES,
+  );
+  return -Math.tan((safePitch * Math.PI) / 180) * safeDistance;
+}
+
+export function resolveWormholeLayerDepth({
+  baseDepth,
+  layerIndex,
+  gameTime,
+  effectSpeed,
+  depthTravel,
+}: {
+  baseDepth: number;
+  layerIndex: number;
+  gameTime: number;
+  effectSpeed: number;
+  depthTravel: number;
+}): number {
+  const safeBaseDepth = finiteOr(baseDepth, WORMHOLE_NEAR_DEPTH);
+  const time = Math.max(0, finiteOr(gameTime, 0));
+  const speed = Math.max(0, finiteOr(effectSpeed, 0));
+  const travel = Math.max(0, finiteOr(depthTravel, 0));
+  const phase = Math.max(0, finiteOr(layerIndex, 0)) * 0.73;
+  return safeBaseDepth + Math.sin(time * speed * 0.22 + phase) * travel * 0.42;
+}
+
+export function resolveWormholeParticleDepth({
+  baseDepth,
+  gameTime,
+  effectSpeed,
+  depthTravel,
+  launchActive,
+}: {
+  baseDepth: number;
+  gameTime: number;
+  effectSpeed: number;
+  depthTravel: number;
+  launchActive: boolean;
+}): number {
+  const nearDepth = WORMHOLE_NEAR_DEPTH;
+  const farDepth = WORMHOLE_FAR_DEPTH;
+  const depthSpan = nearDepth - farDepth;
+  const clampedBaseDepth = clamp(finiteOr(baseDepth, farDepth), farDepth, nearDepth);
+  const baseOffset = nearDepth - clampedBaseDepth;
+  const time = Math.max(0, finiteOr(gameTime, 0));
+  const speed = Math.max(0, finiteOr(effectSpeed, 0));
+  const travel = Math.max(0, finiteOr(depthTravel, 0));
+  const launchMultiplier = launchActive ? 1.75 : 1;
+  const currentOffset = positiveModulo(
+    baseOffset - time * speed * travel * launchMultiplier,
+    depthSpan,
+  );
+  return nearDepth - currentOffset;
+}

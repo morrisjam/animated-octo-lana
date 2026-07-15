@@ -14,10 +14,13 @@ Or directly from this workspace:
 npm run dev -w @gravity-well/game-web
 ```
 
+Generated `build-artifacts/` and `steam-artifact/` trees are excluded from Vite file watching. They can contain gigabytes of deterministic replay evidence and do not participate in HMR; the local flow-review endpoint reads requested reports directly from disk. Restart an older dev-server process after changing this configuration so the exclusion takes effect.
+
 ## Build and preview
 
 ```bash
 npm run build
+npm run bundle:budget
 npm run preview
 ```
 
@@ -47,8 +50,22 @@ Notes:
 ## Verify
 
 ```bash
+npm run typecheck
 npm run verify
 ```
+
+Production and Steam builds run the web typecheck automatically. The root `npm run typecheck` command checks both the web and API workspaces.
+
+## Real-browser online smoke
+
+With local PostgreSQL migrated, the API running on port `8787`, and Vite running on port `5190`, run from the repository root:
+
+```bash
+npm run webrtc:browser-smoke
+npm run webrtc:browser-soak -- --duration-seconds 1800
+```
+
+The smoke uses an installed Chrome, Edge, or Chromium browser and does not use Neon. It verifies signed signaling, acknowledged DataChannel frames, deliberately late 12-frame input batches, rollback corrections, decisive-frame confirmation, and canonical checksum convergence. The soak runs that rollback path through two storage-isolated browser clients for 30 real-time minutes by default and writes `build-artifacts/webrtc-browser-soak-report.json`; use a shorter `--duration-seconds` only while developing the harness. Set `BROWSER_EXECUTABLE_PATH`, `WEBRTC_SMOKE_URL`, or `API_BASE_URL` to override local defaults. See `docs/WEBRTC_TRANSPORT.md` for the protocol assertions and CI behavior.
 
 ## Balance profile validation
 
@@ -109,6 +126,7 @@ Runtime:
 - Open `Settings` in the home flow.
 - Select `Stage Atmosphere` and cycle options with mouse click, keyboard Left/Right, or controller Left/Right.
 - Selection persists in `stageAtmosphereId` and applies scene fog/light/background hooks immediately.
+- Presets may also author presentation-only camera pitch, launch pitch boost, a transparent gravity-shear mouth plane, arena-lip opacity, radial depth ticks, vanishing-point/core fade, and procedural depth travel. These values do not affect simulation or rollback state.
 
 ## Balance patch notes generator
 
@@ -179,13 +197,14 @@ When enabled, the game loop runs through the rollback session scaffold (predicti
 
 With debug tools enabled, a rollback diagnostics panel is shown in HUD and match diagnostics are stored in local storage under `gravity_well.rollback_diagnostics.v1`.
 
-## Online transport scaffolding
+## Online transport
 
 - `src/net/transport.ts` contains direct-to-relay fallback primitives for WebRTC session setup.
 - `src/net/connectivityApi.ts` contains API helpers for ICE config fetch and direct/relay telemetry posts.
-- Set `VITE_MATCHMAKING_API_BASE` to enable API-backed ICE config and telemetry in future online integration.
-- `VITE_FEATURE_ONLINE_MATCH_RUNTIME=true` enables the first runtime bootstrap handoff for matched ranked sessions.
-- Current limitation: public `Online` menu entry is hidden unless online runtime is explicitly enabled. The bootstrap path now consumes a matched ranked session and prepares ICE/RTC transport state, but peer signaling and live online gameplay are still not wired end to end.
+- Set `VITE_MATCHMAKING_API_BASE` to enable API-backed matchmaking, ICE config, signaling, heartbeat, and telemetry.
+- `VITE_FEATURE_ONLINE_MATCH_RUNTIME=true` enables the ranked-session handoff into authenticated WebRTC signaling, DataChannel input exchange, rollback, decisive-frame confirmation, and ranked settlement.
+- The production-browser gate combines a deep same-page rollback/recovery drill with a two-client exchange in isolated browser contexts, including account, session, side, frame, acknowledgement, and completion-routing checks.
+- The session lifecycle pauses heartbeats on browser hiding, deduplicates hidden/pagehide transitions, and requires a nonce-protected reconnect before resuming. Public `Online` remains hidden unless the runtime is explicitly enabled; remote TURN and deployment drills remain release gates.
 
 ## Online Dev menu shell
 
@@ -196,7 +215,7 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Replay panel supports player/opponent/character/matchup/queue/date/patch filters, cursor-paginated search, and direct replay payload launch into replay review.
 - Ranked panel supports progression snapshot inspection (rating/league/LP/MR/provisional) with recent pre/post delta rows and profile-settings fallback when ranked APIs are unavailable.
 - Social panel supports account sign-in state and linked identities, friend presence list, request history/actions, and queue/room invite send/cancel actions with explicit empty-state guidance.
-- `VITE_FEATURE_ONLINE_DIAGNOSTICS=true` enables a live diagnostics overlay with rollback/network/session counters and `Export JSON` capture.
+- `VITE_FEATURE_ONLINE_DIAGNOSTICS=true` enables a live diagnostics overlay with rollback/network/session counters and `Export JSON` capture. New sessions start in the non-blocking header-only view; **Expand**, **Collapse**, and **Hide** persist explicit choices for the browser session. The expanded data surface passes clicks through to game/menu controls while its own header actions remain interactive. `?diagnostics=1` is a development-build convenience only and cannot bypass a disabled staging or production feature flag; `?diagnostics=0` remains an explicit opt-out.
 - Input parity: Start menu and Online Dev menu support keyboard, mouse, and controller navigation with explicit back behavior and control focus.
 
 ## Web auth flow (prototype)
@@ -211,7 +230,9 @@ With debug tools enabled, a rollback diagnostics panel is shown in HUD and match
 - Steam platform builds attempt sign-in automatically via `POST /auth/steam/exchange` at startup.
 - Dev/testing ticket options:
   - `VITE_STEAM_DEV_TICKET=dev-steam:<steamUserId>`
-  - optional runtime override: `window.__GW_STEAM_TICKET__`
+  - native runtime bridge: `window.gravityWellSteam` from `apps/steam-shell/preload.cjs`
+  - service identity: `VITE_STEAM_WEB_API_IDENTITY` (must match the API)
+  - `VITE_STEAM_DEV_TICKET` is development-only and is not a production Steam ticket source
 - `VITE_PROFILE_API_BASE` must be configured for exchange.
 - Failed Steam auth returns explicit recovery guidance in account summary text.
 
@@ -285,6 +306,7 @@ From repo root:
 npm run replay:run -- --input replays/smoke.replay.json --output replays/smoke.expected.json
 npm run replay:check
 npm run replay:size-check
+npm run smoke:visual-alpha
 ```
 
 ## Matchup regression smoke suite
@@ -310,16 +332,23 @@ npm run matchup:smoke -- --write-expected
 ## Replay review viewer
 
 - Open `Replay Review (Smoke Fixture)` from the home menu.
+- In local AI-vs-AI, ordinary human-vs-AI sparring, or `Balance Sparring (Local)`, pause and choose `Review Latest Local Round` to inspect the exact live input/checksum sequence and any recorded AI decision trace; exiting returns to that paused match.
 - Playback controls:
   - `Space` pause/resume
   - `,` and `.` frame-step backward/forward
   - `[` and `]` playback speed
   - `1-9` jump to round markers
-  - `Esc` exit replay review to home
+  - `Esc` exit replay review to its source (the paused AI match for a live capture, otherwise home)
 - The viewer shows:
   - Both players' input timeline rows.
+  - A frame-synchronized AI decision, requested input, simulator-accepted start, and outcome chain when a versioned AI trace is present. Human and legacy payloads explicitly report that no AI decision trace is available.
+  - A deterministic plain-language Fight story before the detailed loop chain. Any suggested controlled check is read-only and cannot stage or change a rule from Replay Review.
   - Frame-data overlay (startup, active, recovery states).
   - Recent move outcomes with hit/block/whiff markers and frame-advantage markers.
+
+`npm run bundle:budget` inspects the emitted production HTML and JavaScript. It gates the entry chunk, largest chunk, aggregate initial raw/gzip bytes, external initial scripts, and proof that Pause/Balance Lab, Replay Review, and online developer tools remain first-use chunks. The report is written to `build-artifacts/production-bundle-budget.json`; normal production and Steam builds run this automatically.
+
+`npm run smoke:visual-alpha` requires a current production build. It starts only a loopback Vite preview, blocks external requests, verifies WebGL and bundled replay JSON, opens the real menu/replay flow, seeks deterministic action markers, verifies that each brief exit exposes a causal re-entry control and lands on its exact frame, and exercises the lazy Pause menu. Schema `gw.visual-alpha-smoke.v8` also opens the current ordinary human-vs-AI sparring round, requires its P2 decision trace and Fight story, proves the paused story node remains stable across animation frames, captures the scrolled Replay Review panel, exits to the same paused match, and verifies resume/reopen behavior. It requires the Balance Lab to remain hidden there, then selects `Balance Sparring (Local)` and the named **Human recovery agency** probe through the production menu. It verifies P1 has no AI-role control while P2 remains tunable, captures and freezes baseline ratings, deliberately mutates the disabled controls to prove the export retains the captured evidence, stages only `naturalRecoveryResetMultiplier=0.75`, applies a same-seed restart, and confirms the active value changed with no pending edits. It downloads `gw.balance-lab-experiment.v6`, verifies named probe/scenario/human provenance and distinct baseline/candidate evidence, and opens the checksum-verified round replay with the same probe label and P2 decision trace. It writes its report plus normal UI, scorecard, local-round review, Balance Sparring, re-entry review, and overlay-free stage screenshots to `build-artifacts/visual-alpha-smoke/`. Before browser launch it re-simulates the fixture and requires accepted Vanguard and Duelist special starts at their captured frames; a raw button press rejected by cooldown or commitment cannot satisfy the gate. It also records a report-only 180-interval local-match frame-timing sample; this is hardware evidence for human review, not a noisy CI score.
 
 From this workspace:
 
@@ -327,4 +356,5 @@ From this workspace:
 npm run replay:run -- --input replays/smoke.replay.json --output replays/smoke.expected.json
 npm run replay:check
 npm run replay:size-check
+npm run smoke:visual-alpha
 ```

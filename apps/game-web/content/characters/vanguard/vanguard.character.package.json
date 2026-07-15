@@ -1,114 +1,112 @@
 {
   "schemaVersion": "gw.character-package.v1",
-  "id": "vanguard_pkg",
+  "id": "vanguard",
   "displayName": "Vanguard",
-  "blurb": "Placeholder all-round archetype.",
-  "mechanicsTag": "future: defensive kit",
+  "blurb": "Defensive anchor that absorbs pressure, resets spacing, and punishes overextension.",
+  "mechanicsTag": "defensive anchor",
   "metadata": {
     "author": "Gravity Well Team",
-    "version": "1.0.0",
-    "tags": ["starter", "all-rounder"]
+    "version": "0.3.3",
+    "tags": ["alpha", "defense", "anchor"]
   },
   "stats": {
-    "fuelCapacityMultiplier": 1,
-    "moveAccelMultiplier": 1,
-    "boostSpeedMultiplier": 1,
-    "superBoostSpeedMultiplier": 1,
-    "launchBasePowerMultiplier": 1,
+    "fuelCapacityMultiplier": 1.1,
+    "moveAccelMultiplier": 0.92,
+    "boostSpeedMultiplier": 0.95,
+    "superBoostSpeedMultiplier": 0.96,
+    "launchBasePowerMultiplier": 1.08,
     "launchChainBonusMultiplier": 1,
-    "launchDurationTakenMultiplier": 1,
-    "specialFuelCostMultiplier": 1,
-    "superFuelMultiplier": 1,
-    "dunkRecoveryFuelMultiplier": 1
+    "launchDurationTakenMultiplier": 0.92,
+    "naturalRecoveryResetMultiplier": 1,
+    "specialFuelCostMultiplier": 1.05,
+    "superFuelMultiplier": 1.02,
+    "dunkRecoveryFuelMultiplier": 1.1
   },
   "visuals": {
-    "presentation": "3d",
-    "modelId": "character_vanguard_model",
+    "presentation": "sprite",
+    "modelId": null,
     "animationSetId": "character_vanguard_animset",
     "vfxProfileId": "character_vanguard_vfx",
-    "projectileVisualId": "character_vanguard_projectile",
+    "projectileVisualId": null,
     "hudPortraitId": "character_vanguard_portrait"
   },
   "audio": {
-    "sfxProfileId": "character_vanguard_sfx",
+    "sfxProfileId": null,
     "voiceProfileId": "character_vanguard_voice",
-    "musicThemeId": "character_vanguard_theme"
+    "musicThemeId": null
   },
   "moves": {
     "launch": {
-      "startupFrames": 6,
+      "startupFrames": 7,
       "activeFrames": 3,
-      "recoveryOnHitFrames": 30,
-      "recoveryOnWhiffFrames": 42
+      "recoveryOnHitFrames": 28,
+      "recoveryOnWhiffFrames": 40
     },
     "dunk": {
-      "startupFrames": 30,
+      "startupFrames": 31,
       "activeFrames": 4,
       "recoveryOnHitFrames": 24,
-      "recoveryOnWhiffFrames": 66,
-      "hitRange": 8
+      "recoveryOnWhiffFrames": 62,
+      "hitRange": 8.2,
+      "startupPursuitSpeed": 70,
+      "startupTracking": 0.24
     },
     "parry": {
       "startupFrames": 0,
-      "activeFrames": 11,
-      "recoveryFrames": 13,
+      "activeFrames": 14,
+      "recoveryFrames": 11,
       "counterStunFrames": 45
     },
     "break": {
       "startupFrames": 0,
       "activeFrames": 1,
-      "recoveryFrames": 24,
-      "velocityRetain": 0.3
+      "recoveryFrames": 18,
+      "velocityRetain": 0.18
     },
     "movement": {
-      "fuelPerSecond": 0.65
+      "fuelPerSecond": 0.58
     },
     "special": {
-      "id": "basic_projectile",
-      "label": "Basic Projectile",
-      "behaviorId": "special.projectile.v1",
-      "kind": "projectile",
-      "fuelCost": 5,
+      "id": "guard_bastion",
+      "label": "Guard Bastion",
+      "behaviorId": "special.block_guard.v1",
+      "kind": "block",
+      "fuelCost": 7,
       "timing": {
-        "startupFrames": 0,
-        "activeFrames": 1,
-        "recoveryFrames": 0,
-        "cooldownFrames": 19
+        "startupFrames": 4,
+        "activeFrames": 10,
+        "recoveryFrames": 18,
+        "cooldownFrames": 40
       },
       "size": {
-        "range": 100,
-        "radius": 0.8,
-        "width": 1.6,
-        "length": 1.6
+        "range": 10,
+        "radius": 1.5,
+        "width": 2.4,
+        "length": 2.4
       },
-      "projectile": {
-        "speed": 42,
-        "lifeSeconds": 2,
-        "hitRadius": 0.8,
-        "stunSeconds": 0.7,
-        "fuelDamage": 4,
-        "visualId": "character_vanguard_projectile"
+      "block": {
+        "guardFrames": 20
       }
     },
     "boost": {
-      "holdSpeedMultiplier": 1,
-      "holdFuelPerSecond": 0.2
+      "holdSpeedMultiplier": 0.95,
+      "holdFuelPerSecond": 0.18
     },
     "superBoost": {
-      "holdSpeedMultiplier": 1,
+      "holdSpeedMultiplier": 0.94,
       "steerLerpMultiplier": 1,
       "velocityBlendMultiplier": 1,
-      "startFuelCost": 6,
-      "travelFuelPerDistance": 0.05,
-      "nonCommitPenalty": 2.5,
+      "startFuelCost": 6.5,
+      "travelFuelPerDistance": 0.052,
+      "nonCommitPenalty": 2.2,
       "turnPenaltyGainMultiplier": 1
     }
   },
   "specials": [
     {
-      "id": "special_alpha",
-      "label": "Special Alpha",
-      "enabled": false
+      "id": "guard_bastion",
+      "label": "Guard Bastion",
+      "enabled": true
     },
     {
       "id": "special_beta",

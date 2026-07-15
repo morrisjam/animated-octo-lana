@@ -81,7 +81,7 @@ async function main(): Promise<void> {
     const rawJson = await readFile(fullPath, 'utf8');
     const parsed = JSON.parse(rawJson) as unknown;
     const validation = validateReplayPayload(parsed);
-    if (!validation.ok) {
+    if (validation.ok === false) {
       console.error(`Fixture ${file} is invalid [${validation.error.code}]: ${validation.error.message}`);
       process.exitCode = 1;
       return;

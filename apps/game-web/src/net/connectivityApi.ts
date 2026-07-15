@@ -12,17 +12,44 @@ export interface ConnectionTelemetryPayload {
 
 type FetchLike = typeof fetch;
 
+export interface MatchmakingApiAuth {
+  accountId: string;
+  accessToken?: string | null;
+}
+
+export interface MatchmakingSessionAuth {
+  sessionId: string;
+  sessionToken: string;
+}
+
 export async function fetchMatchmakingIceConfig(
   apiBase: string,
   forceRelay: boolean,
+  auth: MatchmakingApiAuth,
+  session: MatchmakingSessionAuth,
   fetchImpl: FetchLike = fetch,
 ): Promise<MatchmakingIceConfig | null> {
-  if (!apiBase) {
+  if (
+    !apiBase
+    || (!auth.accessToken && !auth.accountId)
+    || !session.sessionId
+    || !session.sessionToken
+  ) {
     return null;
   }
-  const forceRelayQuery = forceRelay ? '?forceRelay=true' : '';
+  const headers = auth.accessToken
+    ? { authorization: `Bearer ${auth.accessToken}`, 'content-type': 'application/json' }
+    : { 'x-account-id': auth.accountId, 'content-type': 'application/json' };
   try {
-    const response = await fetchImpl(`${apiBase}/matchmaking/network/ice-config${forceRelayQuery}`);
+    const response = await fetchImpl(`${apiBase}/matchmaking/network/ice-config`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        sessionToken: session.sessionToken,
+        forceRelay,
+      }),
+    });
     if (!response.ok) {
       return null;
     }

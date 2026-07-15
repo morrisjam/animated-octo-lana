@@ -1,6 +1,26 @@
-import { createInitialState, createStateSnapshot, getRenderSnapshot, step } from './sim';
+import {
+  createInitialState,
+  createStateSnapshot,
+  getRenderSnapshot,
+  nextDeterministicRandom,
+  step,
+  type SimulationActionStart,
+} from './sim';
+import { applyBalanceScenario } from './balanceScenarios';
+import { buildBalanceLabFlowModel, type BalanceLabFlowModel } from './balanceLab';
+import {
+  arePlayersInTelemetryContact,
+  createMatchTelemetryTracker,
+  type MatchTelemetrySummary,
+} from './matchTelemetry';
+import type { AiDecisionTelemetryEvent } from './aiDecisionTelemetry';
 import { secondsToFrames, secondsToSignedFrames } from './moveData';
-import type { ReplayPayload, ReplayRoundDescriptor } from './replay';
+import {
+  cloneReplayAiDecisionTrace,
+  type ReplayFrameInput,
+  type ReplayPayload,
+  type ReplayRoundDescriptor,
+} from './replay';
 import type { FrameInput, GameState, PlayerFrameInput, PlayerId, PlayersById, RenderSnapshot } from './types';
 
 const DEFAULT_FIXED_DT = 1 / 60;
@@ -44,6 +64,8 @@ export interface ReplayFrameEvent {
 export interface ReplayReviewFrame {
   frame: number;
   input: FrameInput;
+  aiDecisionEvents: AiDecisionTelemetryEvent[];
+  acceptedActionStarts: SimulationActionStart[];
   snapshot: RenderSnapshot;
   frameData: PlayersById<ReplayPlayerFrameData>;
   events: ReplayFrameEvent[];
@@ -54,6 +76,67 @@ export interface ReplayReviewData {
   totalFrames: number;
   rounds: ReplayRoundMarker[];
   frames: ReplayReviewFrame[];
+  flowReviews: ReplayRoundFlowReview[];
+}
+
+export interface ReplayRoundFlowReview {
+  index: number;
+  label: string;
+  startFrame: number;
+  endFrame: number;
+  telemetry: MatchTelemetrySummary;
+  flow: BalanceLabFlowModel;
+  contactWindows: ReplayContactWindow[];
+}
+
+export interface ReplayContactWindow {
+  startFrame: number;
+  endFrame: number;
+  durationSeconds: number;
+}
+
+export interface ReplayReviewRoundSource {
+  label: string;
+  initialState: GameState;
+  inputs: readonly FrameInput[];
+}
+
+function trackContactFrame(
+  windows: ReplayContactWindow[],
+  activeStartFrame: number | null,
+  frame: number,
+  inContact: boolean,
+  fixedDt: number,
+): number | null {
+  if (inContact) {
+    return activeStartFrame ?? frame;
+  }
+  if (activeStartFrame === null) {
+    return null;
+  }
+  const endFrame = Math.max(activeStartFrame, frame - 1);
+  windows.push({
+    startFrame: activeStartFrame,
+    endFrame,
+    durationSeconds: Number(((endFrame - activeStartFrame + 1) * fixedDt).toFixed(3)),
+  });
+  return null;
+}
+
+function closeContactWindow(
+  windows: ReplayContactWindow[],
+  activeStartFrame: number | null,
+  finalFrame: number,
+  fixedDt: number,
+): void {
+  if (activeStartFrame === null || finalFrame < activeStartFrame) {
+    return;
+  }
+  windows.push({
+    startFrame: activeStartFrame,
+    endFrame: finalFrame,
+    durationSeconds: Number(((finalFrame - activeStartFrame + 1) * fixedDt).toFixed(3)),
+  });
 }
 
 export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData {
@@ -63,17 +146,79 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
   const state = createInitialState({
     seed: payload.header.seed,
     loadout: payload.header.loadout,
+    rules: payload.header.rules,
+    characterBalanceOverrides: payload.header.characterBalanceOverrides,
   });
+  if (payload.header.balanceTuning) {
+    state.tuning = { ...payload.header.balanceTuning };
+  }
+  if (payload.header.startingSituation) {
+    applyBalanceScenario(state, payload.header.startingSituation.id);
+  }
   const frames: ReplayReviewFrame[] = [];
+  const aiDecisionEventsByFrame = new Map<number, AiDecisionTelemetryEvent[]>();
+  if (payload.aiDecisionTrace) {
+    for (const event of cloneReplayAiDecisionTrace(payload.aiDecisionTrace).events) {
+      const frameEvents = aiDecisionEventsByFrame.get(event.frame) ?? [];
+      frameEvents.push(event);
+      aiDecisionEventsByFrame.set(event.frame, frameEvents);
+    }
+  }
+  const telemetry = createMatchTelemetryTracker(state);
+  const contactWindows: ReplayContactWindow[] = [];
+  let contactStartFrame: number | null = null;
+  const finalInputFrame = payload.inputTimeline.length - 1;
+  const focus = payload.header.reviewFocus && finalInputFrame >= 0
+    ? {
+        label: payload.header.reviewFocus.label,
+        startFrame: Math.min(finalInputFrame, payload.header.reviewFocus.focusFrame),
+        endFrame: Math.min(
+          finalInputFrame,
+          payload.header.reviewFocus.endFrame ?? payload.header.reviewFocus.focusFrame,
+        ),
+      }
+    : null;
+  let focusTelemetry: ReturnType<typeof createMatchTelemetryTracker> | null = null;
+  const focusContactWindows: ReplayContactWindow[] = [];
+  let focusContactStartFrame: number | null = null;
 
   for (let frame = 0; frame < payload.inputTimeline.length; frame += 1) {
+    if (focus && frame === focus.startFrame) {
+      focusTelemetry = createMatchTelemetryTracker(state);
+    }
     const input = normaliseFrameInput(payload.inputTimeline[frame]);
     const previousState = createStateSnapshot(state);
-    step(state, input, fixedDt);
+    const acceptedActionStarts: SimulationActionStart[] = [];
+    step(state, input, fixedDt, {
+      onActionStart: (event) => acceptedActionStarts.push(event),
+    });
+    if (payload.header.advanceRngPerFrame) {
+      nextDeterministicRandom(state);
+    }
+    contactStartFrame = trackContactFrame(
+      contactWindows,
+      contactStartFrame,
+      frame,
+      arePlayersInTelemetryContact(state),
+      fixedDt,
+    );
+    telemetry.recordFrame(input, state, fixedDt, acceptedActionStarts);
+    if (focus && focusTelemetry && frame >= focus.startFrame && frame <= focus.endFrame) {
+      focusContactStartFrame = trackContactFrame(
+        focusContactWindows,
+        focusContactStartFrame,
+        frame,
+        arePlayersInTelemetryContact(state),
+        fixedDt,
+      );
+      focusTelemetry.recordFrame(input, state, fixedDt, acceptedActionStarts);
+    }
     const currentState = createStateSnapshot(state);
     frames.push({
       frame,
       input,
+      aiDecisionEvents: aiDecisionEventsByFrame.get(frame) ?? [],
+      acceptedActionStarts: acceptedActionStarts.map((event) => ({ ...event })),
       snapshot: getRenderSnapshot(state),
       frameData: {
         P1: buildPlayerFrameData(currentState, 'P1'),
@@ -87,6 +232,8 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
     frames.push({
       frame: 0,
       input: normaliseFrameInput(undefined),
+      aiDecisionEvents: [],
+      acceptedActionStarts: [],
       snapshot: getRenderSnapshot(state),
       frameData: {
         P1: buildPlayerFrameData(state, 'P1'),
@@ -96,11 +243,134 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
     });
   }
 
+  closeContactWindow(contactWindows, contactStartFrame, payload.inputTimeline.length - 1, fixedDt);
+
+  const telemetrySummary = telemetry.toSummary();
+  const fullReview: ReplayRoundFlowReview = {
+    index: 0,
+    label: 'Full replay',
+    startFrame: 0,
+    endFrame: Math.max(0, frames.length - 1),
+    telemetry: telemetrySummary,
+    flow: buildBalanceLabFlowModel(telemetrySummary),
+    contactWindows,
+  };
+  const flowReviews: ReplayRoundFlowReview[] = [];
+  if (
+    focus
+    && focusTelemetry
+    && (focus.startFrame > 0 || focus.endFrame < finalInputFrame)
+  ) {
+    closeContactWindow(
+      focusContactWindows,
+      focusContactStartFrame,
+      focus.endFrame,
+      fixedDt,
+    );
+    const focusSummary = focusTelemetry.toSummary();
+    flowReviews.push({
+      index: 0,
+      label: `Focused window: ${focus.label}`,
+      startFrame: focus.startFrame,
+      endFrame: focus.endFrame,
+      telemetry: focusSummary,
+      flow: buildBalanceLabFlowModel(focusSummary),
+      contactWindows: focusContactWindows,
+    });
+  }
+  flowReviews.push(fullReview);
+
   return {
     fixedDt,
     totalFrames: frames.length,
     rounds: buildRoundMarkers(payload.rounds, frames.length),
     frames,
+    flowReviews,
+  };
+}
+
+export function buildReplayReviewDataFromRounds(
+  roundSources: readonly ReplayReviewRoundSource[],
+  fixedDt = DEFAULT_FIXED_DT,
+): ReplayReviewData {
+  if (!Number.isFinite(fixedDt) || fixedDt <= 0) {
+    throw new Error('Replay review fixed timestep must be positive.');
+  }
+
+  const frames: ReplayReviewFrame[] = [];
+  const rounds: ReplayRoundMarker[] = [];
+  const flowReviews: ReplayRoundFlowReview[] = [];
+
+  for (let roundIndex = 0; roundIndex < roundSources.length; roundIndex += 1) {
+    const source = roundSources[roundIndex];
+    const state = createStateSnapshot(source.initialState);
+    const telemetry = createMatchTelemetryTracker(state);
+    const startFrame = frames.length;
+    const contactWindows: ReplayContactWindow[] = [];
+    let contactStartFrame: number | null = null;
+
+    for (const input of source.inputs) {
+      const frame = frames.length;
+      const previousState = createStateSnapshot(state);
+      const acceptedActionStarts: SimulationActionStart[] = [];
+      step(state, input, fixedDt, {
+        onActionStart: (event) => acceptedActionStarts.push(event),
+      });
+      contactStartFrame = trackContactFrame(
+        contactWindows,
+        contactStartFrame,
+        frame,
+        arePlayersInTelemetryContact(state),
+        fixedDt,
+      );
+      telemetry.recordFrame(input, state, fixedDt, acceptedActionStarts);
+      const currentState = createStateSnapshot(state);
+      frames.push({
+        frame,
+        input,
+        aiDecisionEvents: [],
+        acceptedActionStarts: acceptedActionStarts.map((event) => ({ ...event })),
+        snapshot: getRenderSnapshot(state),
+        frameData: {
+          P1: buildPlayerFrameData(currentState, 'P1'),
+          P2: buildPlayerFrameData(currentState, 'P2'),
+        },
+        events: collectFrameEvents(frame, previousState, currentState),
+      });
+    }
+
+    closeContactWindow(contactWindows, contactStartFrame, frames.length - 1, fixedDt);
+
+    const endFrame = Math.max(startFrame, frames.length - 1);
+    const label = source.label.trim() || `Round ${roundIndex + 1}`;
+    const telemetrySummary = telemetry.toSummary();
+    rounds.push({
+      index: roundIndex,
+      label,
+      startFrame,
+      endFrame,
+    });
+    flowReviews.push({
+      index: roundIndex,
+      label,
+      startFrame,
+      endFrame,
+      telemetry: telemetrySummary,
+      flow: buildBalanceLabFlowModel(telemetrySummary),
+      contactWindows,
+    });
+  }
+
+  if (frames.length === 0) {
+    throw new Error('Replay review requires at least one input frame.');
+  }
+
+  return {
+    fixedDt,
+    totalFrames: frames.length,
+    rounds,
+    frames,
+    flowReviews,
   };
 }
 
@@ -233,9 +503,11 @@ function collectLaunchEvents(
   const prevOpponent = previous.players[opponentId];
   const player = current.players[playerId];
   const opponent = current.players[opponentId];
+  // Startup/active timers can leave a positive sub-frame remainder before the
+  // simulator advances to the next phase. Only exact zero marks resolution.
   const launchResolved = (prevPlayer.launchStartup > 0 || prevPlayer.launchActive > 0)
-    && player.launchStartup <= EPSILON
-    && player.launchActive <= EPSILON;
+    && player.launchStartup <= 0
+    && player.launchActive <= 0;
   if (!launchResolved) {
     return [];
   }
@@ -278,8 +550,8 @@ function collectDunkEvents(
   const player = current.players[playerId];
   const opponent = current.players[opponentId];
   const dunkResolved = (prevPlayer.dunkStartup > 0 || prevPlayer.dunkActive > 0)
-    && player.dunkStartup <= EPSILON
-    && player.dunkActive <= EPSILON;
+    && player.dunkStartup <= 0
+    && player.dunkActive <= 0;
   if (!dunkResolved) {
     return [];
   }
@@ -310,9 +582,7 @@ function collectSpecialEvents(
   const prevOpponent = previous.players[opponentId];
   const player = current.players[playerId];
   const opponent = current.players[opponentId];
-  const specialResolved = (prevPlayer.specialStartup > 0 || prevPlayer.specialActive > 0)
-    && player.specialStartup <= EPSILON
-    && player.specialActive <= EPSILON;
+  const specialResolved = !prevPlayer.specialDidResolve && player.specialDidResolve;
   if (!specialResolved) {
     return [];
   }
@@ -404,7 +674,7 @@ function toSignedFrames(seconds: number): number {
   return secondsToSignedFrames(seconds);
 }
 
-function normaliseFrameInput(input: Partial<FrameInput> | undefined): FrameInput {
+function normaliseFrameInput(input: ReplayFrameInput | undefined): FrameInput {
   return {
     p1: normalisePlayerInput(input?.p1),
     p2: normalisePlayerInput(input?.p2),

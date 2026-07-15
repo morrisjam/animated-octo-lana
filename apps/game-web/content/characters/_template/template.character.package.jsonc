@@ -22,24 +22,25 @@
     "launchBasePowerMultiplier": 1,
     "launchChainBonusMultiplier": 1,
     "launchDurationTakenMultiplier": 1,
+    "naturalRecoveryResetMultiplier": 1,
     "specialFuelCostMultiplier": 1,
     "superFuelMultiplier": 1,
     "dunkRecoveryFuelMultiplier": 1
   },
 
   "visuals": {
-    "presentation": "3d",
-    "modelId": "character___character_id___model",
+    "presentation": "sprite",
+    "modelId": null,
     "animationSetId": "character___character_id___animset",
-    "vfxProfileId": "character___character_id___vfx",
-    "projectileVisualId": "character___character_id___projectile",
+    "vfxProfileId": null,
+    "projectileVisualId": null,
     "hudPortraitId": "character___character_id___portrait"
   },
 
   "audio": {
-    "sfxProfileId": "character___character_id___sfx",
+    "sfxProfileId": null,
     "voiceProfileId": "character___character_id___voice",
-    "musicThemeId": "character___character_id___theme"
+    "musicThemeId": null
   },
 
   "moves": {
@@ -54,7 +55,9 @@
       "activeFrames": 4,
       "recoveryOnHitFrames": 24,
       "recoveryOnWhiffFrames": 66,
-      "hitRange": 8
+      "hitRange": 8,
+      "startupPursuitSpeed": 58,
+      "startupTracking": 0.18
     },
     "parry": {
       "startupFrames": 0,

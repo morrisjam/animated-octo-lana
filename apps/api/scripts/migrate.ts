@@ -4,6 +4,10 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
+import {
+  computeMigrationChecksum,
+  validateMigrationIntegrity,
+} from '../src/ops/migrationIntegrity';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: path.resolve(currentDir, '../../../.env') });
@@ -13,9 +17,11 @@ async function ensureSchemaMigrationsTable(pool: Pool): Promise<void> {
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id BIGSERIAL PRIMARY KEY,
       filename TEXT NOT NULL UNIQUE,
+      checksum TEXT NULL,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NULL');
 }
 
 async function run(): Promise<void> {
@@ -28,27 +34,41 @@ async function run(): Promise<void> {
   const files = (await readdir(migrationsDir))
     .filter((file) => file.endsWith('.sql'))
     .sort();
+  const migrationFiles = await Promise.all(files.map(async (filename) => {
+    const sql = await readFile(path.join(migrationsDir, filename), 'utf8');
+    return { filename, sql, checksum: computeMigrationChecksum(sql) };
+  }));
 
   const pool = new Pool({ connectionString });
   try {
     await ensureSchemaMigrationsTable(pool);
-    for (const filename of files) {
-      const alreadyApplied = await pool.query(
-        'SELECT 1 FROM schema_migrations WHERE filename = $1 LIMIT 1',
-        [filename],
+    const applied = await pool.query<{ filename: string; checksum: string | null }>(
+      'SELECT filename, checksum FROM schema_migrations ORDER BY filename',
+    );
+    const integrity = validateMigrationIntegrity(migrationFiles, applied.rows);
+    for (const migration of integrity.checksumsToBackfill) {
+      await pool.query(
+        'UPDATE schema_migrations SET checksum = $2 WHERE filename = $1 AND checksum IS NULL',
+        [migration.filename, migration.checksum],
       );
-      if (alreadyApplied.rowCount && alreadyApplied.rowCount > 0) {
+      console.log(`Backfilled migration checksum: ${migration.filename}`);
+    }
+    const appliedNames = new Set(applied.rows.map((record) => record.filename));
+    for (const migration of migrationFiles) {
+      if (appliedNames.has(migration.filename)) {
         continue;
       }
 
-      const sql = await readFile(path.join(migrationsDir, filename), 'utf8');
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        await client.query(sql);
-        await client.query('INSERT INTO schema_migrations(filename) VALUES ($1)', [filename]);
+        await client.query(migration.sql);
+        await client.query(
+          'INSERT INTO schema_migrations(filename, checksum) VALUES ($1, $2)',
+          [migration.filename, migration.checksum],
+        );
         await client.query('COMMIT');
-        console.log(`Applied migration: ${filename}`);
+        console.log(`Applied migration: ${migration.filename}`);
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;

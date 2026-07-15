@@ -15,9 +15,15 @@
     "character:qa": "tsx scripts/character-package-qa.ts",
     "character:report": "tsx scripts/character-kit-report.ts",
     "ai:batch": "tsx scripts/ai-matchup-batch.ts",
+    "ai:flow-review": "tsx scripts/ai-matchup-batch.ts --games 4 --max-round-seconds 60 --difficulty cadet,veteran --characters vanguard,duelist --report-name local-flow-review --emit-review-replays",
+    "ai:alpha-flow-review": "tsx scripts/ai-matchup-batch.ts --games 12 --max-round-seconds 90 --difficulty cadet,veteran --characters vanguard,duelist --thresholds content/balance/online-alpha-ai-thresholds.json --report-name local-flow-review --emit-review-replays",
+    "ai:balance-gate": "tsx scripts/ai-matchup-batch.ts --games 12 --max-round-seconds 90 --difficulty veteran --characters vanguard,duelist --thresholds content/balance/ai-regression-thresholds.json --report-name ai-balance-regression-report",
+    "ai:alpha-readiness": "tsx scripts/ai-matchup-batch.ts --games 12 --max-round-seconds 90 --difficulty cadet,veteran --characters vanguard,duelist --thresholds content/balance/online-alpha-ai-thresholds.json --report-name online-alpha-balance-readiness-report",
     "asset:budget-check": "tsx scripts/asset-budget-check.ts",
-    "build": "npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run asset:budget-check && npm run matchup:smoke && vite build",
-    "build:steam": "npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run asset:budget-check && npm run matchup:smoke && vite build --mode steam",
+    "bundle:budget": "tsx scripts/production-bundle-budget.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "npm run typecheck && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run asset:budget-check && npm run matchup:smoke && vite build && tsx scripts/production-bundle-budget.ts --profile production",
+    "build:steam": "npm run typecheck && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run asset:budget-check && npm run matchup:smoke && vite build --mode steam && tsx scripts/production-bundle-budget.ts --profile steam",
     "package:steam": "tsx scripts/steam-package.ts --dist dist --out-dir steam-artifact",
     "smoke:steam": "tsx scripts/steam-smoke.ts --packaged-dir steam-artifact",
     "preview": "vite preview",
@@ -25,6 +31,11 @@
     "replay:run": "tsx scripts/replay-runner.ts",
     "replay:check": "tsx scripts/replay-runner.ts --input replays/smoke.replay.json --expected replays/smoke.expected.json",
     "replay:size-check": "tsx scripts/replay-size-check.ts --dir replays --max-median-bytes 4096",
+    "rollback:soak": "tsx scripts/rollback-network-soak.ts",
+    "smoke:webrtc-browser": "tsx scripts/webrtc-browser-smoke.ts",
+    "smoke:ranked-root-browser": "tsx scripts/ranked-root-browser-smoke.ts",
+    "soak:webrtc-browser": "tsx scripts/webrtc-browser-smoke.ts --soak",
+    "smoke:visual-alpha": "tsx scripts/visual-alpha-smoke.ts",
     "matchup:smoke": "tsx scripts/matchup-regression-smoke.ts",
     "verify": "npm run test && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run replay:check && npm run replay:size-check && npm run matchup:smoke && npm run build"
   },
@@ -32,8 +43,9 @@
     "three": "0.161.0"
   },
   "devDependencies": {
+    "playwright-core": "^1.61.1",
     "tsx": "4.20.6",
-    "vite": "7.3.1",
-    "vitest": "4.0.18"
+    "vite": "^7.3.6",
+    "vitest": "^4.1.10"
   }
 }

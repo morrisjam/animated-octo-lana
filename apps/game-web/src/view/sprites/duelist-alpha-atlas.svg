@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <defs>
+    <linearGradient id="d-armor" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#a0abc2"/>
+    </linearGradient>
+    <g id="d-body">
+      <path d="M52 75 L61 72 L60 109 L49 116 L45 108 Z" fill="#c3ccdc"/>
+      <path d="M76 75 L67 72 L68 109 L79 116 L83 108 Z" fill="#c3ccdc"/>
+      <path d="M50 43 L62 34 L75 42 L79 69 L68 86 L56 82 L47 64 Z" fill="url(#d-armor)"/>
+      <path d="M46 48 L35 60 L42 77 L53 67 Z" fill="#8c99b3"/>
+      <path d="M76 47 L86 58 L82 75 L72 66 Z" fill="#dce3f0"/>
+      <path d="M57 29 L64 19 L71 28 L68 39 L59 39 Z" fill="#f5f7ff"/>
+      <path d="M59 27 L69 25 L68 30 L60 32 Z" fill="#5e6d8e"/>
+      <circle cx="64" cy="53" r="5" fill="#ffffff"/>
+      <path d="M84 28 L88 29 L78 100 L74 99 Z" fill="#f7f9ff"/>
+      <path d="M87 21 L91 31 L84 30 Z" fill="#ffffff"/>
+      <path d="M51 69 L39 95 L52 91 L59 78 Z" fill="#707e9e" opacity="0.9"/>
+    </g>
+  </defs>
+  <g>
+    <path d="M29 105 Q64 112 98 104" fill="none" stroke="#d7dfef" stroke-width="2" opacity="0.28"/>
+    <use href="#d-body"/>
+  </g>
+  <g transform="translate(128 0)">
+    <path d="M24 102 Q65 116 104 101" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.36"/>
+    <g transform="translate(0 -2) rotate(-3 64 66)"><use href="#d-body"/></g>
+  </g>
+  <g transform="translate(256 0)">
+    <path d="M3 45 H39 M8 61 H36 M1 78 H42" stroke="#e7edfa" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+    <g transform="translate(12 0) rotate(16 64 66)"><use href="#d-body"/></g>
+  </g>
+  <g transform="translate(384 0)">
+    <path d="M17 91 Q68 12 117 42" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" opacity="0.72"/>
+    <g transform="rotate(-22 64 66)"><use href="#d-body"/></g>
+  </g>
+  <g transform="translate(0 128)">
+    <path d="M27 86 L100 35" stroke="#ffffff" stroke-width="4" opacity="0.72"/>
+    <path d="M35 96 L108 44" stroke="#b7c3d9" stroke-width="2" opacity="0.48"/>
+    <g transform="translate(-3 1) rotate(9 64 66)"><use href="#d-body"/></g>
+  </g>
+  <g transform="translate(128 128)">
+    <path d="M8 69 C32 29 83 30 119 61" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity="0.24"/>
+    <path d="M5 83 C39 43 91 45 122 71" fill="none" stroke="#c5cfe1" stroke-width="3" opacity="0.34"/>
+    <g transform="translate(12 -1) rotate(19 64 66)"><use href="#d-body"/></g>
+  </g>
+  <g transform="translate(256 128)">
+    <path d="M37 113 L65 83 L94 113" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity="0.5"/>
+    <g transform="translate(0 9) rotate(-6 64 66)"><use href="#d-body"/></g>
+  </g>
+  <g transform="translate(384 128)">
+    <path d="M11 66 H118" stroke="#ffffff" stroke-width="2" stroke-dasharray="5 8" opacity="0.32"/>
+    <g transform="rotate(78 64 66) scale(.88)"><use href="#d-body"/></g>
+  </g>
+</svg>

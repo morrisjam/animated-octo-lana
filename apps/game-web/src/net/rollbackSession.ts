@@ -35,11 +35,30 @@ export interface AdvanceFrameResult {
   rollbackFrames: number;
 }
 
-export interface RollbackDesyncEvent {
+export interface RemoteAuthoritativeFrameInput {
+  frame: number;
+  input: PlayerFrameInput;
+}
+
+export interface RemoteAuthoritativeBatchApplyResult {
+  rollbackFrames: number;
+  acceptedFrames: number[];
+  duplicateFrames: number[];
+  conflictingFrames: number[];
+  tooLateFrames: number[];
+}
+
+export interface RollbackCorrectionEvent {
   frame: number;
   rollbackFrames: number;
-  preRollbackChecksum: number;
-  postRollbackChecksum: number;
+  predictedStateChecksum: number;
+  correctedStateChecksum: number;
+}
+
+export interface RollbackWinningFrame {
+  frame: number;
+  winner: PlayerId;
+  checksum: number;
 }
 
 export interface RollbackDiagnosticsSnapshot {
@@ -50,7 +69,10 @@ export interface RollbackDiagnosticsSnapshot {
   maxRollbackDepth: number;
   lastRollbackDepth: number;
   lastRollbackFromFrame: number | null;
-  desyncEvents: RollbackDesyncEvent[];
+  correctionEvents: RollbackCorrectionEvent[];
+  duplicateAuthoritativeFrames: number;
+  conflictingAuthoritativeFrames: number;
+  tooLateAuthoritativeFrames: number;
 }
 
 const DEFAULT_MAX_HISTORY_FRAMES = 600;
@@ -67,6 +89,18 @@ function clonePlayerInput(input: PlayerFrameInput): PlayerFrameInput {
     parry: input.parry,
     breakLaunch: input.breakLaunch,
   };
+}
+
+function playerInputsEqual(first: PlayerFrameInput, second: PlayerFrameInput): boolean {
+  return first.moveX === second.moveX
+    && first.moveY === second.moveY
+    && first.boost === second.boost
+    && first.superBoost === second.superBoost
+    && first.special === second.special
+    && first.launch === second.launch
+    && first.dunk === second.dunk
+    && first.parry === second.parry
+    && first.breakLaunch === second.breakLaunch;
 }
 
 function createNeutralPlayerInput(): PlayerFrameInput {
@@ -131,9 +165,17 @@ export class RollbackSession {
 
   private lastRollbackFromFrame: number | null = null;
 
-  private readonly desyncEvents: RollbackDesyncEvent[] = [];
+  private readonly correctionEvents: RollbackCorrectionEvent[] = [];
 
-  private readonly pendingDesyncEvents: RollbackDesyncEvent[] = [];
+  private readonly pendingCorrectionEvents: RollbackCorrectionEvent[] = [];
+
+  private duplicateAuthoritativeFrames = 0;
+
+  private conflictingAuthoritativeFrames = 0;
+
+  private tooLateAuthoritativeFrames = 0;
+
+  private winningFrame: RollbackWinningFrame | null = null;
 
   constructor(options: RollbackSessionOptions) {
     if (!Number.isFinite(options.fixedDt) || options.fixedDt <= 0) {
@@ -156,8 +198,30 @@ export class RollbackSession {
     return createStateSnapshot(this.state);
   }
 
+  getWinningFrame(): RollbackWinningFrame | null {
+    return this.winningFrame ? { ...this.winningFrame } : null;
+  }
+
   getTimelineEntry(frame: number, playerId: PlayerId): TimelineInputEntry | null {
     return this.timeline.getPlayerInput(frame, playerId);
+  }
+
+  getCorrectedFrameChecksum(frame: number): number | null {
+    if (!Number.isInteger(frame) || frame < 0) {
+      throw new Error(`frame must be a non-negative integer. Received: ${frame}`);
+    }
+    const snapshot = this.snapshots.get(frame + 1);
+    return snapshot ? computeStateChecksum(snapshot) : null;
+  }
+
+  getRecoveryCheckpointChecksum(confirmedThrough: number): number | null {
+    if (!Number.isInteger(confirmedThrough) || confirmedThrough < -1) {
+      throw new Error(
+        `confirmedThrough must be an integer at least -1. Received: ${confirmedThrough}`,
+      );
+    }
+    const snapshot = this.snapshots.get(confirmedThrough + 1);
+    return snapshot ? computeStateChecksum(snapshot) : null;
   }
 
   getDiagnosticsSnapshot(): RollbackDiagnosticsSnapshot {
@@ -169,29 +233,89 @@ export class RollbackSession {
       maxRollbackDepth: this.maxRollbackDepth,
       lastRollbackDepth: this.lastRollbackDepth,
       lastRollbackFromFrame: this.lastRollbackFromFrame,
-      desyncEvents: this.desyncEvents.map((event) => ({ ...event })),
+      correctionEvents: this.correctionEvents.map((event) => ({ ...event })),
+      duplicateAuthoritativeFrames: this.duplicateAuthoritativeFrames,
+      conflictingAuthoritativeFrames: this.conflictingAuthoritativeFrames,
+      tooLateAuthoritativeFrames: this.tooLateAuthoritativeFrames,
     };
   }
 
-  drainPendingDesyncEvents(): RollbackDesyncEvent[] {
-    if (this.pendingDesyncEvents.length === 0) {
+  drainPendingCorrectionEvents(): RollbackCorrectionEvent[] {
+    if (this.pendingCorrectionEvents.length === 0) {
       return [];
     }
-    const events = this.pendingDesyncEvents.map((event) => ({ ...event }));
-    this.pendingDesyncEvents.length = 0;
+    const events = this.pendingCorrectionEvents.map((event) => ({ ...event }));
+    this.pendingCorrectionEvents.length = 0;
     return events;
   }
 
   setRemoteAuthoritativeInput(frame: number, input: PlayerFrameInput): number {
-    const result = this.timeline.setRemoteAuthoritativeInput(frame, this.remotePlayerId, input);
-    if (result.ignored || frame >= this.currentFrame) {
-      return 0;
+    return this.setRemoteAuthoritativeInputs([{ frame, input }]);
+  }
+
+  setRemoteAuthoritativeInputs(inputs: readonly RemoteAuthoritativeFrameInput[]): number {
+    return this.applyRemoteAuthoritativeInputs(inputs).rollbackFrames;
+  }
+
+  applyRemoteAuthoritativeInputs(
+    inputs: readonly RemoteAuthoritativeFrameInput[],
+  ): RemoteAuthoritativeBatchApplyResult {
+    let earliestRollbackFrame: number | null = null;
+    const acceptedFrames: number[] = [];
+    const duplicateFrames: number[] = [];
+    const conflictingFrames: number[] = [];
+    const tooLateFrames: number[] = [];
+    const orderedInputs = [...inputs].sort((a, b) => a.frame - b.frame);
+    for (const entry of orderedInputs) {
+      const existing = this.timeline.getPlayerInput(entry.frame, this.remotePlayerId);
+      if (existing?.source === 'remote_authoritative') {
+        if (playerInputsEqual(existing.input, entry.input)) {
+          duplicateFrames.push(entry.frame);
+          this.duplicateAuthoritativeFrames += 1;
+        } else {
+          conflictingFrames.push(entry.frame);
+          this.conflictingAuthoritativeFrames += 1;
+        }
+        continue;
+      }
+      const result = this.timeline.setRemoteAuthoritativeInput(
+        entry.frame,
+        this.remotePlayerId,
+        entry.input,
+      );
+      if (result.ignored) {
+        tooLateFrames.push(entry.frame);
+        this.tooLateAuthoritativeFrames += 1;
+        continue;
+      }
+      acceptedFrames.push(entry.frame);
+      if (
+        entry.frame < this.currentFrame
+        && (result.changed || result.inserted)
+      ) {
+        earliestRollbackFrame = earliestRollbackFrame === null
+          ? entry.frame
+          : Math.min(earliestRollbackFrame, entry.frame);
+      }
     }
-    if (result.replacedPrediction || result.changed || result.inserted) {
-      this.timeline.clearPredictedFrom(frame + 1, this.remotePlayerId);
-      return this.rollbackAndResimulate(frame);
+
+    if (earliestRollbackFrame !== null) {
+      this.timeline.clearPredictedFrom(earliestRollbackFrame + 1, this.remotePlayerId);
+      return {
+        rollbackFrames: this.rollbackAndResimulate(earliestRollbackFrame),
+        acceptedFrames,
+        duplicateFrames,
+        conflictingFrames,
+        tooLateFrames,
+      };
     }
-    return 0;
+    return {
+      rollbackFrames: 0,
+      acceptedFrames,
+      duplicateFrames,
+      conflictingFrames,
+      tooLateFrames,
+    };
   }
 
   advanceFrame(options: AdvanceFrameOptions): AdvanceFrameResult {
@@ -217,7 +341,8 @@ export class RollbackSession {
       return 0;
     }
     const targetFrame = this.currentFrame;
-    const preRollbackChecksum = computeStateChecksum(this.state);
+    const predictedStateChecksum = computeStateChecksum(this.state);
+    const previousWinningFrame = this.winningFrame;
     const startSnapshot = this.snapshots.get(startFrame);
     if (!startSnapshot) {
       throw new Error(`Missing rollback snapshot at frame ${startFrame}.`);
@@ -225,6 +350,10 @@ export class RollbackSession {
 
     this.state = restoreStateFromSnapshot(startSnapshot);
     this.currentFrame = startFrame;
+    this.winningFrame = startSnapshot.winner && previousWinningFrame?.frame !== undefined
+      && previousWinningFrame.frame < startFrame
+      ? { ...previousWinningFrame }
+      : null;
     for (const frame of [...this.snapshots.keys()]) {
       if (frame > startFrame) {
         this.snapshots.delete(frame);
@@ -240,21 +369,21 @@ export class RollbackSession {
     this.lastRollbackFromFrame = startFrame;
     this.maxRollbackDepth = Math.max(this.maxRollbackDepth, rollbackFrames);
 
-    const postRollbackChecksum = computeStateChecksum(this.state);
-    if (preRollbackChecksum !== postRollbackChecksum) {
-      const event: RollbackDesyncEvent = {
+    const correctedStateChecksum = computeStateChecksum(this.state);
+    if (predictedStateChecksum !== correctedStateChecksum) {
+      const event: RollbackCorrectionEvent = {
         frame: startFrame,
         rollbackFrames,
-        preRollbackChecksum,
-        postRollbackChecksum,
+        predictedStateChecksum,
+        correctedStateChecksum,
       };
-      this.desyncEvents.push(event);
-      this.pendingDesyncEvents.push(event);
-      if (this.desyncEvents.length > 64) {
-        this.desyncEvents.splice(0, this.desyncEvents.length - 64);
+      this.correctionEvents.push(event);
+      this.pendingCorrectionEvents.push(event);
+      if (this.correctionEvents.length > 64) {
+        this.correctionEvents.splice(0, this.correctionEvents.length - 64);
       }
-      if (this.pendingDesyncEvents.length > 64) {
-        this.pendingDesyncEvents.splice(0, this.pendingDesyncEvents.length - 64);
+      if (this.pendingCorrectionEvents.length > 64) {
+        this.pendingCorrectionEvents.splice(0, this.pendingCorrectionEvents.length - 64);
       }
     }
 
@@ -268,6 +397,13 @@ export class RollbackSession {
     const frameInput = frameInputForPlayers(this.localPlayerId, localInput, remoteResolution.input);
 
     step(this.state, frameInput, this.fixedDt);
+    if (this.state.winner && this.winningFrame === null) {
+      this.winningFrame = {
+        frame,
+        winner: this.state.winner,
+        checksum: computeStateChecksum(this.state),
+      };
+    }
     this.totalFramesSimulated += 1;
     if (remoteResolution.usedPrediction) {
       this.predictedRemoteFrames += 1;

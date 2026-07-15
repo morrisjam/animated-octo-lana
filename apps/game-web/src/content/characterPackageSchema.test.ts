@@ -55,6 +55,8 @@ function makeValidPackage(): Record<string, unknown> {
         recoveryOnHitFrames: 24,
         recoveryOnWhiffFrames: 66,
         hitRange: 8,
+        startupPursuitSpeed: 58,
+        startupTracking: 0.18,
       },
       parry: {
         startupFrames: 0,
@@ -124,6 +126,37 @@ describe('character package schema', () => {
     const parsed = parseCharacterPackage(makeValidPackage());
     expect(parsed.id).toBe('vanguard_pkg');
     expect(parsed.moves.special.behaviorId).toBe('special.projectile.v1');
+  });
+
+  test('accepts null kit-dependent assets for a sprite package', () => {
+    const payload = makeValidPackage();
+    payload.visuals = {
+      presentation: 'sprite',
+      modelId: null,
+      animationSetId: 'character_vanguard_animset',
+      vfxProfileId: null,
+      projectileVisualId: null,
+      hudPortraitId: 'character_vanguard_portrait',
+    };
+    payload.audio = {
+      sfxProfileId: null,
+      voiceProfileId: 'character_vanguard_voice',
+      musicThemeId: null,
+    };
+
+    const parsed = parseCharacterPackage(payload);
+    expect(parsed.visuals.modelId).toBeNull();
+    expect(parsed.visuals.animationSetId).toBe('character_vanguard_animset');
+    expect(parsed.audio.sfxProfileId).toBeNull();
+  });
+
+  test('rejects a sprite package without an animation set', () => {
+    const invalid = makeValidPackage();
+    const visuals = invalid.visuals as Record<string, unknown>;
+    visuals.presentation = 'sprite';
+    visuals.animationSetId = null;
+
+    expect(() => parseCharacterPackage(invalid)).toThrowError(CharacterPackageValidationError);
   });
 
   test('rejects payload with invalid schema version', () => {

@@ -12,6 +12,9 @@ export interface MatchmakingIceConfig {
   iceTransportPolicy: IceTransportPolicy;
   fallbackPolicy: 'relay';
   directConnectTimeoutMs: number;
+  relayAvailable: boolean;
+  turnCredentialMode: 'none' | 'static' | 'time_limited';
+  turnCredentialExpiresAt?: string;
 }
 
 export interface RelayFallbackControllerOptions {

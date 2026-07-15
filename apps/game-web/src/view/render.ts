@@ -14,6 +14,13 @@ import {
   emitCombatVfxEvents,
   updateCombatVfxRuntime,
 } from './vfx/runtime';
+import {
+  resolveStageCameraPitchDegrees,
+  resolveStageCameraYOffset,
+  resolveWormholeCoreOpacity,
+  resolveWormholeLayerDepth,
+  resolveWormholeParticleDepth,
+} from './stagePresentation';
 
 const LIVE_PROJECTILE_IDS = new Set<number>();
 
@@ -29,6 +36,13 @@ function updateWormholeBackdrop(context: SceneContext, snapshot: RenderSnapshot)
   const effectOpacity = typeof backdrop.group.userData.effectOpacity === 'number'
     ? backdrop.group.userData.effectOpacity as number
     : 0.8;
+  const effectCoreOpacity = typeof backdrop.group.userData.effectCoreOpacity === 'number'
+    ? backdrop.group.userData.effectCoreOpacity as number
+    : 0.14;
+  const effectDepthTravel = typeof backdrop.group.userData.effectDepthTravel === 'number'
+    ? backdrop.group.userData.effectDepthTravel as number
+    : 0;
+  const launchActive = snapshot.players.P1.helpless > 0 || snapshot.players.P2.helpless > 0;
   const time = snapshot.gameTime * effectSpeed;
 
   backdrop.group.rotation.set(0, 0, 0);
@@ -38,12 +52,20 @@ function updateWormholeBackdrop(context: SceneContext, snapshot: RenderSnapshot)
   const corePulse = 1 + Math.sin(time * 1.25) * 0.03;
   backdrop.core.scale.setScalar(corePulse);
   const coreMaterial = backdrop.core.material as THREE.MeshBasicMaterial;
-  coreMaterial.opacity = effectOpacity * (0.08 + Math.abs(Math.sin(time * 1.25)) * 0.03);
+  coreMaterial.opacity = resolveWormholeCoreOpacity(effectOpacity, effectCoreOpacity, time);
 
   backdrop.rings.forEach((ring, index) => {
     const baseScale = ring.userData.baseScale as number;
+    const baseDepth = ring.userData.baseDepth as number;
     const scalePulse = 1 + Math.sin(time * (0.55 + index * 0.025) + index * 0.35) * 0.015;
     ring.rotation.z = 0;
+    ring.position.z = resolveWormholeLayerDepth({
+      baseDepth,
+      layerIndex: index,
+      gameTime: snapshot.gameTime,
+      effectSpeed,
+      depthTravel: effectDepthTravel,
+    });
     ring.scale.setScalar(baseScale * scalePulse);
     const material = ring.material as THREE.MeshBasicMaterial;
     material.opacity = effectOpacity * (0.03 + (backdrop.rings.length - index) * 0.01 + Math.abs(Math.sin(time * 0.8 + index)) * 0.01);
@@ -59,8 +81,27 @@ function updateWormholeBackdrop(context: SceneContext, snapshot: RenderSnapshot)
 
   backdrop.particles.rotation.z = time * 0.02;
   backdrop.particles.rotation.y = 0;
+  const particlePositions = backdrop.particles.geometry.getAttribute('position') as THREE.BufferAttribute;
+  const particleBaseDepths = backdrop.particles.userData.baseDepths as Float32Array | undefined;
+  if (particleBaseDepths && particlePositions.count === particleBaseDepths.length) {
+    const positions = particlePositions.array as Float32Array;
+    for (let index = 0; index < particleBaseDepths.length; index += 1) {
+      positions[index * 3 + 2] = resolveWormholeParticleDepth({
+        baseDepth: particleBaseDepths[index] ?? -198,
+        gameTime: snapshot.gameTime,
+        effectSpeed,
+        depthTravel: effectDepthTravel,
+        launchActive,
+      });
+    }
+    particlePositions.needsUpdate = true;
+  }
   const particleMaterial = backdrop.particles.material as THREE.PointsMaterial;
-  particleMaterial.opacity = effectOpacity * (0.28 + Math.abs(Math.sin(time * 0.7)) * 0.08);
+  particleMaterial.opacity = effectOpacity * (
+    0.28
+    + Math.abs(Math.sin(time * 0.7)) * 0.08
+    + (launchActive ? 0.12 : 0)
+  );
 }
 
 function ensurePlayerVisual(
@@ -262,6 +303,15 @@ function updateCamera(context: SceneContext, snapshot: RenderSnapshot): void {
     desiredLookAtY = midY * 0.2;
   }
 
+  // Stage-authored pitch changes presentation only; simulation coordinates remain strictly 2D.
+  const cameraPitchDegrees = resolveStageCameraPitchDegrees(
+    context.cameraPitchDegrees,
+    context.cameraLaunchPitchBoostDegrees,
+    launchActive,
+  );
+  desiredCameraY += resolveStageCameraYOffset(desiredCameraZ, cameraPitchDegrees);
+  desiredLookAtY += context.cameraLookAtYOffset;
+
   const maxCameraStep = launchActive ? 5.4 : 3.2;
   context.cameraTarget.x += THREE.MathUtils.clamp(desiredCameraX - context.cameraTarget.x, -maxCameraStep, maxCameraStep);
   context.cameraTarget.y += THREE.MathUtils.clamp(desiredCameraY - context.cameraTarget.y, -maxCameraStep, maxCameraStep);
@@ -325,13 +375,28 @@ export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): vo
   context.lastRenderSnapshot = snapshot;
 
   context.gravityWell.rotation.z = 0;
+  const gravityWellMaterial = context.gravityWell.material;
+  if (gravityWellMaterial instanceof THREE.ShaderMaterial) {
+    gravityWellMaterial.uniforms.uTime.value = snapshot.gameTime;
+  }
   context.ring.rotation.z = 0;
   const ringMaterial = context.ring.material as THREE.MeshBasicMaterial;
-  ringMaterial.opacity = 0.22 + Math.abs(Math.sin(snapshot.gameTime * 0.6)) * 0.05;
+  const baseRingOpacity = typeof context.ring.userData.baseOpacity === 'number'
+    ? context.ring.userData.baseOpacity as number
+    : 0.5;
+  ringMaterial.opacity = baseRingOpacity * (
+    0.78 + Math.abs(Math.sin(snapshot.gameTime * 0.6)) * 0.16
+  );
   const starsMaterial = context.stars.material as THREE.PointsMaterial;
   const launchActive = snapshot.players.P1.helpless > 0 || snapshot.players.P2.helpless > 0;
-  starsMaterial.size = launchActive ? 0.64 : 0.52;
-  starsMaterial.opacity = launchActive ? 1 : 0.88;
+  const baseStarsSize = typeof context.stars.userData.baseSize === 'number'
+    ? context.stars.userData.baseSize as number
+    : 0.52;
+  const baseStarsOpacity = typeof context.stars.userData.baseOpacity === 'number'
+    ? context.stars.userData.baseOpacity as number
+    : 0.88;
+  starsMaterial.size = baseStarsSize * (launchActive ? 1.24 : 1);
+  starsMaterial.opacity = Math.min(1, baseStarsOpacity * (launchActive ? 1.08 : 0.96));
 
   updatePlayerMeshes(context, snapshot);
   updatePlayerIndicators(context, snapshot);
@@ -399,6 +464,18 @@ export function cleanupRender(context: SceneContext): void {
   context.scene.remove(context.arenaBoundary);
   context.arenaBoundary.geometry.dispose();
   (context.arenaBoundary.material as THREE.Material).dispose();
+
+  context.scene.remove(context.arenaMouth);
+  context.arenaMouth.geometry.dispose();
+  (context.arenaMouth.material as THREE.Material).dispose();
+
+  context.scene.remove(context.arenaRim);
+  context.arenaRim.geometry.dispose();
+  (context.arenaRim.material as THREE.Material).dispose();
+
+  context.scene.remove(context.arenaDepthTicks);
+  context.arenaDepthTicks.geometry.dispose();
+  (context.arenaDepthTicks.material as THREE.Material).dispose();
 
   context.scene.remove(context.gravityWell);
   context.gravityWell.geometry.dispose();

@@ -340,12 +340,13 @@ export class PresenceInviteService {
     }
 
     if (type === 'queue') {
-      if (!isQueueType(activity.queueType ?? null)) {
+      const queueType = activity.queueType ?? null;
+      if (!isQueueType(queueType)) {
         return null;
       }
       return {
         type,
-        queueType: activity.queueType,
+        queueType,
         roomCode: null,
       };
     }

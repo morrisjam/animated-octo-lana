@@ -7,9 +7,29 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      SMOKE_EXPECT_API_HOSTNAME: 127.0.0.1
+      SMOKE_EXPECT_DATABASE_ID: local
+      SMOKE_EXPECT_DEPLOYMENT_ENVIRONMENT: test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: gravity_well
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d gravity_well"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -20,20 +40,313 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Resolve rollback schema compatibility baseline
+        id: rollback_schema_baseline
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            BASE_SHA="${PULL_REQUEST_BASE_SHA}"
+          else
+            BASE_SHA="${PUSH_BEFORE_SHA}"
+          fi
+          if [[ ! "${BASE_SHA}" =~ ^[0-9a-fA-F]{40}$ || "${BASE_SHA}" =~ ^0+$ || "${BASE_SHA,,}" == "${GITHUB_SHA,,}" ]]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          if ! git merge-base --is-ancestor "${BASE_SHA}" HEAD; then
+            echo "Rollback schema baseline ${BASE_SHA} is not an ancestor of ${GITHUB_SHA}."
+            exit 1
+          fi
+          echo "rollback_sha=${BASE_SHA}" >> "${GITHUB_OUTPUT}"
+
+      - name: Previous API remains compatible with candidate schema
+        env:
+          ROLLBACK_COMPAT_CANDIDATE_SHA: ${{ github.sha }}
+          ROLLBACK_COMPAT_REQUIRE_CLEAN_CANDIDATE: "1"
+          ROLLBACK_COMPAT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          ROLLBACK_COMPAT_MANAGE_POSTGRES: "0"
+        run: >-
+          npm run api:smoke:rollback-schema-compatibility --
+          "${{ steps.rollback_schema_baseline.outputs.rollback_sha }}"
+          apps/api/build-artifacts/ci-rollback-schema-compatibility.json
+
       - name: Migration compatibility check
         run: npm run api:migrations:compat
 
-      - name: Unit tests
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Web unit tests
         run: npm run test
+
+      - name: API unit tests
+        run: npm run api:test
+
+      - name: Build production web assets
+        run: npm run build
+        env:
+          VITE_APP_ENV: production
+          VITE_FEATURE_ONLINE: "true"
+          VITE_FEATURE_RANKED: "true"
+          VITE_FEATURE_ONLINE_MATCH_RUNTIME: "true"
+          VITE_FEATURE_DEBUG_TOOLS: "false"
+          VITE_FEATURE_ONLINE_DIAGNOSTICS: "false"
+          VITE_FEATURE_ONLINE_DEV_MENU: "false"
+          VITE_PROFILE_API_BASE: http://127.0.0.1:8787
+          VITE_MATCHMAKING_API_BASE: http://127.0.0.1:8787
+          VITE_APP_BUILD: ci-ranked-root-smoke
+          VITE_LOCAL_RANKED_ROOT_SMOKE: "true"
+
+      - name: Production-root visual and replay smoke
+        run: npm run alpha:visual-smoke
+
+      - name: Migrate CI integration database
+        run: npm run api:migrate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+
+      - name: Durable authentication rate-limit smoke
+        run: npm run api:smoke:auth-rate-limit
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+
+      - name: Ranked season transition transaction smoke
+        run: npm run api:smoke:ranked-season-transition
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+          RANKED_SEASON_TRANSITION_SMOKE_REPORT_PATH: build-artifacts/ci-ranked-season-transition.json
+
+      - name: Start local TURN relay for browser smokes
+        run: |
+          docker run --detach --rm --name gravity-well-ci-coturn --network host \
+            coturn/coturn:4.6.3 \
+            -n \
+            --log-file=stdout \
+            --fingerprint \
+            --use-auth-secret \
+            --static-auth-secret=ci-local-coturn-shared-secret-0123456789abcdef \
+            --realm=gravity-well.ci \
+            --min-port=49160 \
+            --max-port=49179 \
+            --external-ip=127.0.0.1 \
+            --allow-loopback-peers \
+            --no-tls \
+            --no-dtls \
+            --no-cli
+          for _ in {1..40}; do
+            if (echo > /dev/tcp/127.0.0.1/3478) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 0.25
+          done
+          docker logs gravity-well-ci-coturn
+          exit 1
+
+      - name: Start isolated API for integration smoke
+        run: |
+          node --import tsx apps/api/src/server.ts > /tmp/gravity-well-api.log 2>&1 &
+          echo $! > /tmp/gravity-well-api.pid
+          for _ in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:8787/health > /dev/null; then
+              exit 0
+            fi
+            sleep 0.25
+          done
+          cat /tmp/gravity-well-api.log
+          exit 1
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+          PORT: "8787"
+          NODE_ENV: test
+          AUTH_SESSION_SECRET: ci-auth-session-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+          MATCHMAKING_ACCESS_MODE: open
+          MATCHMAKING_RECONNECT_GRACE_SECONDS: "20"
+          MATCHMAKING_SNAPSHOT_INTERVAL_MS: "60000"
+          PGAPPNAME: gravity-well-ci-api
+          MATCHMAKING_STUN_URLS: ""
+          MATCHMAKING_TURN_URLS: turn:127.0.0.1:3478?transport=udp
+          MATCHMAKING_TURN_SHARED_SECRET: ci-local-coturn-shared-secret-0123456789abcdef
+          MATCHMAKING_TURN_CREDENTIAL_TTL_SECONDS: "300"
+
+      - name: Authentication ownership and abuse smoke
+        run: npm run api:smoke:auth-security
+        env:
+          API_BASE_URL: http://127.0.0.1:8787
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+
+      - name: Two-client ranked online integration smoke
+        run: npm run api:smoke:ranked-online
+        env:
+          API_BASE_URL: http://127.0.0.1:8787
+          ONLINE_SMOKE_WAIT_SECONDS: "0"
+
+      - name: Archived Master leaderboard region immutability smoke
+        run: npm run api:smoke:archived-master-leaderboard
+        env:
+          API_BASE_URL: http://127.0.0.1:8787
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+          ARCHIVED_MASTER_LEADERBOARD_SMOKE_REPORT_PATH: build-artifacts/ci-archived-master-leaderboard.json
+
+      - name: Server-authoritative ranked forfeit smoke
+        run: npm run api:smoke:ranked-authoritative-forfeit
+        env:
+          API_BASE_URL: http://127.0.0.1:8787
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+          AUTHORITATIVE_FORFEIT_SMOKE_TIMEOUT_MS: "30000"
+
+      - name: Start production web preview for browser smoke
+        run: |
+          node node_modules/vite/bin/vite.js preview apps/game-web --host 127.0.0.1 --port 5190 --strictPort > /tmp/gravity-well-vite.log 2>&1 &
+          echo $! > /tmp/gravity-well-vite.pid
+          for _ in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:5190/webrtc-smoke.html > /dev/null; then
+              exit 0
+            fi
+            sleep 0.25
+          done
+          cat /tmp/gravity-well-vite.log
+          exit 1
+
+      - name: Real-browser rollback and isolated two-client WebRTC smoke
+        run: npm run webrtc:browser-smoke
+        env:
+          WEBRTC_SMOKE_URL: http://127.0.0.1:5190/webrtc-smoke.html
+          API_BASE_URL: http://127.0.0.1:8787
+          WEBRTC_BROWSER_SMOKE_TIMEOUT_MS: "30000"
+          WEBRTC_BROWSER_SOAK_DURATION_SECONDS: "1"
+          WEBRTC_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-webrtc-direct.json
+
+      - name: Forced-relay rollback and isolated two-client WebRTC smoke
+        run: npm run webrtc:browser-smoke
+        env:
+          WEBRTC_SMOKE_URL: http://127.0.0.1:5190/webrtc-smoke.html
+          API_BASE_URL: http://127.0.0.1:8787
+          WEBRTC_BROWSER_SMOKE_TIMEOUT_MS: "60000"
+          WEBRTC_BROWSER_SMOKE_FORCE_RELAY: "1"
+          WEBRTC_BROWSER_SOAK_DURATION_SECONDS: "1"
+          WEBRTC_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-webrtc-relay.json
+
+      - name: Production-root ranked rollback, settlement, and replay smoke
+        run: npm run ranked:root-browser-smoke
+        env:
+          RANKED_ROOT_SMOKE_URL: http://127.0.0.1:5190/
+          API_BASE_URL: http://127.0.0.1:8787
+          RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS: "180000"
+          RANKED_ROOT_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-ranked-root.json
+          RANKED_ROOT_BROWSER_SMOKE_FAILURE_SCREENSHOT: build-artifacts/ranked-root-browser-smoke-failure.png
+
+      - name: Forced-relay production-root ranked rollback, settlement, and replay smoke
+        run: npm run ranked:root-browser-smoke
+        env:
+          RANKED_ROOT_SMOKE_URL: http://127.0.0.1:5190/
+          API_BASE_URL: http://127.0.0.1:8787
+          RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS: "180000"
+          RANKED_ROOT_BROWSER_SMOKE_FORCE_RELAY: "1"
+          RANKED_ROOT_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-ranked-root-relay.json
+          RANKED_ROOT_BROWSER_SMOKE_FAILURE_SCREENSHOT: build-artifacts/ranked-root-browser-smoke-failure-relay.png
+
+      - name: PostgreSQL connection interruption and pool recovery smoke
+        run: npm run api:smoke:database-interruption
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+          API_BASE_URL: http://127.0.0.1:8787
+          DATABASE_INTERRUPTION_TARGET_APP_NAME: gravity-well-ci-api
+          DATABASE_INTERRUPTION_SMOKE_REPORT_PATH: build-artifacts/ci-database-interruption.json
+
+      - name: Stop isolated integration services
+        if: always()
+        run: |
+          stop_process() {
+            local pid_file="$1"
+            if [[ ! -f "$pid_file" ]]; then
+              return
+            fi
+            local pid
+            pid="$(cat "$pid_file")"
+            kill "$pid" || true
+            for _ in {1..50}; do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                return
+              fi
+              sleep 0.1
+            done
+            kill -9 "$pid" || true
+          }
+          stop_process /tmp/gravity-well-vite.pid
+          stop_process /tmp/gravity-well-api.pid
+          docker logs gravity-well-ci-coturn > /tmp/gravity-well-coturn.log 2>&1 || true
+          docker container rm --force gravity-well-ci-coturn || true
+
+      - name: Matchmaking and ranked state survives API replacement
+        run: npm run api:smoke:matchmaking-restart
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+          MATCHMAKING_RESTART_SMOKE_PORT: "8791"
+          AUTH_SESSION_SECRET: ci-auth-session-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+
+      - name: Concurrent API instances survive PostgreSQL backend interruption
+        run: npm run api:smoke:matchmaking-multi-instance
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+          MATCHMAKING_MULTI_INSTANCE_SMOKE_PORT_A: "8792"
+          MATCHMAKING_MULTI_INSTANCE_SMOKE_PORT_B: "8793"
+          AUTH_SESSION_SECRET: ci-auth-session-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+
+      - name: Collect integration diagnostics after failure
+        if: failure()
+        run: |
+          cat /tmp/gravity-well-api.log || true
+          cat /tmp/gravity-well-vite.log || true
+          cat /tmp/gravity-well-coturn.log || true
+          mkdir -p apps/game-web/build-artifacts/ci-integration
+          cp /tmp/gravity-well-api.log apps/game-web/build-artifacts/ci-integration/api.log || true
+          cp /tmp/gravity-well-vite.log apps/game-web/build-artifacts/ci-integration/vite.log || true
+          cp /tmp/gravity-well-coturn.log apps/game-web/build-artifacts/ci-integration/coturn.log || true
+
+      - name: Upload integration failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: online-integration-failure-${{ github.sha }}
+          path: |
+            apps/game-web/build-artifacts/ci-integration
+            apps/game-web/build-artifacts/ci-webrtc-*.json
+            apps/game-web/build-artifacts/webrtc-browser-smoke-failure.png
+            apps/game-web/build-artifacts/ci-ranked-root*.json
+            apps/game-web/build-artifacts/ranked-root-browser-smoke-failure*.png
+            apps/api/build-artifacts/ci-*.json
+          if-no-files-found: ignore
 
       - name: Replay checksum check
         run: npm run replay:check
 
-      - name: Build
-        run: npm run build
+      - name: Deterministic rollback network soak
+        run: npm run rollback:soak
+
+      - name: Vanguard and Duelist balance regression gate
+        run: npm run ai:balance-gate
+
+      - name: Online alpha gameplay-flow gate
+        run: npm run ai:alpha-readiness
+
+      - name: Archive verification and balance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-verification-evidence-${{ github.sha }}
+          path: |
+            apps/game-web/build-artifacts/*.json
+            apps/game-web/build-artifacts/*.md
+            apps/game-web/build-artifacts/visual-alpha-smoke
+            apps/api/build-artifacts/ci-*.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   steam-package:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     needs: verify
     steps:
       - name: Checkout
@@ -48,20 +361,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build, package, and smoke-test Steam profile
-        run: npm run steam:ci
-        env:
-          STEAM_ARTIFACT_SIGNING_KEY: ${{ secrets.STEAM_ARTIFACT_SIGNING_KEY }}
-          STEAM_ARTIFACT_SIGNING_PUBLIC_KEY: ${{ secrets.STEAM_ARTIFACT_SIGNING_PUBLIC_KEY }}
-          STEAM_APP_ID: ${{ secrets.STEAM_APP_ID }}
-
-      - name: Archive Steam upload artifact
-        run: |
-          mkdir -p steam-artifacts
-          tar -czf steam-artifacts/gravity-well-steam-${{ github.sha }}.tar.gz -C apps/game-web/steam-artifact .
+      - name: Build, test, package, and smoke-test native Steam client
+        run: npm run steam:native:ci
 
       - name: Upload Steam artifact
         uses: actions/upload-artifact@v4
         with:
           name: steam-package-${{ github.sha }}
-          path: steam-artifacts/gravity-well-steam-${{ github.sha }}.tar.gz
+          path: apps/steam-shell/release/GravityWell-win32-x64
+          if-no-files-found: error

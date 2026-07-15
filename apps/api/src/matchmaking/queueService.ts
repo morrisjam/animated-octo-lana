@@ -13,12 +13,15 @@ export type QueueTicketClosedReason =
   | 'expired'
   | 'session_expired'
   | 'reconnect_timeout'
+  | 'service_draining'
   | 'session_completed';
 
 export interface QueuePlayerMetadata {
   displayName?: string | null;
   platform?: 'web' | 'steam' | null;
   buildVersion?: string | null;
+  rulesetVersion?: string | null;
+  balanceProfileId?: string | null;
   selectedCharacterId?: string | null;
   rankedSnapshot?: {
     rating?: number | null;
@@ -48,10 +51,17 @@ export interface MatchStartPayload {
   sessionId: string;
   sessionToken: string;
   sessionTokenExpiresAt: string;
+  heartbeatIntervalSeconds: number;
+  heartbeatTimeoutSeconds: number;
+  reconnectGraceSeconds: number;
+  buildVersion: string | null;
+  rulesetVersion: string | null;
+  balanceProfileId: string | null;
   queueType: QueueType;
   region: RegionId;
   createdAt: string;
   expiresAt: string;
+  transportAttempt: MatchSessionTransportAttemptView;
   localPlayer: MatchPlayerMetadata;
   peer: MatchPlayerMetadata;
   diagnostics: {
@@ -80,11 +90,20 @@ export type SessionConnectionStatus = 'connected' | 'disconnected';
 export type MatchSessionStatus = 'active' | 'resolved';
 export type MatchSessionResolvedReason = 'session_expired' | 'reconnect_timeout' | 'peer_left' | 'completed';
 
+export interface MatchSessionTransportAttemptView {
+  attemptId: string;
+  generation: number;
+  createdAt: string;
+}
+
 export interface MatchSessionParticipantView {
   accountId: string;
   queueTicketId: string;
   side: 'P1' | 'P2';
+  selectedCharacterId: string | null;
   connectionStatus: SessionConnectionStatus;
+  lastHeartbeatAt: string;
+  completionAttestedAt?: string;
   disconnectedAt?: string;
   reconnectDeadlineAt?: string;
 }
@@ -93,11 +112,17 @@ export interface MatchSessionView {
   sessionId: string;
   queueType: QueueType;
   region: RegionId;
+  buildVersion: string | null;
+  rulesetVersion: string | null;
+  balanceProfileId: string | null;
   status: MatchSessionStatus;
   resolvedReason?: MatchSessionResolvedReason;
+  resolvedAt?: string;
+  forfeitingAccountId?: string;
   createdAt: string;
   expiresAt: string;
   reconnectGraceSeconds: number;
+  transportAttempt: MatchSessionTransportAttemptView;
   participants: MatchSessionParticipantView[];
 }
 
@@ -106,6 +131,13 @@ export interface SessionReconnectRequest {
   accountId: string;
   sessionToken: string;
   reconnectAttemptId: string;
+}
+
+export interface SessionTransportAttemptAdvanceRequest {
+  sessionId: string;
+  accountId: string;
+  sessionToken: string;
+  expectedGeneration: number;
 }
 
 export interface SessionTokenValidationOptions {
@@ -119,7 +151,9 @@ export type SessionActionErrorCode =
   | 'session_resolved'
   | 'invalid_token'
   | 'token_expired'
-  | 'replayed_attempt';
+  | 'participant_disconnected'
+  | 'replayed_attempt'
+  | 'stale_transport_attempt';
 
 export interface SessionActionError {
   code: SessionActionErrorCode;
@@ -129,10 +163,13 @@ export interface SessionActionError {
 export type SessionActionResult<T> = { ok: true; value: T } | { ok: false; error: SessionActionError };
 
 export interface QueueServiceOptions {
+  maxResidentTickets?: number;
   ticketTtlSeconds?: number;
   sessionTtlSeconds?: number;
   sessionTokenTtlSeconds?: number;
   reconnectGraceSeconds?: number;
+  heartbeatIntervalSeconds?: number;
+  heartbeatTimeoutSeconds?: number;
   closedTicketRetentionSeconds?: number;
   rankedRatingInitialGap?: number;
   rankedRatingExpansionPerSecond?: number;
@@ -141,6 +178,11 @@ export interface QueueServiceOptions {
   rankedMasterExpansionPerSecond?: number;
   rankedMasterMaxGap?: number;
   rankedMasterStrictRegionSeconds?: number;
+  onSessionResolved?: (
+    sessionId: string,
+    reason: MatchSessionResolvedReason,
+    session: MatchSessionView,
+  ) => void;
   now?: () => number;
 }
 
@@ -163,9 +205,12 @@ interface MatchSessionParticipantRecord {
   accountId: string;
   queueTicketId: string;
   side: 'P1' | 'P2';
+  selectedCharacterId: string | null;
   sessionToken: string;
   sessionTokenExpiresAtMs: number;
   connectionStatus: SessionConnectionStatus;
+  lastHeartbeatAtMs: number;
+  completionAttestedAtMs?: number;
   disconnectedAtMs?: number;
   reconnectDeadlineAtMs?: number;
   usedReconnectAttemptIds: Set<string>;
@@ -175,13 +220,83 @@ interface MatchSessionRecord {
   sessionId: string;
   queueType: QueueType;
   region: RegionId;
+  buildVersion: string | null;
+  rulesetVersion: string | null;
+  balanceProfileId: string | null;
   status: MatchSessionStatus;
   resolvedReason?: MatchSessionResolvedReason;
+  forfeitingAccountId?: string;
   createdAtMs: number;
   expiresAtMs: number;
   resolvedAtMs?: number;
+  transportAttemptId: string;
+  transportAttemptGeneration: number;
+  transportAttemptCreatedAtMs: number;
   ticketIds: [string, string];
   participants: [MatchSessionParticipantRecord, MatchSessionParticipantRecord];
+}
+
+export interface MatchmakingQueueSnapshot {
+  version: 1;
+  capturedAtMs: number;
+  serviceDraining?: boolean;
+  tickets: Array<{
+    ticketId: string;
+    accountId: string;
+    queueType: QueueType;
+    regionPreferences: RegionId[];
+    playerMetadata: QueuePlayerMetadata;
+    status: QueueTicketStatus;
+    queuedAtMs: number;
+    matchedAtMs?: number;
+    closedAtMs?: number;
+    closedReason?: QueueTicketClosedReason;
+    matchStart?: MatchStartPayload;
+    sessionId?: string;
+  }>;
+  sessions: Array<{
+    sessionId: string;
+    queueType: QueueType;
+    region: RegionId;
+    buildVersion?: string | null;
+    rulesetVersion?: string | null;
+    balanceProfileId?: string | null;
+    status: MatchSessionStatus;
+    resolvedReason?: MatchSessionResolvedReason;
+    forfeitingAccountId?: string;
+    createdAtMs: number;
+    expiresAtMs: number;
+    resolvedAtMs?: number;
+    transportAttemptId?: string;
+    transportAttemptGeneration?: number;
+    transportAttemptCreatedAtMs?: number;
+    ticketIds: [string, string];
+    participants: Array<{
+      accountId: string;
+      queueTicketId: string;
+      side: 'P1' | 'P2';
+      selectedCharacterId?: string | null;
+      sessionToken: string;
+      sessionTokenExpiresAtMs: number;
+      connectionStatus: SessionConnectionStatus;
+      lastHeartbeatAtMs?: number;
+      completionAttestedAtMs?: number;
+      disconnectedAtMs?: number;
+      reconnectDeadlineAtMs?: number;
+      usedReconnectAttemptIds: string[];
+    }>;
+  }>;
+}
+
+export interface MatchmakingRuntimeSummary {
+  capturedAt: string;
+  residentTickets: number;
+  queuedTickets: number;
+  matchedTickets: number;
+  activeSessions: number;
+  resolvedSessions: number;
+  disconnectedParticipants: number;
+  readyForProcessReplacement: boolean;
 }
 
 interface CandidateMatch {
@@ -192,8 +307,11 @@ interface CandidateMatch {
 }
 
 const DEFAULT_TICKET_TTL_SECONDS = 90;
-const DEFAULT_SESSION_TTL_SECONDS = 30;
-const DEFAULT_RECONNECT_GRACE_SECONDS = 10;
+const DEFAULT_MAX_RESIDENT_TICKETS = 256;
+const DEFAULT_SESSION_TTL_SECONDS = 30 * 60;
+const DEFAULT_RECONNECT_GRACE_SECONDS = 20;
+const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 5;
+const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 30;
 const DEFAULT_CLOSED_RETENTION_SECONDS = 120;
 const DEFAULT_RANKED_RATING_INITIAL_GAP = 120;
 const DEFAULT_RANKED_RATING_EXPANSION_PER_SECOND = 8;
@@ -235,6 +353,50 @@ function buildMatchPlayerMetadata(
   };
 }
 
+function cloneQueuePlayerMetadata(metadata: QueuePlayerMetadata): QueuePlayerMetadata {
+  return {
+    displayName: metadata.displayName ?? null,
+    platform: metadata.platform ?? null,
+    buildVersion: metadata.buildVersion ?? null,
+    rulesetVersion: metadata.rulesetVersion ?? null,
+    balanceProfileId: metadata.balanceProfileId ?? null,
+    selectedCharacterId: metadata.selectedCharacterId ?? null,
+    rankedSnapshot: metadata.rankedSnapshot ? { ...metadata.rankedSnapshot } : undefined,
+  };
+}
+
+function cloneMatchStartPayload(payload: MatchStartPayload): MatchStartPayload {
+  return {
+    ...payload,
+    reconnectGraceSeconds: payload.reconnectGraceSeconds ?? DEFAULT_RECONNECT_GRACE_SECONDS,
+    transportAttempt: { ...payload.transportAttempt },
+    localPlayer: { ...payload.localPlayer, preferredRegions: [...payload.localPlayer.preferredRegions] },
+    peer: { ...payload.peer, preferredRegions: [...payload.peer.preferredRegions] },
+    diagnostics: { ...payload.diagnostics },
+  };
+}
+
+function normalizeBuildVersion(buildVersion: string | null | undefined): string | null {
+  const normalized = buildVersion?.trim() ?? '';
+  return normalized.length > 0 ? normalized : null;
+}
+
+function haveCompatibleClientVersions(first: QueueTicketRecord, second: QueueTicketRecord): boolean {
+  const firstBuild = normalizeBuildVersion(first.playerMetadata.buildVersion);
+  const secondBuild = normalizeBuildVersion(second.playerMetadata.buildVersion);
+  if (firstBuild !== secondBuild) {
+    return false;
+  }
+  const firstRuleset = normalizeBuildVersion(first.playerMetadata.rulesetVersion);
+  const secondRuleset = normalizeBuildVersion(second.playerMetadata.rulesetVersion);
+  if (firstRuleset !== secondRuleset) {
+    return false;
+  }
+  const firstBalanceProfile = normalizeBuildVersion(first.playerMetadata.balanceProfileId);
+  const secondBalanceProfile = normalizeBuildVersion(second.playerMetadata.balanceProfileId);
+  return firstBalanceProfile === secondBalanceProfile;
+}
+
 export function isQueueType(value: string | undefined): value is QueueType {
   if (!value) {
     return false;
@@ -249,7 +411,18 @@ export function isRegionId(value: string | undefined): value is RegionId {
   return (SUPPORTED_REGIONS as readonly string[]).includes(value);
 }
 
+export class MatchmakingCapacityError extends Error {
+  public readonly code = 'matchmaking_at_capacity';
+
+  public constructor(public readonly maxResidentTickets: number) {
+    super(`Matchmaking has reached its ${maxResidentTickets} resident-ticket capacity.`);
+    this.name = 'MatchmakingCapacityError';
+  }
+}
+
 export class MatchmakingQueueService {
+  private readonly maxResidentTickets: number;
+
   private readonly ticketTtlMs: number;
 
   private readonly sessionTtlMs: number;
@@ -257,6 +430,10 @@ export class MatchmakingQueueService {
   private readonly sessionTokenTtlMs: number;
 
   private readonly reconnectGraceMs: number;
+
+  private readonly heartbeatIntervalMs: number;
+
+  private readonly heartbeatTimeoutMs: number;
 
   private readonly closedRetentionMs: number;
 
@@ -276,6 +453,12 @@ export class MatchmakingQueueService {
 
   private readonly now: () => number;
 
+  private readonly onSessionResolved: (
+    sessionId: string,
+    reason: MatchSessionResolvedReason,
+    session: MatchSessionView,
+  ) => void;
+
   private readonly ticketsById = new Map<string, QueueTicketRecord>();
 
   private readonly sessionsById = new Map<string, MatchSessionRecord>();
@@ -285,10 +468,23 @@ export class MatchmakingQueueService {
   private readonly regionBuckets = new Map<string, string[]>();
 
   public constructor(options: QueueServiceOptions = {}) {
+    const maxResidentTickets = options.maxResidentTickets ?? DEFAULT_MAX_RESIDENT_TICKETS;
+    if (!Number.isSafeInteger(maxResidentTickets) || maxResidentTickets <= 0) {
+      throw new Error('maxResidentTickets must be a positive safe integer.');
+    }
+    this.maxResidentTickets = maxResidentTickets;
     this.ticketTtlMs = (options.ticketTtlSeconds ?? DEFAULT_TICKET_TTL_SECONDS) * 1000;
     this.sessionTtlMs = (options.sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS) * 1000;
     this.sessionTokenTtlMs = (options.sessionTokenTtlSeconds ?? options.sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS) * 1000;
     this.reconnectGraceMs = (options.reconnectGraceSeconds ?? DEFAULT_RECONNECT_GRACE_SECONDS) * 1000;
+    this.heartbeatIntervalMs = Math.max(
+      1_000,
+      (options.heartbeatIntervalSeconds ?? DEFAULT_HEARTBEAT_INTERVAL_SECONDS) * 1000,
+    );
+    this.heartbeatTimeoutMs = Math.max(
+      this.heartbeatIntervalMs * 3,
+      (options.heartbeatTimeoutSeconds ?? DEFAULT_HEARTBEAT_TIMEOUT_SECONDS) * 1000,
+    );
     this.closedRetentionMs = (options.closedTicketRetentionSeconds ?? DEFAULT_CLOSED_RETENTION_SECONDS) * 1000;
     this.rankedRatingInitialGap = Math.max(1, Math.floor(options.rankedRatingInitialGap ?? DEFAULT_RANKED_RATING_INITIAL_GAP));
     this.rankedRatingExpansionPerSecond = Math.max(0.1, options.rankedRatingExpansionPerSecond ?? DEFAULT_RANKED_RATING_EXPANSION_PER_SECOND);
@@ -306,7 +502,190 @@ export class MatchmakingQueueService {
       0,
       Math.floor(options.rankedMasterStrictRegionSeconds ?? DEFAULT_MASTER_STRICT_REGION_SECONDS),
     );
+    this.onSessionResolved = options.onSessionResolved ?? (() => undefined);
     this.now = options.now ?? (() => Date.now());
+  }
+
+  public exportSnapshot(): MatchmakingQueueSnapshot {
+    const nowMs = this.now();
+    this.cleanup(nowMs);
+    return {
+      version: 1,
+      capturedAtMs: nowMs,
+      tickets: [...this.ticketsById.values()].map((ticket) => ({
+        ticketId: ticket.ticketId,
+        accountId: ticket.accountId,
+        queueType: ticket.queueType,
+        regionPreferences: [...ticket.regionPreferences],
+        playerMetadata: cloneQueuePlayerMetadata(ticket.playerMetadata),
+        status: ticket.status,
+        queuedAtMs: ticket.queuedAtMs,
+        matchedAtMs: ticket.matchedAtMs,
+        closedAtMs: ticket.closedAtMs,
+        closedReason: ticket.closedReason,
+        matchStart: ticket.matchStart ? cloneMatchStartPayload(ticket.matchStart) : undefined,
+        sessionId: ticket.sessionId,
+      })),
+      sessions: [...this.sessionsById.values()].map((session) => ({
+        sessionId: session.sessionId,
+        queueType: session.queueType,
+        region: session.region,
+        buildVersion: session.buildVersion,
+        rulesetVersion: session.rulesetVersion,
+        balanceProfileId: session.balanceProfileId,
+        status: session.status,
+        resolvedReason: session.resolvedReason,
+        forfeitingAccountId: session.forfeitingAccountId,
+        createdAtMs: session.createdAtMs,
+        expiresAtMs: session.expiresAtMs,
+        resolvedAtMs: session.resolvedAtMs,
+        transportAttemptId: session.transportAttemptId,
+        transportAttemptGeneration: session.transportAttemptGeneration,
+        transportAttemptCreatedAtMs: session.transportAttemptCreatedAtMs,
+        ticketIds: [...session.ticketIds] as [string, string],
+        participants: session.participants.map((participant) => ({
+          accountId: participant.accountId,
+          queueTicketId: participant.queueTicketId,
+          side: participant.side,
+          selectedCharacterId: participant.selectedCharacterId,
+          sessionToken: participant.sessionToken,
+          sessionTokenExpiresAtMs: participant.sessionTokenExpiresAtMs,
+          connectionStatus: participant.connectionStatus,
+          lastHeartbeatAtMs: participant.lastHeartbeatAtMs,
+          completionAttestedAtMs: participant.completionAttestedAtMs,
+          disconnectedAtMs: participant.disconnectedAtMs,
+          reconnectDeadlineAtMs: participant.reconnectDeadlineAtMs,
+          usedReconnectAttemptIds: [...participant.usedReconnectAttemptIds],
+        })),
+      })),
+    };
+  }
+
+  public getRuntimeSummary(): MatchmakingRuntimeSummary {
+    const nowMs = this.now();
+    this.cleanup(nowMs);
+    const tickets = [...this.ticketsById.values()];
+    const sessions = [...this.sessionsById.values()];
+    const queuedTickets = tickets.filter((ticket) => ticket.status === 'queued').length;
+    const activeSessions = sessions.filter((session) => session.status === 'active');
+    return {
+      capturedAt: new Date(nowMs).toISOString(),
+      residentTickets: tickets.length,
+      queuedTickets,
+      matchedTickets: tickets.filter((ticket) => ticket.status === 'matched').length,
+      activeSessions: activeSessions.length,
+      resolvedSessions: sessions.filter((session) => session.status === 'resolved').length,
+      disconnectedParticipants: activeSessions.reduce(
+        (count, session) => count + session.participants.filter(
+          (participant) => participant.connectionStatus === 'disconnected',
+        ).length,
+        0,
+      ),
+      readyForProcessReplacement: queuedTickets === 0 && activeSessions.length === 0,
+    };
+  }
+
+  public drainQueuedTickets(): number {
+    const nowMs = this.now();
+    this.cleanup(nowMs);
+    const queuedTickets = [...this.ticketsById.values()].filter((ticket) => ticket.status === 'queued');
+    for (const ticket of queuedTickets) {
+      this.closeTicket(ticket, 'service_draining', nowMs);
+    }
+    return queuedTickets.length;
+  }
+
+  public restoreSnapshot(snapshot: MatchmakingQueueSnapshot): void {
+    if (snapshot.version !== 1 || !Array.isArray(snapshot.tickets) || !Array.isArray(snapshot.sessions)) {
+      throw new Error('Unsupported matchmaking queue snapshot.');
+    }
+
+    this.ticketsById.clear();
+    this.sessionsById.clear();
+    this.activeTicketByAccountQueue.clear();
+    this.regionBuckets.clear();
+
+    for (const storedTicket of snapshot.tickets) {
+      const ticket: QueueTicketRecord = {
+        ticketId: storedTicket.ticketId,
+        accountId: storedTicket.accountId,
+        queueType: storedTicket.queueType,
+        regionPreferences: [...storedTicket.regionPreferences],
+        playerMetadata: cloneQueuePlayerMetadata(storedTicket.playerMetadata),
+        status: storedTicket.status,
+        queuedAtMs: storedTicket.queuedAtMs,
+        matchedAtMs: storedTicket.matchedAtMs,
+        closedAtMs: storedTicket.closedAtMs,
+        closedReason: storedTicket.closedReason,
+        matchStart: storedTicket.matchStart ? cloneMatchStartPayload(storedTicket.matchStart) : undefined,
+        sessionId: storedTicket.sessionId,
+      };
+      this.ticketsById.set(ticket.ticketId, ticket);
+      if (ticket.status !== 'closed') {
+        this.activeTicketByAccountQueue.set(
+          this.getAccountQueueKey(ticket.accountId, ticket.queueType),
+          ticket.ticketId,
+        );
+      }
+      if (ticket.status === 'queued') {
+        this.addToRegionBuckets(ticket);
+      }
+    }
+
+    for (const storedSession of snapshot.sessions) {
+      if (storedSession.ticketIds.length !== 2 || storedSession.participants.length !== 2) {
+        throw new Error(`Invalid matchmaking session snapshot: ${storedSession.sessionId}`);
+      }
+      const participants = storedSession.participants.map((participant) => ({
+        accountId: participant.accountId,
+        queueTicketId: participant.queueTicketId,
+        side: participant.side,
+        selectedCharacterId: participant.selectedCharacterId
+          ?? this.ticketsById.get(participant.queueTicketId)?.playerMetadata.selectedCharacterId
+          ?? null,
+        sessionToken: participant.sessionToken,
+        sessionTokenExpiresAtMs: participant.sessionTokenExpiresAtMs,
+        connectionStatus: participant.connectionStatus,
+        // Older snapshots predate liveness tracking. A restore grants one fresh
+        // timeout window so process replacement cannot manufacture a forfeit.
+        lastHeartbeatAtMs: participant.lastHeartbeatAtMs ?? snapshot.capturedAtMs,
+        completionAttestedAtMs: participant.completionAttestedAtMs,
+        disconnectedAtMs: participant.disconnectedAtMs,
+        reconnectDeadlineAtMs: participant.reconnectDeadlineAtMs,
+        usedReconnectAttemptIds: new Set(participant.usedReconnectAttemptIds),
+      })) as [MatchSessionParticipantRecord, MatchSessionParticipantRecord];
+      this.sessionsById.set(storedSession.sessionId, {
+        sessionId: storedSession.sessionId,
+        queueType: storedSession.queueType,
+        region: storedSession.region,
+        buildVersion: storedSession.buildVersion
+          ?? normalizeBuildVersion(
+            this.ticketsById.get(storedSession.ticketIds[0])?.playerMetadata.buildVersion,
+          ),
+        rulesetVersion: storedSession.rulesetVersion
+          ?? normalizeBuildVersion(
+            this.ticketsById.get(storedSession.ticketIds[0])?.playerMetadata.rulesetVersion,
+          ),
+        balanceProfileId: storedSession.balanceProfileId
+          ?? normalizeBuildVersion(
+            this.ticketsById.get(storedSession.ticketIds[0])?.playerMetadata.balanceProfileId,
+          ),
+        status: storedSession.status,
+        resolvedReason: storedSession.resolvedReason,
+        forfeitingAccountId: storedSession.forfeitingAccountId,
+        createdAtMs: storedSession.createdAtMs,
+        expiresAtMs: storedSession.expiresAtMs,
+        resolvedAtMs: storedSession.resolvedAtMs,
+        transportAttemptId: storedSession.transportAttemptId ?? randomUUID(),
+        transportAttemptGeneration: storedSession.transportAttemptGeneration ?? 1,
+        transportAttemptCreatedAtMs: storedSession.transportAttemptCreatedAtMs
+          ?? snapshot.capturedAtMs,
+        ticketIds: [...storedSession.ticketIds] as [string, string],
+        participants,
+      });
+    }
+
+    this.cleanup(this.now());
   }
 
   public getConfig(): {
@@ -316,6 +695,9 @@ export class MatchmakingQueueService {
     sessionTtlSeconds: number;
     sessionTokenTtlSeconds: number;
     reconnectGraceSeconds: number;
+    heartbeatIntervalSeconds: number;
+    heartbeatTimeoutSeconds: number;
+    maxResidentTickets: number;
   } {
     return {
       queueTypes: [...QUEUE_TYPES],
@@ -324,7 +706,29 @@ export class MatchmakingQueueService {
       sessionTtlSeconds: Math.floor(this.sessionTtlMs / 1000),
       sessionTokenTtlSeconds: Math.floor(this.sessionTokenTtlMs / 1000),
       reconnectGraceSeconds: Math.floor(this.reconnectGraceMs / 1000),
+      heartbeatIntervalSeconds: Math.floor(this.heartbeatIntervalMs / 1000),
+      heartbeatTimeoutSeconds: Math.floor(this.heartbeatTimeoutMs / 1000),
+      maxResidentTickets: this.maxResidentTickets,
     };
+  }
+
+  public getActiveTicketForAccountQueue(
+    accountId: string,
+    queueType: QueueType,
+  ): QueueTicketView | null {
+    const nowMs = this.now();
+    this.cleanup(nowMs);
+    const accountQueueKey = this.getAccountQueueKey(accountId, queueType);
+    const ticketId = this.activeTicketByAccountQueue.get(accountQueueKey);
+    if (!ticketId) {
+      return null;
+    }
+    const ticket = this.ticketsById.get(ticketId);
+    if (!ticket || ticket.status === 'closed') {
+      this.activeTicketByAccountQueue.delete(accountQueueKey);
+      return null;
+    }
+    return this.toTicketView(ticket);
   }
 
   public join(request: QueueJoinRequest): QueueTicketView {
@@ -339,6 +743,10 @@ export class MatchmakingQueueService {
         return this.toTicketView(existingTicket);
       }
       this.activeTicketByAccountQueue.delete(accountQueueKey);
+    }
+
+    if (this.ticketsById.size >= this.maxResidentTickets) {
+      throw new MatchmakingCapacityError(this.maxResidentTickets);
     }
 
     const ticket: QueueTicketRecord = {
@@ -387,6 +795,50 @@ export class MatchmakingQueueService {
     return this.toSessionView(session);
   }
 
+  public getResolvedSessions(): MatchSessionView[] {
+    const nowMs = this.now();
+    this.cleanup(nowMs);
+    return [...this.sessionsById.values()]
+      .filter((session) => session.status === 'resolved')
+      .map((session) => this.toSessionView(session));
+  }
+
+  public advanceTransportAttempt(
+    request: SessionTransportAttemptAdvanceRequest,
+  ): SessionActionResult<MatchSessionView> {
+    const nowMs = this.now();
+    this.cleanup(nowMs);
+    const session = this.sessionsById.get(request.sessionId);
+    if (!session) {
+      return this.error('not_found', 'Session not found.');
+    }
+    const participant = this.findParticipant(session, request.accountId);
+    if (!participant) {
+      return this.error('forbidden', 'Session does not contain this account.');
+    }
+    if (session.status !== 'active') {
+      return this.error('session_resolved', 'Session has already resolved.');
+    }
+    if (nowMs > participant.sessionTokenExpiresAtMs) {
+      return this.error('token_expired', 'Session token has expired.');
+    }
+    if (participant.sessionToken !== request.sessionToken) {
+      return this.error('invalid_token', 'Session token is invalid.');
+    }
+    if (!Number.isSafeInteger(request.expectedGeneration) || request.expectedGeneration < 1) {
+      return this.error('stale_transport_attempt', 'Transport attempt generation is invalid.');
+    }
+    if (request.expectedGeneration > session.transportAttemptGeneration) {
+      return this.error('stale_transport_attempt', 'Transport attempt generation is ahead of the server.');
+    }
+    if (request.expectedGeneration === session.transportAttemptGeneration) {
+      session.transportAttemptGeneration += 1;
+      session.transportAttemptId = randomUUID();
+      session.transportAttemptCreatedAtMs = nowMs;
+    }
+    return { ok: true, value: this.toSessionView(session) };
+  }
+
   public markSessionDisconnected(sessionId: string, accountId: string): SessionActionResult<MatchSessionView> {
     const nowMs = this.now();
     this.cleanup(nowMs);
@@ -401,10 +853,48 @@ export class MatchmakingQueueService {
     if (session.status !== 'active') {
       return this.error('session_resolved', 'Session has already resolved.');
     }
+    if (participant.connectionStatus === 'disconnected') {
+      return { ok: true, value: this.toSessionView(session) };
+    }
 
     participant.connectionStatus = 'disconnected';
     participant.disconnectedAtMs = nowMs;
     participant.reconnectDeadlineAtMs = nowMs + this.reconnectGraceMs;
+    return { ok: true, value: this.toSessionView(session) };
+  }
+
+  public heartbeatSession(
+    sessionId: string,
+    accountId: string,
+    sessionToken: string,
+  ): SessionActionResult<MatchSessionView> {
+    const nowMs = this.now();
+    this.cleanup(nowMs);
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      return this.error('not_found', 'Session not found.');
+    }
+    const participant = this.findParticipant(session, accountId);
+    if (!participant) {
+      return this.error('forbidden', 'Session does not contain this account.');
+    }
+    if (session.status !== 'active') {
+      return this.error('session_resolved', 'Session has already resolved.');
+    }
+    if (nowMs > participant.sessionTokenExpiresAtMs) {
+      return this.error('token_expired', 'Session token has expired.');
+    }
+    if (participant.sessionToken !== sessionToken) {
+      return this.error('invalid_token', 'Session token is invalid.');
+    }
+    if (participant.connectionStatus === 'disconnected') {
+      return this.error(
+        'participant_disconnected',
+        'Participant must complete reconnect before heartbeats can resume.',
+      );
+    }
+
+    participant.lastHeartbeatAtMs = nowMs;
     return { ok: true, value: this.toSessionView(session) };
   }
 
@@ -461,6 +951,7 @@ export class MatchmakingQueueService {
     }
     participant.usedReconnectAttemptIds.add(request.reconnectAttemptId);
     participant.connectionStatus = 'connected';
+    participant.lastHeartbeatAtMs = nowMs;
     participant.disconnectedAtMs = undefined;
     participant.reconnectDeadlineAtMs = undefined;
     return { ok: true, value: this.toSessionView(session) };
@@ -477,7 +968,8 @@ export class MatchmakingQueueService {
     if (!participant) {
       return this.error('forbidden', 'Session does not contain this account.');
     }
-    if (session.status !== 'active') {
+    const alreadyCompleted = session.status === 'resolved' && session.resolvedReason === 'completed';
+    if (session.status !== 'active' && !alreadyCompleted) {
       return this.error('session_resolved', 'Session has already resolved.');
     }
     if (nowMs > participant.sessionTokenExpiresAtMs) {
@@ -486,7 +978,14 @@ export class MatchmakingQueueService {
     if (participant.sessionToken !== sessionToken) {
       return this.error('invalid_token', 'Session token is invalid.');
     }
-    this.resolveSession(session, nowMs, 'completed');
+    if (alreadyCompleted) {
+      return { ok: true, value: this.toSessionView(session) };
+    }
+
+    participant.completionAttestedAtMs ??= nowMs;
+    if (session.participants.every(({ completionAttestedAtMs }) => completionAttestedAtMs !== undefined)) {
+      this.resolveSession(session, nowMs, 'completed');
+    }
     return { ok: true, value: this.toSessionView(session) };
   }
 
@@ -511,16 +1010,7 @@ export class MatchmakingQueueService {
     if (ticket.status === 'matched' && ticket.sessionId) {
       const session = this.sessionsById.get(ticket.sessionId);
       if (session) {
-        session.status = 'resolved';
-        session.resolvedAtMs = nowMs;
-        session.resolvedReason = 'peer_left';
-        const peerTicketId = session.ticketIds.find((id) => id !== ticket.ticketId);
-        if (peerTicketId) {
-          const peerTicket = this.ticketsById.get(peerTicketId);
-          if (peerTicket && peerTicket.status !== 'closed') {
-            this.closeTicket(peerTicket, 'peer_left', nowMs);
-          }
-        }
+        this.resolveSession(session, nowMs, 'peer_left', accountId);
       }
       this.closeTicket(ticket, 'left_queue', nowMs);
     }
@@ -556,6 +1046,9 @@ export class MatchmakingQueueService {
         seenCandidates.add(candidateTicketId);
         const candidateTicket = this.ticketsById.get(candidateTicketId);
         if (!candidateTicket || candidateTicket.status !== 'queued') {
+          continue;
+        }
+        if (!haveCompatibleClientVersions(sourceTicket, candidateTicket)) {
           continue;
         }
 
@@ -714,27 +1207,37 @@ export class MatchmakingQueueService {
       sessionId,
       queueType: first.queueType,
       region,
+      buildVersion: normalizeBuildVersion(first.playerMetadata.buildVersion),
+      rulesetVersion: normalizeBuildVersion(first.playerMetadata.rulesetVersion),
+      balanceProfileId: normalizeBuildVersion(first.playerMetadata.balanceProfileId),
       status: 'active',
       createdAtMs: nowMs,
       expiresAtMs: sessionExpiresAtMs,
+      transportAttemptId: randomUUID(),
+      transportAttemptGeneration: 1,
+      transportAttemptCreatedAtMs: nowMs,
       ticketIds: [first.ticketId, second.ticketId],
       participants: [
         {
           accountId: p1Ticket.accountId,
           queueTicketId: p1Ticket.ticketId,
           side: 'P1',
+          selectedCharacterId: p1Ticket.playerMetadata.selectedCharacterId ?? null,
           sessionToken: randomBytes(16).toString('hex'),
           sessionTokenExpiresAtMs,
           connectionStatus: 'connected',
+          lastHeartbeatAtMs: nowMs,
           usedReconnectAttemptIds: new Set<string>(),
         },
         {
           accountId: p2Ticket.accountId,
           queueTicketId: p2Ticket.ticketId,
           side: 'P2',
+          selectedCharacterId: p2Ticket.playerMetadata.selectedCharacterId ?? null,
           sessionToken: randomBytes(16).toString('hex'),
           sessionTokenExpiresAtMs,
           connectionStatus: 'connected',
+          lastHeartbeatAtMs: nowMs,
           usedReconnectAttemptIds: new Set<string>(),
         },
       ],
@@ -752,10 +1255,17 @@ export class MatchmakingQueueService {
       sessionId,
       sessionToken: p1Participant.sessionToken,
       sessionTokenExpiresAt: tokenExpiresAt,
+      heartbeatIntervalSeconds: Math.floor(this.heartbeatIntervalMs / 1000),
+      heartbeatTimeoutSeconds: Math.floor(this.heartbeatTimeoutMs / 1000),
+      reconnectGraceSeconds: Math.floor(this.reconnectGraceMs / 1000),
+      buildVersion: session.buildVersion,
+      rulesetVersion: session.rulesetVersion,
+      balanceProfileId: session.balanceProfileId,
       queueType: first.queueType,
       region,
       createdAt,
       expiresAt,
+      transportAttempt: this.toTransportAttemptView(session),
       localPlayer: p1Local,
       peer: p2Local,
       diagnostics,
@@ -765,10 +1275,17 @@ export class MatchmakingQueueService {
       sessionId,
       sessionToken: p2Participant.sessionToken,
       sessionTokenExpiresAt: tokenExpiresAt,
+      heartbeatIntervalSeconds: Math.floor(this.heartbeatIntervalMs / 1000),
+      heartbeatTimeoutSeconds: Math.floor(this.heartbeatTimeoutMs / 1000),
+      reconnectGraceSeconds: Math.floor(this.reconnectGraceMs / 1000),
+      buildVersion: session.buildVersion,
+      rulesetVersion: session.rulesetVersion,
+      balanceProfileId: session.balanceProfileId,
       queueType: first.queueType,
       region,
       createdAt,
       expiresAt,
+      transportAttempt: this.toTransportAttemptView(session),
       localPlayer: p2Local,
       peer: p1Local,
       diagnostics,
@@ -839,12 +1356,47 @@ export class MatchmakingQueueService {
     const sessions = [...this.sessionsById.values()];
     for (const session of sessions) {
       if (session.status === 'active') {
-        if (nowMs > session.expiresAtMs) {
-          this.resolveSession(session, nowMs, 'session_expired');
+        for (const participant of session.participants) {
+          if (
+            participant.connectionStatus === 'connected'
+            && nowMs > participant.lastHeartbeatAtMs + this.heartbeatTimeoutMs
+          ) {
+            const heartbeatExpiredAtMs = participant.lastHeartbeatAtMs + this.heartbeatTimeoutMs;
+            participant.connectionStatus = 'disconnected';
+            participant.disconnectedAtMs = heartbeatExpiredAtMs;
+            participant.reconnectDeadlineAtMs = heartbeatExpiredAtMs + this.reconnectGraceMs;
+          }
+        }
+        const timedOutParticipants = session.participants
+          .filter(
+            (participant) => participant.reconnectDeadlineAtMs !== undefined
+              && nowMs > participant.reconnectDeadlineAtMs,
+          )
+          .sort((first, second) => (
+            (first.reconnectDeadlineAtMs as number) - (second.reconnectDeadlineAtMs as number)
+            || first.accountId.localeCompare(second.accountId)
+          ));
+        const earliestReconnectDeadlineMs = timedOutParticipants[0]?.reconnectDeadlineAtMs;
+        const sessionExpired = nowMs > session.expiresAtMs;
+        if (
+          earliestReconnectDeadlineMs !== undefined
+          && (!sessionExpired || earliestReconnectDeadlineMs < session.expiresAtMs)
+        ) {
+          const earliestTimedOutParticipants = timedOutParticipants.filter(
+            (participant) => participant.reconnectDeadlineAtMs === earliestReconnectDeadlineMs,
+          );
+          this.resolveSession(
+            session,
+            earliestReconnectDeadlineMs,
+            'reconnect_timeout',
+            earliestTimedOutParticipants.length === 1
+              ? earliestTimedOutParticipants[0].accountId
+              : undefined,
+          );
           continue;
         }
-        if (session.participants.some((participant) => participant.reconnectDeadlineAtMs !== undefined && nowMs > participant.reconnectDeadlineAtMs)) {
-          this.resolveSession(session, nowMs, 'reconnect_timeout');
+        if (sessionExpired) {
+          this.resolveSession(session, session.expiresAtMs, 'session_expired');
           continue;
         }
       }
@@ -855,25 +1407,34 @@ export class MatchmakingQueueService {
     }
   }
 
-  private resolveSession(session: MatchSessionRecord, nowMs: number, reason: MatchSessionResolvedReason): void {
+  private resolveSession(
+    session: MatchSessionRecord,
+    nowMs: number,
+    reason: MatchSessionResolvedReason,
+    forfeitingAccountId?: string,
+  ): void {
     if (session.status === 'resolved') {
       return;
     }
     session.status = 'resolved';
     session.resolvedReason = reason;
+    session.forfeitingAccountId = forfeitingAccountId;
     session.resolvedAtMs = nowMs;
 
     const closeReason: QueueTicketClosedReason = reason === 'reconnect_timeout'
       ? 'reconnect_timeout'
       : reason === 'completed'
         ? 'session_completed'
-        : 'session_expired';
+        : reason === 'peer_left'
+          ? 'peer_left'
+          : 'session_expired';
     for (const participant of session.participants) {
       const ticket = this.ticketsById.get(participant.queueTicketId);
       if (ticket && ticket.status !== 'closed') {
         this.closeTicket(ticket, closeReason, nowMs);
       }
     }
+    this.onSessionResolved(session.sessionId, reason, this.toSessionView(session));
   }
 
   private findParticipant(session: MatchSessionRecord, accountId: string): MatchSessionParticipantRecord | null {
@@ -892,12 +1453,7 @@ export class MatchmakingQueueService {
       closedAt: ticket.closedAtMs ? new Date(ticket.closedAtMs).toISOString() : undefined,
       closedReason: ticket.closedReason,
       matchStart: ticket.matchStart
-        ? {
-          ...ticket.matchStart,
-          localPlayer: { ...ticket.matchStart.localPlayer, preferredRegions: [...ticket.matchStart.localPlayer.preferredRegions] },
-          peer: { ...ticket.matchStart.peer, preferredRegions: [...ticket.matchStart.peer.preferredRegions] },
-          diagnostics: { ...ticket.matchStart.diagnostics },
-        }
+        ? cloneMatchStartPayload(ticket.matchStart)
         : undefined,
     };
   }
@@ -907,19 +1463,38 @@ export class MatchmakingQueueService {
       sessionId: session.sessionId,
       queueType: session.queueType,
       region: session.region,
+      buildVersion: session.buildVersion,
+      rulesetVersion: session.rulesetVersion,
+      balanceProfileId: session.balanceProfileId,
       status: session.status,
       resolvedReason: session.resolvedReason,
+      resolvedAt: session.resolvedAtMs ? new Date(session.resolvedAtMs).toISOString() : undefined,
+      forfeitingAccountId: session.forfeitingAccountId,
       createdAt: new Date(session.createdAtMs).toISOString(),
       expiresAt: new Date(session.expiresAtMs).toISOString(),
       reconnectGraceSeconds: Math.floor(this.reconnectGraceMs / 1000),
+      transportAttempt: this.toTransportAttemptView(session),
       participants: session.participants.map((participant) => ({
         accountId: participant.accountId,
         queueTicketId: participant.queueTicketId,
         side: participant.side,
+        selectedCharacterId: participant.selectedCharacterId,
         connectionStatus: participant.connectionStatus,
+        lastHeartbeatAt: new Date(participant.lastHeartbeatAtMs).toISOString(),
+        completionAttestedAt: participant.completionAttestedAtMs !== undefined
+          ? new Date(participant.completionAttestedAtMs).toISOString()
+          : undefined,
         disconnectedAt: participant.disconnectedAtMs ? new Date(participant.disconnectedAtMs).toISOString() : undefined,
         reconnectDeadlineAt: participant.reconnectDeadlineAtMs ? new Date(participant.reconnectDeadlineAtMs).toISOString() : undefined,
       })),
+    };
+  }
+
+  private toTransportAttemptView(session: MatchSessionRecord): MatchSessionTransportAttemptView {
+    return {
+      attemptId: session.transportAttemptId,
+      generation: session.transportAttemptGeneration,
+      createdAt: new Date(session.transportAttemptCreatedAtMs).toISOString(),
     };
   }
 

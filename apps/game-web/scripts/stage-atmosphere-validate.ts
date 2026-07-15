@@ -6,6 +6,7 @@ import {
   type StageAtmosphereTokens,
 } from '../src/view/stageAtmosphere';
 import { DEFAULT_ASSET_MANIFEST } from '../src/view/assets/defaultManifest';
+import { MAX_STAGE_CAMERA_PITCH_DEGREES } from '../src/view/stagePresentation';
 
 interface StageAtmosphereValidationIssue {
   atmosphereId: string;
@@ -128,14 +129,23 @@ function validate(): StageAtmosphereValidationReport {
     }
     validateFiniteRange(issues, atmosphere.id, 'ambientLightIntensity', tokens.ambientLightIntensity, { min: 0, max: 3 });
     validateFiniteRange(issues, atmosphere.id, 'keyLightIntensity', tokens.keyLightIntensity, { min: 0, max: 4 });
+    validateFiniteRange(issues, atmosphere.id, 'cameraPitchDegrees', tokens.cameraPitchDegrees, { min: 0, max: MAX_STAGE_CAMERA_PITCH_DEGREES });
+    validateFiniteRange(issues, atmosphere.id, 'cameraLaunchPitchBoostDegrees', tokens.cameraLaunchPitchBoostDegrees, { min: 0, max: 10 });
+    validateFiniteRange(issues, atmosphere.id, 'cameraLookAtYOffset', tokens.cameraLookAtYOffset, { min: -12, max: 12 });
+    validateFiniteRange(issues, atmosphere.id, 'arenaMouthOpacity', tokens.arenaMouthOpacity, { min: 0, max: 1 });
+    validateFiniteRange(issues, atmosphere.id, 'arenaRimOpacity', tokens.arenaRimOpacity, { min: 0, max: 1 });
+    validateFiniteRange(issues, atmosphere.id, 'arenaDepthTickOpacity', tokens.arenaDepthTickOpacity, { min: 0, max: 1 });
     validateFiniteRange(issues, atmosphere.id, 'gravityWellEmissiveIntensity', tokens.gravityWellEmissiveIntensity, { min: 0, max: 4 });
     validateFiniteRange(issues, atmosphere.id, 'ringOpacity', tokens.ringOpacity, { min: 0, max: 1 });
     validateFiniteRange(issues, atmosphere.id, 'starsSize', tokens.starsSize, { min: 0, max: 2, minExclusive: true });
     validateFiniteRange(issues, atmosphere.id, 'backgroundImageOpacity', tokens.backgroundImageOpacity, { min: 0, max: 1 });
     validateFiniteRange(issues, atmosphere.id, 'backgroundModelOpacity', tokens.backgroundModelOpacity, { min: 0, max: 1 });
     validateFiniteRange(issues, atmosphere.id, 'backgroundEffectOpacity', tokens.backgroundEffectOpacity, { min: 0, max: 1 });
+    validateFiniteRange(issues, atmosphere.id, 'backgroundEffectCoreOpacity', tokens.backgroundEffectCoreOpacity, { min: 0, max: 1 });
+    validateFiniteRange(issues, atmosphere.id, 'backgroundEffectFarFade', tokens.backgroundEffectFarFade, { min: 0, max: 1 });
     validateFiniteRange(issues, atmosphere.id, 'backgroundEffectSpeed', tokens.backgroundEffectSpeed, { min: 0, max: 4 });
     validateFiniteRange(issues, atmosphere.id, 'backgroundEffectScale', tokens.backgroundEffectScale, { min: 0.25, max: 4, minExclusive: true });
+    validateFiniteRange(issues, atmosphere.id, 'backgroundEffectDepthTravel', tokens.backgroundEffectDepthTravel, { min: 0, max: 20 });
 
     if (tokens.backgroundImageTextureId !== null) {
       if (typeof tokens.backgroundImageTextureId !== 'string' || tokens.backgroundImageTextureId.trim().length === 0) {

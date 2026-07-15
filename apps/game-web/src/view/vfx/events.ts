@@ -86,6 +86,9 @@ function collectPlayerEvents(previous: RenderSnapshot, current: RenderSnapshot, 
     }
 
     const specialTriggered = hasFlashRise(previousPlayer.specialFlash, currentPlayer.specialFlash);
+    if (specialTriggered) {
+      addPlayerEvent(events, 'special', playerId, current, direction);
+    }
     const breakTriggered = hasFlashRise(previousPlayer.breakFlash, currentPlayer.breakFlash);
     if (breakTriggered) {
       addPlayerEvent(events, 'break', playerId, current, direction);

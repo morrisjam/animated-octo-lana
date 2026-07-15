@@ -1,7 +1,24 @@
 import type { PlayerId } from '../sim/types';
-import type { ReplayReviewData, ReplayReviewFrame } from '../sim/replayReview';
+import {
+  BALANCE_LAB_CARRIED_REENTRY_CAUSE_LABELS,
+  BALANCE_LAB_CONTROL_RETURN_ACTIONS,
+  buildBalanceLabFightStory,
+  describeBalanceLabReentryContext,
+} from '../sim/balanceLab';
+import type { BalanceLabExchangeReview } from '../sim/balanceLab';
+import { resolveBalanceTestRecipe } from '../sim/balanceTestRecipes';
+import type {
+  ReplayReviewData,
+  ReplayReviewFrame,
+  ReplayRoundFlowReview,
+} from '../sim/replayReview';
+import {
+  buildReplayDecisionFrameReview,
+  formatReplayInput,
+  type ReplayDecisionPlayerReview,
+} from './replayDecisionReview';
 
-interface ReplayViewerOptions {
+export interface ReplayViewerOptions {
   onTogglePause(): void;
   onStep(direction: -1 | 1): void;
   onAdjustSpeed(direction: -1 | 1): void;
@@ -29,14 +46,17 @@ export class ReplayViewer implements ReplayViewerController {
   private readonly seekInput: HTMLInputElement;
   private readonly timelineP1: HTMLDivElement;
   private readonly timelineP2: HTMLDivElement;
+  private readonly decisionContent: HTMLDivElement;
   private readonly frameDataContent: HTMLDivElement;
   private readonly eventContent: HTMLDivElement;
+  private readonly flowContent: HTMLDivElement;
   private readonly keydownHandler: (event: KeyboardEvent) => void;
   private visible = false;
   private review: ReplayReviewData | null = null;
   private currentFrameIndex = 0;
   private currentPaused = true;
   private currentSpeed = 1;
+  private playbackRendered = false;
 
   constructor(private readonly options: ReplayViewerOptions) {
     this.root = document.createElement('div');
@@ -114,6 +134,13 @@ export class ReplayViewer implements ReplayViewerController {
     this.timelineP2 = this.createTimelineRow('P2');
     timelineWrap.append(this.timelineP1, this.timelineP2);
 
+    const decisionPanel = document.createElement('div');
+    decisionPanel.className = 'replay-viewer-panel replay-decision-panel';
+    decisionPanel.innerHTML = '<div class="panel-title">AI Decision → Input Request → Accepted Start → Outcome</div>';
+    this.decisionContent = document.createElement('div');
+    this.decisionContent.className = 'panel-content replay-decision-content';
+    decisionPanel.appendChild(this.decisionContent);
+
     const body = document.createElement('div');
     body.className = 'replay-viewer-body';
     const frameDataPanel = document.createElement('div');
@@ -129,9 +156,30 @@ export class ReplayViewer implements ReplayViewerController {
     this.eventContent = document.createElement('div');
     this.eventContent.className = 'panel-content';
     eventPanel.appendChild(this.eventContent);
-    body.append(frameDataPanel, eventPanel);
 
-    this.root.append(header, controls, jumpRow, timelineWrap, body);
+    const flowPanel = document.createElement('div');
+    flowPanel.className = 'replay-viewer-panel replay-flow-panel';
+    flowPanel.innerHTML = '<div class="panel-title">Gameplay Flow Review</div>';
+    this.flowContent = document.createElement('div');
+    this.flowContent.className = 'panel-content';
+    this.flowContent.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const seekButton = target.closest<HTMLButtonElement>('[data-seek-frame]');
+      if (!seekButton) {
+        return;
+      }
+      const frame = Number(seekButton.dataset.seekFrame);
+      if (Number.isInteger(frame)) {
+        this.options.onSeek(frame);
+      }
+    });
+    flowPanel.appendChild(this.flowContent);
+    body.append(frameDataPanel, eventPanel, flowPanel);
+
+    this.root.append(header, controls, jumpRow, timelineWrap, decisionPanel, body);
     document.body.appendChild(this.root);
 
     this.keydownHandler = (event: KeyboardEvent) => {
@@ -188,6 +236,7 @@ export class ReplayViewer implements ReplayViewerController {
     this.currentFrameIndex = 0;
     this.currentPaused = true;
     this.currentSpeed = 1;
+    this.playbackRendered = false;
     this.visible = true;
     this.root.hidden = false;
     this.title.textContent = 'Replay Review';
@@ -208,6 +257,7 @@ export class ReplayViewer implements ReplayViewerController {
     this.visible = false;
     this.root.hidden = true;
     this.review = null;
+    this.playbackRendered = false;
   }
 
   isVisible(): boolean {
@@ -219,10 +269,19 @@ export class ReplayViewer implements ReplayViewerController {
       return;
     }
     const clampedFrame = Math.max(0, Math.min(this.review.totalFrames - 1, frameIndex));
+    if (
+      this.playbackRendered
+      && this.currentFrameIndex === clampedFrame
+      && this.currentPaused === paused
+      && this.currentSpeed === speed
+    ) {
+      return;
+    }
     const frame = this.review.frames[clampedFrame];
     this.currentFrameIndex = clampedFrame;
     this.currentPaused = paused;
     this.currentSpeed = speed;
+    this.playbackRendered = true;
     this.playPauseButton.textContent = paused ? 'Resume [Space]' : 'Pause [Space]';
     this.speedLabel.textContent = `Speed: ${speed.toFixed(2)}x`;
     this.frameLabel.textContent = `Frame: ${clampedFrame + 1} / ${this.review.totalFrames}`;
@@ -235,8 +294,13 @@ export class ReplayViewer implements ReplayViewerController {
 
     this.timelineP1.innerHTML = renderTimelineCells(this.review.frames, clampedFrame, 'P1');
     this.timelineP2.innerHTML = renderTimelineCells(this.review.frames, clampedFrame, 'P2');
+    this.decisionContent.innerHTML = renderDecisionReview(this.review, clampedFrame);
     this.frameDataContent.innerHTML = renderFrameData(frame);
     this.eventContent.innerHTML = renderRecentEvents(this.review.frames, clampedFrame);
+    const flowReview = this.review.flowReviews.find((review) => (
+      clampedFrame >= review.startFrame && clampedFrame <= review.endFrame
+    )) ?? this.review.flowReviews[0];
+    this.flowContent.innerHTML = renderReplayFlowReview(flowReview, this.review.fixedDt);
   }
 
   dispose(): void {
@@ -292,39 +356,90 @@ function renderTimelineCells(frames: ReplayReviewFrame[], frameIndex: number, pl
 }
 
 function formatInput(input: ReplayReviewFrame['input']['p1']): string {
-  const parts: string[] = [];
-  if (input.moveY > 0.1) {
-    parts.push('U');
-  } else if (input.moveY < -0.1) {
-    parts.push('D');
+  return formatReplayInput(input)
+    .replace(/Super Boost/g, 'SB')
+    .replace(/Launch Break/g, 'BR')
+    .replace(/Special/g, 'SP')
+    .replace(/Launch/g, 'LN')
+    .replace(/Dunk/g, 'DK')
+    .replace(/Parry/g, 'PR')
+    .replace(/Boost/g, 'B')
+    .replace(/Right/g, 'R')
+    .replace(/Left/g, 'L')
+    .replace(/Up/g, 'U')
+    .replace(/Down/g, 'D')
+    .replace(/Neutral/g, '.')
+    .replace(/ \+ /g, '+');
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function formatDecisionLabel(value: string | null): string {
+  return value ? value.replace(/_/g, ' ') : 'none';
+}
+
+function renderDecisionPlayer(player: ReplayDecisionPlayerReview): string {
+  if (player.eventFrame === null) {
+    return `
+      <div class="replay-decision-player ${player.playerId.toLowerCase()}">
+        <div class="replay-decision-header"><strong>${player.playerId}</strong><span>No event yet</span></div>
+        <div class="replay-decision-empty">${escapeHtml(player.requestedInput)}</div>
+      </div>
+    `;
   }
-  if (input.moveX > 0.1) {
-    parts.push('R');
-  } else if (input.moveX < -0.1) {
-    parts.push('L');
+  const selectedAction = formatDecisionLabel(player.selectedAction);
+  const age = player.ageFrames === 0 ? 'selected frame' : `${player.ageFrames}f ago`;
+  const candidates = player.candidates.slice(0, 5).map((candidate) => `
+    <span class="${candidate.eligible ? 'eligible' : 'blocked'}">
+      ${escapeHtml(formatDecisionLabel(candidate.action))}
+      ${candidate.eligible ? candidate.weight.toFixed(2) : `blocked: ${escapeHtml(candidate.reason)}`}
+    </span>
+  `).join('');
+  return `
+    <div class="replay-decision-player ${player.playerId.toLowerCase()}">
+      <div class="replay-decision-header">
+        <strong>${player.playerId} | F${player.eventFrame + 1}</strong>
+        <span>${age}</span>
+      </div>
+      <div class="replay-decision-chain">
+        <div><small>Decision</small><strong>${escapeHtml(formatDecisionLabel(player.movementIntent))} → ${escapeHtml(selectedAction)}</strong></div>
+        <div><small>Input request</small><strong>${escapeHtml(player.requestedInput)}</strong></div>
+        <div><small>Accepted start</small><strong>${escapeHtml(player.acceptedActions.map(formatDecisionLabel).join(', ') || 'none')}</strong></div>
+        <div><small>Outcome</small><strong>${escapeHtml(player.outcome)}</strong></div>
+      </div>
+      <div class="replay-decision-meta">
+        ${escapeHtml(player.profileId ?? 'unknown')} / ${escapeHtml(formatDecisionLabel(player.controllerRoleId))}
+        | ${escapeHtml(player.context ?? 'no context')}
+        | ${escapeHtml(player.selectedReason ?? 'no tactical selection')}
+      </div>
+      <div class="replay-decision-candidates">${candidates}</div>
+    </div>
+  `;
+}
+
+function renderDecisionReview(review: ReplayReviewData, frameIndex: number): string {
+  const decisionReview = buildReplayDecisionFrameReview(review, frameIndex);
+  if (!decisionReview.hasTrace) {
+    return `
+      <div class="replay-decision-empty">
+        No AI decision trace is available in this human or legacy replay. Inputs, accepted starts,
+        frame data, and outcomes remain reviewable below.
+      </div>
+    `;
   }
-  if (input.boost) {
-    parts.push('B');
-  }
-  if (input.superBoost) {
-    parts.push('SB');
-  }
-  if (input.special) {
-    parts.push('SP');
-  }
-  if (input.launch) {
-    parts.push('LN');
-  }
-  if (input.dunk) {
-    parts.push('DK');
-  }
-  if (input.parry) {
-    parts.push('PR');
-  }
-  if (input.breakLaunch) {
-    parts.push('BR');
-  }
-  return parts.length > 0 ? parts.join('+') : '.';
+  return `
+    <div class="replay-decision-grid">
+      ${renderDecisionPlayer(decisionReview.players.P1)}
+      ${renderDecisionPlayer(decisionReview.players.P2)}
+    </div>
+  `;
 }
 
 function renderFrameData(frame: ReplayReviewFrame): string {
@@ -376,6 +491,244 @@ function renderRecentEvents(frames: ReplayReviewFrame[], frameIndex: number): st
   return recent.slice(Math.max(0, recent.length - 8))
     .map((row) => `<div class="replay-event-row">${row}</div>`)
     .join('');
+}
+
+export function resolveReplayReentrySeekFrame(
+  review: Pick<ReplayRoundFlowReview, 'startFrame' | 'endFrame'>,
+  exchange: BalanceLabExchangeReview,
+  fixedDt: number,
+): number | null {
+  if (
+    exchange.status !== 'brief_exit'
+    || !Number.isFinite(exchange.endSeconds)
+    || !Number.isFinite(exchange.neutralWindowSeconds)
+    || !Number.isFinite(fixedDt)
+    || fixedDt <= 0
+  ) {
+    return null;
+  }
+  const reentrySeconds = Math.max(0, exchange.endSeconds + exchange.neutralWindowSeconds);
+  return Math.max(
+    review.startFrame,
+    Math.min(review.endFrame, review.startFrame + Math.floor(reentrySeconds / fixedDt)),
+  );
+}
+
+export function renderReplayFlowReview(
+  review: ReplayRoundFlowReview | undefined,
+  fixedDt: number,
+): string {
+  if (!review) {
+    return '<div class="replay-event-row">No gameplay-flow telemetry is available.</div>';
+  }
+  const flow = review.flow;
+  const story = buildBalanceLabFightStory(flow);
+  const suggestedRecipe = story.suggestedRecipeId
+    ? resolveBalanceTestRecipe(story.suggestedRecipeId)
+    : null;
+  const focusStageAttribute = story.focusStageId
+    ? ` data-focus-stage="${escapeHtml(story.focusStageId)}"`
+    : '';
+  const suggestedCheck = suggestedRecipe && story.suggestedReason
+    ? `
+      <div class="balance-fight-story-next replay-fight-story-next">
+        <div>
+          <strong>Suggested controlled check: ${escapeHtml(suggestedRecipe.label)}</strong>
+          <span>${escapeHtml(story.suggestedReason)} Observe for ${suggestedRecipe.suggestedDurationSeconds}s. This replay does not stage or change a rule.</span>
+        </div>
+      </div>
+    `
+    : '';
+  const fightStory = `
+    <section
+      class="balance-fight-story replay-fight-story ${story.status}"
+      data-story-status="${story.status}"${focusStageAttribute}
+    >
+      <div class="balance-fight-story-header">
+        <span>Fight story</span>
+        <strong>${escapeHtml(story.headline)}</strong>
+      </div>
+      <p class="balance-fight-story-overview">${escapeHtml(story.overview)}</p>
+      <p class="balance-fight-story-finding">${escapeHtml(story.finding)}</p>
+      ${suggestedCheck}
+    </section>
+  `;
+  const resolved = flow.exchanges.filter((exchange) => exchange.resolved).length;
+  const resets = flow.exchanges.filter((exchange) => exchange.createdReset).length;
+  const actionCounts = (playerId: PlayerId): string => {
+    const actions = flow.players[playerId].actionAcceptance;
+    return [
+      `LN ${actions.launch.starts}/${actions.launch.presses}`,
+      `SP ${actions.special.starts}/${actions.special.presses}`,
+      `DK ${actions.dunk.starts}/${actions.dunk.presses}`,
+      `PR ${actions.parry.starts}/${actions.parry.presses}`,
+      `BR ${actions.launch_break.starts}/${actions.launch_break.presses}`,
+    ].join(' | ');
+  };
+  const playerLine = (playerId: PlayerId): string => {
+    const player = flow.players[playerId];
+    const repeat = player.longestRepeatedAction
+      ? `${player.longestRepeatedAction} x${player.longestRepeatedActionStreak}`
+      : 'none';
+    const launchPressure = player.helplessSecondsPerLaunchReceived === null
+      ? `${player.launchHitsReceived} received`
+      : `${player.launchHitsReceived} received @ ${player.helplessSecondsPerLaunchReceived.toFixed(2)}s/hit`;
+    const control = player.controlReturn;
+    const controlReturn = control.controlReturns === 0
+      ? 'none'
+      : `${control.relaunchesWithinOneSecond}/${control.controlReturns} <=1s | ${control.averageControlWindowSeconds === null ? '--' : `${control.averageControlWindowSeconds.toFixed(2)}s avg`} | acted ${control.relaunchesWithAcceptedAction}/${control.relaunchesAfterControlReturn} | return reset ${control.sustainedResetsAfterControlReturn}/${control.controlReturnsInPressure} | action reset ${control.sustainedResetsAfterFirstAction}/${control.firstActionsInPressure}`;
+    const postReturnMix = BALANCE_LAB_CONTROL_RETURN_ACTIONS
+      .map((action) => ({ action, starts: control.firstAcceptedActions[action].starts }))
+      .filter(({ starts }) => starts > 0)
+      .sort((first, second) => second.starts - first.starts || first.action.localeCompare(second.action))
+      .map(({ action, starts }) => `${action} ${starts}`)
+      .join(' | ');
+    const firstActionDelay = control.averageFirstActionDelaySeconds === null
+      ? '--'
+      : `${control.averageFirstActionDelaySeconds.toFixed(2)}s`;
+    const clashDecision = flow.clashFollowUp.players[playerId];
+    const postClashMix = BALANCE_LAB_CONTROL_RETURN_ACTIONS
+      .map((action) => ({ action, starts: clashDecision.firstAcceptedActions[action].starts }))
+      .filter(({ starts }) => starts > 0)
+      .sort((first, second) => second.starts - first.starts || first.action.localeCompare(second.action))
+      .map(({ action, starts }) => `${action} ${starts}`)
+      .join(' | ');
+    const clashActionDelay = clashDecision.averageFirstActionDelaySeconds === null
+      ? '--'
+      : `${clashDecision.averageFirstActionDelaySeconds.toFixed(2)}s`;
+    return `
+      <div class="replay-flow-player ${playerId.toLowerCase()}">
+        <strong>${playerId}</strong>
+        <span>Kit ${player.acceptedTacticalActions.length}/6</span>
+        <span>Entropy ${player.tacticalActionEntropy.toFixed(2)}</span>
+        <span>Dominant ${player.dominantTacticalAction ?? 'none'} ${Math.round(player.dominantTacticalActionShare * 100)}%</span>
+        <span>Repeat ${repeat}</span>
+        <span>Combat cadence ${player.acceptedActionsPerMinute.toFixed(1)}/min</span>
+        <span>Launch pressure ${launchPressure}</span>
+        <span>Contact intent A/O/D/I ${Math.round(player.movementIntent.contestedContactApproachRatio * 100)}%/${Math.round(player.movementIntent.contestedContactOrbitRatio * 100)}%/${Math.round(player.movementIntent.contestedContactRetreatRatio * 100)}%/${Math.round(player.movementIntent.contestedContactIdleRatio * 100)}% (${player.movementIntent.contestedContactFrames}f)</span>
+        <span>Return to re-launch ${controlReturn}</span>
+        <span>First after return ${postReturnMix || 'none'} | ${firstActionDelay} delay</span>
+        <span>First after clash ${postClashMix || 'none'} | acted ${clashDecision.firstActions}/${flow.clashFollowUp.clashes} | rapid launch ${clashDecision.rapidLaunchRecommits} | ${clashActionDelay} delay</span>
+        <small>Starts / presses: ${actionCounts(playerId)}</small>
+      </div>
+    `;
+  };
+  const spacingTimeline = flow.spacingTimeline.length > 0
+    ? flow.spacingTimeline.map((segment) => `
+        <span
+          class="replay-flow-spacing-segment ${segment.band}"
+          style="flex-grow:${Math.max(0.001, segment.durationSeconds)}"
+          title="${segment.band}: ${segment.startSeconds.toFixed(1)}-${segment.endSeconds.toFixed(1)}s"
+        ></span>
+      `).join('')
+    : '<span class="replay-flow-spacing-empty">No spacing samples</span>';
+  const contactWindows = review.contactWindows.length > 0
+    ? review.contactWindows.slice(-6).map((window, index) => `
+        <button type="button" class="replay-flow-seek" data-seek-frame="${window.startFrame}">
+          Contact ${Math.max(1, review.contactWindows.length - 5 + index)}: ${window.durationSeconds.toFixed(2)}s
+        </button>
+      `).join('')
+    : '<span class="replay-flow-empty">No contact episodes.</span>';
+  const exchangeRows = flow.exchanges.length > 0
+    ? flow.exchanges.slice(-8).map((exchange) => {
+      const seekFrame = Math.max(
+        review.startFrame,
+        Math.min(review.endFrame, review.startFrame + Math.floor(exchange.startSeconds / fixedDt)),
+      );
+      const outcome = exchange.outcomes.map((moment) => moment.label).join(', ') || 'no decisive outcome';
+      const neutralDecision = exchange.firstNeutralActionActorId && exchange.firstNeutralAction
+        ? `${exchange.firstNeutralActionActorId} ${exchange.firstNeutralAction.replace(/_/g, ' ')} +${exchange.firstNeutralActionDelaySeconds?.toFixed(2) ?? '0.00'}s`
+        : exchange.status === 'brief_exit'
+          ? `carried via ${exchange.carriedReentryCause
+            ? BALANCE_LAB_CARRIED_REENTRY_CAUSE_LABELS[exchange.carriedReentryCause]
+            : 'unattributed carry'}; no newly accepted action`
+          : 'no accepted neutral action';
+      const reentrySeekFrame = resolveReplayReentrySeekFrame(review, exchange, fixedDt);
+      const reentryReview = reentrySeekFrame === null
+        ? ''
+        : `
+          <button
+            type="button"
+            class="replay-flow-reentry"
+            data-seek-frame="${reentrySeekFrame}"
+            title="Seek to the frame where this brief exit collapses back into pressure"
+          >
+            Review re-entry @ ${(exchange.endSeconds + exchange.neutralWindowSeconds).toFixed(2)}s
+          </button>
+          <small class="replay-flow-reentry-context">${escapeHtml(describeBalanceLabReentryContext(exchange))}</small>
+        `;
+      return `
+        <div class="replay-flow-exchange-card ${exchange.status}">
+          <button type="button" class="replay-flow-exchange" data-seek-frame="${seekFrame}">
+            <strong>#${exchange.exchangeNumber} ${exchange.openerActorId ?? 'Shared'} ${exchange.openerAction ?? 'pressure'}</strong>
+            <span>${exchange.status} | ${exchange.pressureSeconds.toFixed(1)}s | exit ${exchange.exitBand ?? 'none'}</span>
+            <small>${outcome} | first neutral: ${neutralDecision}</small>
+          </button>
+          ${reentryReview}
+        </div>
+      `;
+    }).join('')
+    : '<span class="replay-flow-empty">No pressure exchanges recorded.</span>';
+  const diagnostics = flow.diagnostics.length > 0
+    ? flow.diagnostics.slice(0, 4).map((diagnostic) => `
+        <div class="replay-flow-diagnostic ${diagnostic.severity}">
+          <strong>${diagnostic.title}</strong>
+          <span>${diagnostic.detail}</span>
+        </div>
+      `).join('')
+    : '<div class="replay-flow-diagnostic info"><strong>No diagnostic flags</strong></div>';
+  const loopChain = flow.loopStages.map((stage, index) => `
+      <div class="replay-loop-stage ${stage.status}">
+        <div class="replay-loop-stage-header">
+          <strong>${String(index + 1).padStart(2, '0')} ${stage.label}</strong>
+          <span>${stage.status}</span>
+        </div>
+        <small>${stage.detail}</small>
+      </div>
+  `).join('');
+  const clashRecurrenceOpportunities = Math.max(0, flow.clashFollowUp.clashes - 1);
+  const clashRecurrence = clashRecurrenceOpportunities > 0
+    ? `${flow.clashFollowUp.repeatClashesWithinOneSecond}/${clashRecurrenceOpportunities}`
+    : '--';
+  const carriedCauseMix = Object.entries(flow.neutralExitFollowUp.carriedBriefExitCauses)
+    .filter(([, count]) => count > 0)
+    .map(([cause, count]) => (
+      `${BALANCE_LAB_CARRIED_REENTRY_CAUSE_LABELS[cause as keyof typeof BALANCE_LAB_CARRIED_REENTRY_CAUSE_LABELS]} ${count}`
+    ))
+    .join(', ') || 'none';
+
+  return `
+    <div class="replay-flow-round">${review.label} | ${flow.elapsedSeconds.toFixed(1)}s</div>
+    <div class="replay-flow-reading-order">Start with the fight story, then seek to the exchange or re-entry that produced it. This is flow evidence, not a class win-rate verdict.</div>
+    ${fightStory}
+    <div class="replay-flow-section-label">Gameplay loop chain - flow evidence, not win-rate scoring</div>
+    <div class="replay-loop-chain">${loopChain}</div>
+    <div class="replay-flow-grid">
+      <span>Contact <strong>${Math.round(flow.contactRatio * 100)}%</strong></span>
+      <span>Point blank <strong>${Math.round(flow.pointBlankRatio * 100)}%</strong></span>
+      <span>Launch clashes <strong>${flow.launchClashes} | ${flow.clashesPerMinute.toFixed(1)}/min</strong></span>
+      <span>Clash recurrence <=1s <strong>${clashRecurrence}</strong></span>
+      <span>Contact episodes <strong>${flow.contactEpisodes} | avg ${flow.averageContactEpisodeSeconds.toFixed(2)}s</strong></span>
+      <span>Contact p90 / max <strong>${flow.p90ContactEpisodeSeconds.toFixed(2)}s / ${flow.maximumContactEpisodeSeconds.toFixed(2)}s</strong></span>
+      <span>Neutral resets <strong>${flow.neutralResets}</strong></span>
+      <span>Resets / min <strong>${flow.neutralResetsPerMinute.toFixed(1)}</strong></span>
+      <span>Pressure avg / p90 <strong>${flow.averagePressureSequenceSeconds.toFixed(1)}s / ${flow.p90PressureSequenceSeconds.toFixed(1)}s</strong></span>
+      <span>Longest pressure <strong>${flow.longestPressureSequenceSeconds.toFixed(1)}s</strong></span>
+      <span>Exchanges <strong>${flow.exchanges.length}</strong></span>
+      <span>Resolved / reset <strong>${resolved} / ${resets}</strong></span>
+      <span>Carried brief re-entry <strong>${flow.neutralExitFollowUp.briefExitsWithoutAcceptedAction}/${flow.neutralExitFollowUp.briefExits}</strong></span>
+      <span>Carried causes <strong>${carriedCauseMix}</strong></span>
+      <span>Neutral action coverage <strong>${Math.round(flow.neutralExitFollowUp.firstActionCoverageRatio * 100)}%</strong></span>
+    </div>
+    <div class="replay-flow-section-label">Spacing over time</div>
+    <div class="replay-flow-spacing">${spacingTimeline}</div>
+    <div class="replay-flow-players">${playerLine('P1')}${playerLine('P2')}</div>
+    <div class="replay-flow-section-label">Contact episodes - select to seek</div>
+    <div class="replay-flow-seek-list">${contactWindows}</div>
+    <div class="replay-flow-section-label">Exchange review - select to seek</div>
+    <div class="replay-flow-exchanges">${exchangeRows}</div>
+    <div class="replay-flow-diagnostics">${diagnostics}</div>
+  `;
 }
 
 export function createReplayViewer(options: ReplayViewerOptions): ReplayViewerController {

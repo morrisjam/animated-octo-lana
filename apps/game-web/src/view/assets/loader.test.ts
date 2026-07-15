@@ -68,6 +68,14 @@ describe('asset manifest loader', () => {
     await expect(preloadAssetManifest(invalidManifest)).rejects.toThrow('budget.estimatedTriangles');
   });
 
+  test('rejects unknown asset readiness labels', async () => {
+    const invalidManifest = makeManifest();
+    invalidManifest.models[0].readiness = 'beta' as 'alpha';
+
+    await expect(preloadAssetManifest(invalidManifest)).rejects.toBeInstanceOf(AssetManifestValidationError);
+    await expect(preloadAssetManifest(invalidManifest)).rejects.toThrow('invalid readiness');
+  });
+
   test('reports missing asset loads with explicit kind and id context', async () => {
     const manifest = makeManifest();
     const fetchImpl: typeof fetch = async (input) => {

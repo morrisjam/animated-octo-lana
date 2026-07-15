@@ -10,6 +10,12 @@ export interface StageAtmospherePresetTokenOverrides {
   keyLightPositionX?: number;
   keyLightPositionY?: number;
   keyLightPositionZ?: number;
+  cameraPitchDegrees?: number;
+  cameraLaunchPitchBoostDegrees?: number;
+  cameraLookAtYOffset?: number;
+  arenaMouthOpacity?: number;
+  arenaRimOpacity?: number;
+  arenaDepthTickOpacity?: number;
   gravityWellColor?: string;
   gravityWellEmissive?: string;
   gravityWellEmissiveIntensity?: number;
@@ -27,8 +33,11 @@ export interface StageAtmospherePresetTokenOverrides {
   backgroundEffectTint?: string;
   backgroundEffectSecondaryTint?: string;
   backgroundEffectOpacity?: number;
+  backgroundEffectCoreOpacity?: number;
+  backgroundEffectFarFade?: number;
   backgroundEffectSpeed?: number;
   backgroundEffectScale?: number;
+  backgroundEffectDepthTravel?: number;
 }
 
 export interface StageAtmospherePresetDefinition {
@@ -40,14 +49,56 @@ export interface StageAtmospherePresetDefinition {
 
 export const STAGE_ATMOSPHERE_PRESET_DEFINITIONS: StageAtmospherePresetDefinition[] = [
   {
+    id: 'wormhole_depths_v2',
+    label: 'Wormhole Depths V2',
+    description: 'A restrained tilted arena mouth suspended over a slowly twisting cyan-violet gravity shaft.',
+    tokens: {
+      sceneBackgroundColor: '#01040c',
+      fogColor: '#07162d',
+      fogNear: 74,
+      fogFar: 286,
+      ambientLightColor: '#8ebdff',
+      ambientLightIntensity: 0.5,
+      keyLightColor: '#d8edff',
+      keyLightIntensity: 1.42,
+      keyLightPositionX: 18,
+      keyLightPositionY: 20,
+      keyLightPositionZ: 48,
+      cameraPitchDegrees: 16,
+      cameraLaunchPitchBoostDegrees: 2,
+      cameraLookAtYOffset: 3.2,
+      arenaMouthOpacity: 0.54,
+      arenaRimOpacity: 0.34,
+      arenaDepthTickOpacity: 0.22,
+      gravityWellColor: '#174d91',
+      gravityWellEmissive: '#4826a8',
+      gravityWellEmissiveIntensity: 1.5,
+      ringColor: '#56bfff',
+      ringOpacity: 0,
+      starsColor: '#87dfff',
+      starsSize: 0.34,
+      backgroundImageTextureId: null,
+      backgroundModelId: null,
+      backgroundEffectId: 'wormhole_v1',
+      backgroundEffectTint: '#43d9ff',
+      backgroundEffectSecondaryTint: '#8d4cff',
+      backgroundEffectOpacity: 0.94,
+      backgroundEffectCoreOpacity: 0,
+      backgroundEffectFarFade: 0.96,
+      backgroundEffectSpeed: 0.7,
+      backgroundEffectScale: 1.12,
+      backgroundEffectDepthTravel: 6,
+    },
+  },
+  {
     id: 'wormhole_depths_v1',
     label: 'Wormhole Depths V1',
     description: 'A spinning cosmic tunnel with neon depth rings, dense haze, and high-energy particles.',
     tokens: {
       sceneBackgroundColor: '#02040d',
       fogColor: '#140d2d',
-      fogNear: 58,
-      fogFar: 210,
+      fogNear: 70,
+      fogFar: 268,
       ambientLightColor: '#96a5ff',
       ambientLightIntensity: 0.48,
       keyLightColor: '#d7dbff',
@@ -55,6 +106,11 @@ export const STAGE_ATMOSPHERE_PRESET_DEFINITIONS: StageAtmospherePresetDefinitio
       keyLightPositionX: 12,
       keyLightPositionY: 18,
       keyLightPositionZ: 46,
+      cameraPitchDegrees: 22,
+      cameraLaunchPitchBoostDegrees: 3,
+      cameraLookAtYOffset: 4.6,
+      arenaRimOpacity: 0.22,
+      arenaDepthTickOpacity: 0.34,
       gravityWellColor: '#5c7cff',
       gravityWellEmissive: '#6b2dff',
       gravityWellEmissiveIntensity: 1.6,
@@ -69,7 +125,8 @@ export const STAGE_ATMOSPHERE_PRESET_DEFINITIONS: StageAtmospherePresetDefinitio
       backgroundEffectSecondaryTint: '#b24cff',
       backgroundEffectOpacity: 1,
       backgroundEffectSpeed: 0.9,
-      backgroundEffectScale: 1.2,
+      backgroundEffectScale: 1.08,
+      backgroundEffectDepthTravel: 4.5,
     },
   },
   {

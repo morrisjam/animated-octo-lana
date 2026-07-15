@@ -12,14 +12,17 @@ Path: `apps/game-web/src/sim/characters.ts`
 
 - `CharacterVisualProfile` now includes:
   - `presentation`: `3d | sprite | hybrid`
-  - existing profile ids (`modelId`, `animationSetId`, `vfxProfileId`, `projectileVisualId`, `hudPortraitId`)
+  - presentation/kit-dependent nullable ids (`modelId`, `animationSetId`, `vfxProfileId`, `projectileVisualId`)
+  - required `hudPortraitId`
 
-Current placeholder assignments:
+Current assignments:
 
-- `vanguard`: `3d`
+- `vanguard`: `sprite`
 - `duelist`: `sprite`
 - `ace`: `hybrid`
 - `warden`: `3d`
+
+Sprite packages require an animation set but not a model; 3D packages require a model but not an animation set; hybrid packages require both. A null VFX or projectile slot means shared runtime behavior or no kit-specific asset, not an unresolved placeholder.
 
 ## Renderer abstraction
 

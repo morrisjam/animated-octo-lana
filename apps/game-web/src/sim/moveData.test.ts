@@ -79,6 +79,9 @@ describe('combat move frame registry', () => {
         character.moves.dunk.recoveryOnWhiffFrames,
       );
       expect(character.moves.dunk.hitRange, `${character.id}.dunk.hitRange should be > 0`).toBeGreaterThan(0);
+      expect(character.moves.dunk.startupPursuitSpeed).toBeGreaterThanOrEqual(0);
+      expect(character.moves.dunk.startupTracking).toBeGreaterThanOrEqual(0);
+      expect(character.moves.dunk.startupTracking).toBeLessThanOrEqual(1);
 
       assertFrameValue(`${character.id}.parry.startupFrames`, character.moves.parry.startupFrames);
       assertFrameValue(`${character.id}.parry.activeFrames`, character.moves.parry.activeFrames);

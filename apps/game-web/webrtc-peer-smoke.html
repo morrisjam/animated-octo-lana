@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>Gravity Well Isolated WebRTC Peer</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #050814; color: #dce8ff; }
+      main { width: min(680px, calc(100vw - 32px)); }
+      h1 { font: 700 26px/1.1 Georgia, serif; }
+      p { color: #9eb0cd; line-height: 1.55; }
+      output { display: block; padding: 14px; border: 1px solid #24385c; border-radius: 8px; background: #070d1b; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Isolated WebRTC peer</h1>
+      <p>This production-build harness hosts exactly one authenticated peer for the two-client CI smoke.</p>
+      <output id="peer-status">Loading peer runtime...</output>
+    </main>
+    <script type="module" src="/src/dev/webRtcPeerSmoke.ts"></script>
+  </body>
+</html>

@@ -2,7 +2,9 @@ export type RankedResultSuspiciousReason =
   | 'match_id_mismatch'
   | 'participants_mismatch'
   | 'submitter_not_in_payload'
-  | 'winner_not_in_session';
+  | 'winner_not_in_session'
+  | 'peer_result_mismatch'
+  | 'peer_proof_mismatch';
 
 export interface RankedResultSessionExpectation {
   sessionId: string;
@@ -19,6 +21,12 @@ export interface RankedResultSubmissionInput {
 export interface RankedResultEvaluation {
   suspicious: boolean;
   reasons: RankedResultSuspiciousReason[];
+}
+
+export interface RankedResultConsensusInput {
+  outcome: string;
+  winnerAccountId: string | null;
+  proofDigest?: string | null;
 }
 
 function sortUnique(values: string[]): string[] {
@@ -51,6 +59,28 @@ export function evaluateRankedResultSubmission(
     reasons.push('winner_not_in_session');
   }
 
+  return {
+    suspicious: reasons.length > 0,
+    reasons,
+  };
+}
+
+export function evaluateRankedResultConsensus(
+  first: RankedResultConsensusInput,
+  second: RankedResultConsensusInput,
+): RankedResultEvaluation {
+  const resultMatches = first.outcome === second.outcome
+    && first.winnerAccountId === second.winnerAccountId;
+  const proofMatches = first.proofDigest === undefined
+    || second.proofDigest === undefined
+    || first.proofDigest === second.proofDigest;
+  const reasons: RankedResultSuspiciousReason[] = [];
+  if (!resultMatches) {
+    reasons.push('peer_result_mismatch');
+  }
+  if (!proofMatches) {
+    reasons.push('peer_proof_mismatch');
+  }
   return {
     suspicious: reasons.length > 0,
     reasons,

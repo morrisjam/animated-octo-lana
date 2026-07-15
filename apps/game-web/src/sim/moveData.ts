@@ -11,6 +11,8 @@ export interface DunkFrameData {
   recoveryOnHitFrames: number;
   recoveryOnWhiffFrames: number;
   hitRange: number;
+  startupPursuitSpeed: number;
+  startupTracking: number;
 }
 
 export interface ParryFrameData {
@@ -178,6 +180,8 @@ export function createMoveFrameData(projectileVisualId = DEFAULT_PROJECTILE_VISU
       recoveryOnHitFrames: COMBAT_MOVE_FRAME_REGISTRY.dunk.recoveryOnHitFrames,
       recoveryOnWhiffFrames: COMBAT_MOVE_FRAME_REGISTRY.dunk.recoveryOnWhiffFrames,
       hitRange: 8,
+      startupPursuitSpeed: 58,
+      startupTracking: 0.18,
     },
     parry: {
       startupFrames: COMBAT_MOVE_FRAME_REGISTRY.parry.startupFrames,

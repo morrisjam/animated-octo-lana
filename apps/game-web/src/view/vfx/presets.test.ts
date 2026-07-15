@@ -37,12 +37,25 @@ describe('combat VFX presets', () => {
     expect(overridePresetId).toBe('launch_arcane');
   });
 
+  test('uses package-selected special silhouettes for Vanguard and Duelist', () => {
+    const vanguardPreset = resolveCombatVfxPreset(makeEvent('special', 'vanguard'));
+    const duelistPreset = resolveCombatVfxPreset(makeEvent('special', 'duelist'));
+
+    expect(resolveCombatVfxPresetId(makeEvent('special', 'vanguard'))).toBe('special_vanguard_bastion');
+    expect(resolveCombatVfxPresetId(makeEvent('special', 'duelist'))).toBe('special_duelist_pressure_dash');
+    expect(vanguardPreset?.flash?.radius).toBeGreaterThan(4);
+    expect(vanguardPreset?.trail).toBeUndefined();
+    expect(duelistPreset?.trail?.length).toBeGreaterThan(10);
+    expect(duelistPreset?.particles?.driftAlongDirection).toBeGreaterThan(10);
+  });
+
   test('combat presets expose particles, trail, flash, and sound cues for readable state changes', () => {
     const events: CombatVfxEvent[] = [
       makeEvent('boost', 'vanguard'),
       makeEvent('launch', 'duelist'),
       makeEvent('clash', 'ace'),
       makeEvent('parry', 'ace'),
+      makeEvent('special', 'ace'),
       makeEvent('break', 'duelist'),
       makeEvent('projectile', 'warden'),
       makeEvent('dunk', 'vanguard'),

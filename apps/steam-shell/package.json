@@ -1,0 +1,26 @@
+{
+  "name": "@gravity-well/steam-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Context-isolated Steamworks host for the Gravity Well web client",
+  "main": "main.cjs",
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "stage": "node scripts/stage-web.cjs",
+    "start": "npm run stage && electron .",
+    "package:win": "npm run stage && node scripts/package-win.cjs",
+    "smoke:win": "node scripts/smoke-win.cjs",
+    "ci:win": "npm test && npm run package:win && npm run smoke:win"
+  },
+  "gravityWell": {
+    "steamWebApiIdentity": "gravity-well-api",
+    "steamAuthApiBase": "https://api.gravitywell.space"
+  },
+  "dependencies": {
+    "steamworks.js": "0.4.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.0.2",
+    "electron": "43.1.0"
+  }
+}

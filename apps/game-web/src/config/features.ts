@@ -16,6 +16,25 @@ export interface RuntimeConfig {
   features: FeatureFlags;
 }
 
+export interface OnlineDiagnosticsVisibilityOptions {
+  platformKind: 'web' | 'steam';
+  configuredEnabled: boolean;
+  queryOverride: string | null;
+  developmentBuild: boolean;
+}
+
+export function shouldEnableOnlineDiagnostics(
+  options: OnlineDiagnosticsVisibilityOptions,
+): boolean {
+  if (options.platformKind !== 'web' || options.queryOverride === '0') {
+    return false;
+  }
+  if (options.configuredEnabled) {
+    return true;
+  }
+  return options.developmentBuild && options.queryOverride === '1';
+}
+
 const ENVIRONMENT_PRESETS: Record<RuntimeEnvironment, FeatureFlags> = {
   development: {
     onlineEnabled: true,

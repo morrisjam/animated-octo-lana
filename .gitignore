@@ -3,6 +3,14 @@ dist/
 **/node_modules/
 **/dist/
 apps/game-web/steam-artifact/
+apps/steam-shell/web/
+apps/steam-shell/release/
 apps/game-web/build-artifacts/
+apps/api/build-artifacts/
+build-artifacts/
+data/
 steam-artifacts/
+output/
+.playwright-cli/
+*.log
 .env

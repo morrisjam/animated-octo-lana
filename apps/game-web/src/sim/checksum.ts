@@ -1,4 +1,5 @@
 import type { GameState } from './types';
+import { fingerprintDeterministicValue } from './fingerprint';
 
 function addHashNumber(hash: number, value: number): number {
   const next = (hash ^ (value >>> 0)) >>> 0;
@@ -25,6 +26,9 @@ export function computeStateChecksum(state: GameState): number {
   hash = addHashNumber(hash, state.nextProjectileId);
   hash = addHashNumber(hash, state.winner === 'P1' ? 1 : state.winner === 'P2' ? 2 : 0);
   hash = addHashNumber(hash, state.projectiles.length);
+  hash = addHashNumber(hash, state.rules.allowDunkWin ? 1 : 0);
+  hash = addHashNumber(hash, hashString(fingerprintDeterministicValue(state.tuning)));
+  hash = addHashNumber(hash, hashString(fingerprintDeterministicValue(state.characterBalanceOverrides ?? {})));
 
   const players = [state.players.P1, state.players.P2];
   for (const player of players) {

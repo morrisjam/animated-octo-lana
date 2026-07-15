@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256">
+  <defs>
+    <linearGradient id="v-armor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#9aa7c2"/>
+    </linearGradient>
+    <g id="v-body">
+      <path d="M43 92 L50 71 L58 67 L58 101 L48 111 Z" fill="#aeb9cf"/>
+      <path d="M85 92 L78 71 L70 67 L70 101 L80 111 Z" fill="#aeb9cf"/>
+      <path d="M43 47 L55 35 L73 35 L85 47 L80 76 L72 87 L56 87 L48 76 Z" fill="url(#v-armor)"/>
+      <path d="M31 43 L48 36 L53 48 L44 62 L28 58 Z" fill="#dce4f3"/>
+      <path d="M97 43 L80 36 L75 48 L84 62 L100 58 Z" fill="#dce4f3"/>
+      <path d="M37 55 L47 61 L43 86 L29 92 L24 77 Z" fill="#7e8ba8"/>
+      <path d="M91 55 L81 61 L85 86 L99 92 L104 77 Z" fill="#7e8ba8"/>
+      <path d="M57 26 L64 19 L71 26 L70 37 L58 37 Z" fill="#eef3ff"/>
+      <path d="M60 25 L68 25 L68 29 L60 29 Z" fill="#596b92"/>
+      <circle cx="64" cy="55" r="8" fill="#ffffff"/>
+      <circle cx="64" cy="55" r="4" fill="#67779c"/>
+      <path d="M102 41 L107 41 L107 92 L102 92 Z" fill="#dce4f3"/>
+      <path d="M94 35 L115 35 L115 49 L94 49 Z" fill="#f5f7ff"/>
+    </g>
+  </defs>
+  <g>
+    <ellipse cx="64" cy="66" rx="47" ry="52" fill="none" stroke="#c7d4ee" stroke-width="2" opacity="0.28"/>
+    <use href="#v-body"/>
+  </g>
+  <g transform="translate(128 0)">
+    <ellipse cx="64" cy="66" rx="49" ry="54" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.38"/>
+    <g transform="translate(0 -2)"><use href="#v-body"/></g>
+  </g>
+  <g transform="translate(256 0)">
+    <path d="M8 49 H39 M3 65 H35 M12 81 H42" stroke="#dbe7ff" stroke-width="5" stroke-linecap="round" opacity="0.48"/>
+    <g transform="translate(8 0) rotate(8 64 66)"><use href="#v-body"/></g>
+  </g>
+  <g transform="translate(384 0)">
+    <path d="M22 73 Q64 20 111 51" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity="0.62"/>
+    <g transform="rotate(-13 64 66)"><use href="#v-body"/></g>
+  </g>
+  <g transform="translate(0 128)">
+    <ellipse cx="47" cy="67" rx="34" ry="49" fill="#aebbd4" opacity="0.42"/>
+    <ellipse cx="47" cy="67" rx="27" ry="42" fill="#0b1020" opacity="0.82"/>
+    <g transform="translate(8 0)"><use href="#v-body"/></g>
+  </g>
+  <g transform="translate(128 128)">
+    <ellipse cx="64" cy="65" rx="54" ry="57" fill="none" stroke="#ffffff" stroke-width="5" opacity="0.42"/>
+    <ellipse cx="64" cy="65" rx="45" ry="48" fill="none" stroke="#aebbd4" stroke-width="2" opacity="0.64"/>
+    <use href="#v-body"/>
+  </g>
+  <g transform="translate(256 128)">
+    <path d="M31 111 Q63 81 97 111" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" opacity="0.42"/>
+    <g transform="translate(0 9) scale(1 .9)"><use href="#v-body"/></g>
+  </g>
+  <g transform="translate(384 128)">
+    <path d="M15 64 H113" stroke="#ffffff" stroke-width="3" stroke-dasharray="8 7" opacity="0.34"/>
+    <g transform="rotate(68 64 66) scale(.86)"><use href="#v-body"/></g>
+  </g>
+</svg>

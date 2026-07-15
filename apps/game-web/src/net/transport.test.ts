@@ -17,6 +17,8 @@ const EXAMPLE_CONFIG: MatchmakingIceConfig = {
   iceTransportPolicy: 'all',
   fallbackPolicy: 'relay',
   directConnectTimeoutMs: 1800,
+  relayAvailable: true,
+  turnCredentialMode: 'static',
 };
 
 describe('RelayFallbackController', () => {

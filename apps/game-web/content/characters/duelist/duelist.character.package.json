@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "gw.character-package.v1",
+  "id": "duelist",
+  "displayName": "Duelist",
+  "blurb": "Fast pressure fighter that turns one clean read into chase momentum.",
+  "mechanicsTag": "pressure chase",
+  "metadata": {
+    "author": "Gravity Well Team",
+    "version": "0.3.2",
+    "tags": ["alpha", "mobility", "pressure"]
+  },
+  "stats": {
+    "fuelCapacityMultiplier": 0.96,
+    "moveAccelMultiplier": 1.14,
+    "boostSpeedMultiplier": 1.14,
+    "superBoostSpeedMultiplier": 1.1,
+    "launchBasePowerMultiplier": 0.97,
+    "launchChainBonusMultiplier": 1.14,
+    "launchDurationTakenMultiplier": 1.08,
+    "naturalRecoveryResetMultiplier": 1,
+    "specialFuelCostMultiplier": 0.92,
+    "superFuelMultiplier": 0.96,
+    "dunkRecoveryFuelMultiplier": 0.9
+  },
+  "visuals": {
+    "presentation": "sprite",
+    "modelId": null,
+    "animationSetId": "character_duelist_animset",
+    "vfxProfileId": "character_duelist_vfx",
+    "projectileVisualId": null,
+    "hudPortraitId": "character_duelist_portrait"
+  },
+  "audio": {
+    "sfxProfileId": null,
+    "voiceProfileId": "character_duelist_voice",
+    "musicThemeId": null
+  },
+  "moves": {
+    "launch": {
+      "startupFrames": 5,
+      "activeFrames": 3,
+      "recoveryOnHitFrames": 26,
+      "recoveryOnWhiffFrames": 38
+    },
+    "dunk": {
+      "startupFrames": 26,
+      "activeFrames": 4,
+      "recoveryOnHitFrames": 22,
+      "recoveryOnWhiffFrames": 58,
+      "hitRange": 8.8,
+      "startupPursuitSpeed": 64,
+      "startupTracking": 0.16
+    },
+    "parry": {
+      "startupFrames": 0,
+      "activeFrames": 9,
+      "recoveryFrames": 15,
+      "counterStunFrames": 42
+    },
+    "break": {
+      "startupFrames": 0,
+      "activeFrames": 1,
+      "recoveryFrames": 28,
+      "velocityRetain": 0.36
+    },
+    "movement": {
+      "fuelPerSecond": 0.72
+    },
+    "special": {
+      "id": "pressure_dash",
+      "label": "Pressure Dash",
+      "behaviorId": "special.movement_dash.v1",
+      "kind": "movement",
+      "fuelCost": 6,
+      "timing": {
+        "startupFrames": 3,
+        "activeFrames": 4,
+        "recoveryFrames": 14,
+        "cooldownFrames": 28
+      },
+      "size": {
+        "range": 14,
+        "radius": 1.2,
+        "width": 1.4,
+        "length": 6
+      },
+      "movement": {
+        "dashSpeed": 62
+      }
+    },
+    "boost": {
+      "holdSpeedMultiplier": 1.18,
+      "holdFuelPerSecond": 0.24
+    },
+    "superBoost": {
+      "holdSpeedMultiplier": 1.12,
+      "steerLerpMultiplier": 1.2,
+      "velocityBlendMultiplier": 1.12,
+      "startFuelCost": 5.5,
+      "travelFuelPerDistance": 0.046,
+      "nonCommitPenalty": 2.8,
+      "turnPenaltyGainMultiplier": 0.9
+    }
+  },
+  "specials": [
+    {
+      "id": "pressure_dash",
+      "label": "Pressure Dash",
+      "enabled": true
+    },
+    {
+      "id": "special_beta",
+      "label": "Special Beta",
+      "enabled": false
+    }
+  ]
+}

@@ -11,8 +11,14 @@ import {
   SPECIAL_FLASH_SECONDS,
   STATUS_TEXT,
 } from './constants';
-import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT } from './characters';
-import { framesToSeconds } from './moveData';
+import { DEFAULT_CHARACTER_LOADOUT } from './characters';
+import {
+  cloneCharacterBalanceOverrides,
+  resolveCharacterBalanceConfig,
+  type CharacterBalanceConfig,
+  type CharacterBalanceOverrides,
+} from './characterBalance';
+import { framesToSeconds, SIMULATION_FRAME_RATE_HZ } from './moveData';
 import { nextRngState, rngStateToUnitFloat, sanitiseSeed } from './rng';
 import { createDefaultTuning } from './tuning';
 import type {
@@ -21,6 +27,8 @@ import type {
   GameState,
   PlayerFrameInput,
   PlayerId,
+  PlayerPresentationAction,
+  PlayerPresentationPhase,
   PlayerState,
   PlayersById,
   ProjectileState,
@@ -37,6 +45,29 @@ interface CreateInitialStateOptions {
     P2?: CharacterId;
   };
   rules?: Partial<GameRules>;
+  characterBalanceOverrides?: CharacterBalanceOverrides;
+}
+
+export type SimulationAction = 'boost'
+  | 'super_boost'
+  | 'special'
+  | 'launch'
+  | 'dunk'
+  | 'parry'
+  | 'launch_break';
+
+export interface SimulationActionStart {
+  playerId: PlayerId;
+  action: SimulationAction;
+}
+
+export interface SimulationStepObserver {
+  onActionStart(event: SimulationActionStart): void;
+}
+
+interface LaunchAttemptFrameState {
+  startup: number;
+  active: number;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -59,12 +90,12 @@ function normalise(x: number, y: number): Vec2 {
   return { x: x / len, y: y / len };
 }
 
-function getCharacterStats(player: PlayerState) {
-  return CHARACTER_BY_ID[player.characterId].stats;
+function getCharacterStats(state: GameState, player: PlayerState) {
+  return resolveCharacterBalanceConfig(player.characterId, state.characterBalanceOverrides).stats;
 }
 
-function getCharacterMoves(player: PlayerState) {
-  return CHARACTER_BY_ID[player.characterId].moves;
+function getCharacterMoves(state: GameState, player: PlayerState) {
+  return resolveCharacterBalanceConfig(player.characterId, state.characterBalanceOverrides).moves;
 }
 
 function tryConsumeFuel(player: PlayerState, amount: number): boolean {
@@ -106,8 +137,14 @@ function setStunned(player: PlayerState, duration: number): void {
   resetChain(player);
 }
 
-function createPlayer(id: PlayerId, characterId: CharacterId, spawnX: number, spawnY: number): PlayerState {
-  const maxFuel = Math.max(1, MAX_FUEL * CHARACTER_BY_ID[characterId].stats.fuelCapacityMultiplier);
+function createPlayer(
+  id: PlayerId,
+  characterId: CharacterId,
+  spawnX: number,
+  spawnY: number,
+  balance: CharacterBalanceConfig,
+): PlayerState {
+  const maxFuel = Math.max(1, MAX_FUEL * balance.stats.fuelCapacityMultiplier);
   return {
     id,
     characterId,
@@ -172,15 +209,29 @@ export function createInitialState(options?: CreateInitialStateOptions): GameSta
     P2: options?.loadout?.P2 ?? DEFAULT_CHARACTER_LOADOUT.P2,
   };
   const rules = resolveRules(options?.rules);
+  const characterBalanceOverrides = cloneCharacterBalanceOverrides(options?.characterBalanceOverrides);
 
   return {
     loadout,
+    characterBalanceOverrides,
     rules,
     seed,
     rngState: seed,
     players: {
-      P1: createPlayer('P1', loadout.P1, -30, 6),
-      P2: createPlayer('P2', loadout.P2, 30, -6),
+      P1: createPlayer(
+        'P1',
+        loadout.P1,
+        -30,
+        6,
+        resolveCharacterBalanceConfig(loadout.P1, characterBalanceOverrides),
+      ),
+      P2: createPlayer(
+        'P2',
+        loadout.P2,
+        30,
+        -6,
+        resolveCharacterBalanceConfig(loadout.P2, characterBalanceOverrides),
+      ),
     },
     projectiles: [],
     winner: null,
@@ -333,7 +384,8 @@ function assertSnapshotRootShape(snapshot: unknown): asserts snapshot is GameSta
   }
 }
 
-export const STATE_SNAPSHOT_VERSION = 1;
+export const STATE_SNAPSHOT_VERSION = 2;
+const LEGACY_STATE_SNAPSHOT_VERSION = 1;
 
 interface GameStateSnapshotEnvelope {
   version: number;
@@ -346,6 +398,7 @@ export function createStateSnapshot(state: GameState): GameState {
       P1: state.loadout.P1,
       P2: state.loadout.P2,
     },
+    characterBalanceOverrides: cloneCharacterBalanceOverrides(state.characterBalanceOverrides),
     rules: resolveRules(state.rules),
     seed: state.seed,
     rngState: state.rngState,
@@ -367,6 +420,10 @@ export function restoreStateFromSnapshot(snapshot: GameState): GameState {
     throw new Error('Invalid state snapshot: failed to clone payload.');
   }
   assertSerializableSnapshotValue(cloned, 'snapshot');
+  cloned.tuning = {
+    ...createDefaultTuning(),
+    ...cloned.tuning,
+  };
   return cloned;
 }
 
@@ -390,9 +447,12 @@ export function deserialiseState(serialised: string): GameState {
 
   if (isObjectRecord(parsed) && 'version' in parsed && 'state' in parsed) {
     const version = Number(parsed.version);
-    if (!Number.isFinite(version) || version !== STATE_SNAPSHOT_VERSION) {
+    if (
+      !Number.isFinite(version)
+      || (version !== STATE_SNAPSHOT_VERSION && version !== LEGACY_STATE_SNAPSHOT_VERSION)
+    ) {
       throw new Error(
-        `Unsupported state snapshot version: ${String(parsed.version)}. Expected ${STATE_SNAPSHOT_VERSION}.`,
+        `Unsupported state snapshot version: ${String(parsed.version)}. Expected ${STATE_SNAPSHOT_VERSION} (legacy ${LEGACY_STATE_SNAPSHOT_VERSION} is also readable).`,
       );
     }
     return restoreStateFromSnapshot(parsed.state as GameState);
@@ -409,15 +469,16 @@ function resolveLaunchConnection(
   targetInput: PlayerFrameInput,
 ): boolean {
   const tuning = state.tuning;
-  const attackerStats = getCharacterStats(attacker);
-  const targetStats = getCharacterStats(target);
-  const targetMoves = getCharacterMoves(target);
+  const attackerStats = getCharacterStats(state, attacker);
+  const targetStats = getCharacterStats(state, target);
+  const targetMoves = getCharacterMoves(state, target);
   const deltaX = target.pos.x - attacker.pos.x;
   const deltaY = target.pos.y - attacker.pos.y;
 
   if (target.parry > 0) {
     setStunned(attacker, framesToSeconds(targetMoves.parry.counterStunFrames));
     target.parry = 0;
+    applyDefensiveReset(state, target, attacker);
     return false;
   }
 
@@ -453,10 +514,13 @@ function resolveLaunchClash(state: GameState, attacker: PlayerState, target: Pla
     x: (attacker.pos.x + target.pos.x) * 0.5,
     y: (attacker.pos.y + target.pos.y) * 0.5,
   };
-  const clashDistance = Math.max(attacker.radius + target.radius + 11.2, distance + 6);
-  const clashImpulse = state.tuning.launchBasePower * 0.58;
-  const attackerRecovery = framesToSeconds(getCharacterMoves(attacker).launch.recoveryOnWhiffFrames) * 0.55;
-  const targetRecovery = framesToSeconds(getCharacterMoves(target).launch.recoveryOnWhiffFrames) * 0.55;
+  const clashDistance = Math.max(
+    attacker.radius + target.radius + state.tuning.launchClashSeparationPadding,
+    distance + 6,
+  );
+  const clashImpulse = state.tuning.launchBasePower * state.tuning.launchClashRecoilMultiplier;
+  const attackerRecovery = framesToSeconds(getCharacterMoves(state, attacker).launch.recoveryOnWhiffFrames) * 0.55;
+  const targetRecovery = framesToSeconds(getCharacterMoves(state, target).launch.recoveryOnWhiffFrames) * 0.55;
 
   attacker.pos.x = midpoint.x - dir.x * clashDistance * 0.5;
   attacker.pos.y = midpoint.y - dir.y * clashDistance * 0.5;
@@ -481,8 +545,8 @@ function resolveLaunchClash(state: GameState, attacker: PlayerState, target: Pla
   resetChain(target);
 }
 
-function startLaunchAttempt(player: PlayerState): void {
-  const launchFrameData = getCharacterMoves(player).launch;
+function startLaunchAttempt(state: GameState, player: PlayerState): boolean {
+  const launchFrameData = getCharacterMoves(state, player).launch;
   if (
     player.cool.launch > 0
     || player.endLag > 0
@@ -493,7 +557,7 @@ function startLaunchAttempt(player: PlayerState): void {
     || player.specialStartup > 0
     || player.specialActive > 0
   ) {
-    return;
+    return false;
   }
   player.launchStartup = framesToSeconds(launchFrameData.startupFrames);
   player.launchActive = player.launchStartup > 0 ? 0 : framesToSeconds(launchFrameData.activeFrames);
@@ -502,6 +566,43 @@ function startLaunchAttempt(player: PlayerState): void {
     launchFrameData.startupFrames + launchFrameData.activeFrames,
   );
   player.cool.launch = Math.max(player.cool.launch, startupAndActiveSeconds);
+  return true;
+}
+
+function hasAttackCommitment(player: PlayerState): boolean {
+  return player.launchStartup > 0
+    || player.launchActive > 0
+    || player.dunkStartup > 0
+    || player.dunkActive > 0
+    || player.specialStartup > 0
+    || player.specialActive > 0;
+}
+
+function startParryAttempt(
+  state: GameState,
+  playerId: PlayerId,
+  input: PlayerFrameInput,
+  observer?: SimulationStepObserver,
+): boolean {
+  const player = state.players[playerId];
+  if (
+    state.winner
+    || !input.parry
+    || player.parry > 0
+    || player.endLag > 0
+    || player.recovering > 0
+    || player.stunned > 0
+    || player.helpless > 0
+    || hasAttackCommitment(player)
+  ) {
+    return false;
+  }
+  const parryMove = getCharacterMoves(state, player).parry;
+  player.parry = framesToSeconds(parryMove.activeFrames);
+  player.parryFlash = PARRY_FLASH_SECONDS;
+  player.endLag = Math.max(player.endLag, framesToSeconds(parryMove.recoveryFrames));
+  observer?.onActionStart({ playerId, action: 'parry' });
+  return true;
 }
 
 function advanceLaunchAttempt(
@@ -509,9 +610,10 @@ function advanceLaunchAttempt(
   attacker: PlayerState,
   target: PlayerState,
   targetInput: PlayerFrameInput,
+  targetFrameStart: LaunchAttemptFrameState,
   dt: number,
 ): void {
-  const launchFrameData = getCharacterMoves(attacker).launch;
+  const launchFrameData = getCharacterMoves(state, attacker).launch;
 
   if (attacker.launchStartup > 0) {
     attacker.launchStartup = Math.max(0, attacker.launchStartup - dt);
@@ -537,7 +639,13 @@ function advanceLaunchAttempt(
   const inRange = dist <= attacker.radius + target.radius + 2.8;
 
   if (inRange) {
-    if (target.launchStartup <= 0 && target.launchActive > 0) {
+    const targetCanClash = targetFrameStart.active > 0
+      || (
+        state.tuning.startupClashGraceSeconds > 0
+        && targetFrameStart.startup > 0
+        && targetFrameStart.startup <= state.tuning.startupClashGraceSeconds
+      );
+    if (targetCanClash) {
       resolveLaunchClash(state, attacker, target);
       return;
     }
@@ -562,7 +670,7 @@ function advanceLaunchAttempt(
 
 function startDunkRecovery(state: GameState, attacker: PlayerState, target: PlayerState): void {
   const tuning = state.tuning;
-  const targetStats = getCharacterStats(target);
+  const targetStats = getCharacterStats(state, target);
   if (target.fuel <= 0) {
     if (state.rules.allowDunkWin) {
       state.winner = attacker.id;
@@ -608,8 +716,8 @@ function startDunkRecovery(state: GameState, attacker: PlayerState, target: Play
   resetChain(target);
 }
 
-function startDunkAttempt(player: PlayerState): void {
-  const dunkFrameData = getCharacterMoves(player).dunk;
+function startDunkAttempt(state: GameState, player: PlayerState): boolean {
+  const dunkFrameData = getCharacterMoves(state, player).dunk;
   if (
     player.cool.dunk > 0
     || player.endLag > 0
@@ -620,7 +728,7 @@ function startDunkAttempt(player: PlayerState): void {
     || player.specialStartup > 0
     || player.specialActive > 0
   ) {
-    return;
+    return false;
   }
 
   player.dunkStartup = framesToSeconds(dunkFrameData.startupFrames);
@@ -629,6 +737,7 @@ function startDunkAttempt(player: PlayerState): void {
   player.dunkFlash = DUNK_FLASH_SECONDS;
   const startupAndActiveSeconds = framesToSeconds(dunkFrameData.startupFrames + dunkFrameData.activeFrames);
   player.cool.dunk = Math.max(player.cool.dunk, startupAndActiveSeconds);
+  return true;
 }
 
 function advanceDunkAttempt(
@@ -637,7 +746,7 @@ function advanceDunkAttempt(
   target: PlayerState,
   dt: number,
 ): void {
-  const dunkFrameData = getCharacterMoves(attacker).dunk;
+  const dunkFrameData = getCharacterMoves(state, attacker).dunk;
 
   if (attacker.dunkStartup > 0) {
     attacker.dunkStartup = Math.max(0, attacker.dunkStartup - dt);
@@ -678,7 +787,7 @@ function advanceDunkAttempt(
 }
 
 function spawnSpecialProjectile(state: GameState, attacker: PlayerState, target: PlayerState): boolean {
-  const projectileMove = getCharacterMoves(attacker).special.projectile;
+  const projectileMove = getCharacterMoves(state, attacker).special.projectile;
   if (!projectileMove) {
     return false;
   }
@@ -710,7 +819,7 @@ function executeSpecial(
   attacker: PlayerState,
   target: PlayerState,
 ): boolean {
-  const specialMove = getCharacterMoves(attacker).special;
+  const specialMove = getCharacterMoves(state, attacker).special;
   switch (specialMove.behaviorId) {
     case 'special.projectile.v1':
       return spawnSpecialProjectile(state, attacker, target);
@@ -744,9 +853,9 @@ function executeSpecial(
   }
 }
 
-function startSpecialAttempt(player: PlayerState): void {
-  const playerStats = getCharacterStats(player);
-  const specialMove = getCharacterMoves(player).special;
+function startSpecialAttempt(state: GameState, player: PlayerState): boolean {
+  const playerStats = getCharacterStats(state, player);
+  const specialMove = getCharacterMoves(state, player).special;
   if (
     player.cool.special > 0
     || player.endLag > 0
@@ -757,10 +866,10 @@ function startSpecialAttempt(player: PlayerState): void {
     || player.dunkStartup > 0
     || player.dunkActive > 0
   ) {
-    return;
+    return false;
   }
   if (!tryConsumeFuel(player, specialMove.fuelCost * playerStats.specialFuelCostMultiplier)) {
-    return;
+    return false;
   }
 
   player.specialStartup = framesToSeconds(specialMove.timing.startupFrames);
@@ -775,6 +884,7 @@ function startSpecialAttempt(player: PlayerState): void {
     player.cool.special,
     startupAndActiveSeconds + framesToSeconds(specialMove.timing.cooldownFrames),
   );
+  return true;
 }
 
 function advanceSpecialAttempt(
@@ -783,7 +893,7 @@ function advanceSpecialAttempt(
   target: PlayerState,
   dt: number,
 ): void {
-  const specialMove = getCharacterMoves(attacker).special;
+  const specialMove = getCharacterMoves(state, attacker).special;
 
   if (attacker.specialStartup > 0) {
     attacker.specialStartup = Math.max(0, attacker.specialStartup - dt);
@@ -826,6 +936,40 @@ function clearBoostState(player: PlayerState): void {
   player.boostDir = { x: 0, y: 0 };
 }
 
+function applyDunkStartupPursuit(
+  state: GameState,
+  attacker: PlayerState,
+  target: PlayerState,
+  dt: number,
+): void {
+  if (attacker.dunkStartup <= 0 || target.helpless <= 0) {
+    return;
+  }
+
+  const dunkFrameData = getCharacterMoves(state, attacker).dunk;
+  if (dunkFrameData.startupPursuitSpeed <= 0 || dunkFrameData.startupTracking <= 0) {
+    return;
+  }
+
+  const leadSeconds = Math.min(attacker.dunkStartup, 0.18);
+  const aimX = target.pos.x + target.vel.x * leadSeconds - attacker.pos.x;
+  const aimY = target.pos.y + target.vel.y * leadSeconds - attacker.pos.y;
+  const pursuitDirection = normalise(aimX, aimY);
+  if (pursuitDirection.x === 0 && pursuitDirection.y === 0) {
+    return;
+  }
+
+  const currentSpeed = Math.hypot(attacker.vel.x, attacker.vel.y);
+  const pursuitSpeed = Math.max(
+    dunkFrameData.startupPursuitSpeed,
+    Math.min(currentSpeed, dunkFrameData.startupPursuitSpeed * 1.25),
+  );
+  const frameEquivalent = Math.max(0, dt * SIMULATION_FRAME_RATE_HZ);
+  const trackingBlend = 1 - Math.pow(1 - clamp(dunkFrameData.startupTracking, 0, 1), frameEquivalent);
+  attacker.vel.x = lerp(attacker.vel.x, pursuitDirection.x * pursuitSpeed, trackingBlend);
+  attacker.vel.y = lerp(attacker.vel.y, pursuitDirection.y * pursuitSpeed, trackingBlend);
+}
+
 function resolveCommittedBoostDirection(
   player: PlayerState,
   target: PlayerState,
@@ -850,13 +994,14 @@ function startCommittedBoost(
   player: PlayerState,
   target: PlayerState,
   playerInput: PlayerFrameInput,
-): void {
+): boolean {
   if (player.boostActive || player.cool.boost > 0) {
-    return;
+    return false;
   }
   player.boostActive = true;
   player.boostHeldTime = 0;
   player.boostDir = resolveCommittedBoostDirection(player, target, playerInput);
+  return true;
 }
 
 function finishCommittedBoost(player: PlayerState, interrupted = false): void {
@@ -871,37 +1016,41 @@ function finishCommittedBoost(player: PlayerState, interrupted = false): void {
   clearBoostState(player);
 }
 
-function applyBoostHold(player: PlayerState, speed: number): void {
+function applyBoostHold(player: PlayerState, speed: number, controlMultiplier = 1): void {
   if (player.helpless > 0) {
     return;
   }
-  player.vel.x = player.boostDir.x * speed;
-  player.vel.y = player.boostDir.y * speed;
+  const blend = clamp(controlMultiplier, 0, 1);
+  player.vel.x = lerp(player.vel.x, player.boostDir.x * speed, blend);
+  player.vel.y = lerp(player.vel.y, player.boostDir.y * speed, blend);
 }
 
 function resolveHelplessReleaseSpeed(player: PlayerState, state: GameState): number {
-  const stats = getCharacterStats(player);
-  const moves = getCharacterMoves(player);
-  return tuningAwareBoostSpeed(state) * stats.boostSpeedMultiplier * moves.boost.holdSpeedMultiplier * 0.38;
+  const stats = getCharacterStats(state, player);
+  const moves = getCharacterMoves(state, player);
+  return tuningAwareBoostSpeed(state)
+    * stats.boostSpeedMultiplier
+    * moves.boost.holdSpeedMultiplier
+    * state.tuning.helplessReleaseSpeedRatio;
 }
 
 function tuningAwareBoostSpeed(state: GameState): number {
   return state.tuning.boostHoldSpeed;
 }
 
-function startSuperBoost(state: GameState, player: PlayerState, playerInput: PlayerFrameInput): void {
+function startSuperBoost(state: GameState, player: PlayerState, playerInput: PlayerFrameInput): boolean {
   const tuning = state.tuning;
-  const playerStats = getCharacterStats(player);
-  const superBoostMove = getCharacterMoves(player).superBoost;
+  const playerStats = getCharacterStats(state, player);
+  const superBoostMove = getCharacterMoves(state, player).superBoost;
   if (player.superBoost > 0 || player.helpless > 0 || player.endLag > 0) {
-    return;
+    return false;
   }
   const inputLengthSq = playerInput.moveX * playerInput.moveX + playerInput.moveY * playerInput.moveY;
   if (inputLengthSq <= 0) {
-    return;
+    return false;
   }
   if (!tryConsumeFuel(player, superBoostMove.startFuelCost * tuning.superBoostFuelMultiplier * playerStats.superFuelMultiplier)) {
-    return;
+    return false;
   }
 
   player.superBoost = 1;
@@ -910,12 +1059,13 @@ function startSuperBoost(state: GameState, player: PlayerState, playerInput: Pla
   player.superTurnPenalty = 0;
   player.superDir = normalise(playerInput.moveX, playerInput.moveY);
   player.didCommitAttackDuringSuperBoost = false;
+  return true;
 }
 
 function finishSuperBoost(state: GameState, player: PlayerState): void {
   const tuning = state.tuning;
-  const playerStats = getCharacterStats(player);
-  const superBoostMove = getCharacterMoves(player).superBoost;
+  const playerStats = getCharacterStats(state, player);
+  const superBoostMove = getCharacterMoves(state, player).superBoost;
   if (player.superBoost <= 0) {
     return;
   }
@@ -927,72 +1077,112 @@ function finishSuperBoost(state: GameState, player: PlayerState): void {
   player.fuel = Math.max(0, player.fuel - travelCost - turnCost - commitPenalty);
 }
 
-function movement(
+function tryLaunchBreak(
+  state: GameState,
+  playerId: PlayerId,
+  playerInput: PlayerFrameInput,
+  observer?: SimulationStepObserver,
+): boolean {
+  const player = state.players[playerId];
+  if (state.winner || !playerInput.breakLaunch || player.helpless <= 0 || player.launchBreaks <= 0) {
+    return false;
+  }
+
+  const breakMove = getCharacterMoves(state, player).break;
+  player.launchBreaks -= 1;
+  player.helpless = 0;
+  player.breakFlash = BREAK_FLASH_SECONDS;
+  setStunned(player, framesToSeconds(breakMove.recoveryFrames));
+  player.vel.x *= breakMove.velocityRetain;
+  player.vel.y *= breakMove.velocityRetain;
+  if (player.lastLaunchedBy) {
+    const attacker = state.players[player.lastLaunchedBy];
+    resetChain(attacker);
+    applyDefensiveReset(state, player, attacker, state.tuning.launchBreakResetMultiplier);
+    player.lastLaunchedBy = null;
+  }
+  observer?.onActionStart({ playerId, action: 'launch_break' });
+  return true;
+}
+
+function advanceCommittedSpecial(
+  state: GameState,
+  playerId: PlayerId,
+  dt: number,
+): void {
+  const player = state.players[playerId];
+  const target = state.players[OPPONENT_BY_ID[playerId]];
+  advanceSpecialAttempt(state, player, target, dt);
+}
+
+function advanceCommittedLaunch(
   state: GameState,
   frameInput: FrameInput,
   playerId: PlayerId,
+  targetFrameStart: LaunchAttemptFrameState,
+  dt: number,
+): void {
+  const player = state.players[playerId];
+  const target = state.players[OPPONENT_BY_ID[playerId]];
+  const targetInput = playerId === 'P1' ? frameInput.p2 : frameInput.p1;
+  advanceLaunchAttempt(state, player, target, targetInput, targetFrameStart, dt);
+}
+
+function advanceCommittedDunk(
+  state: GameState,
+  playerId: PlayerId,
+  dt: number,
+): void {
+  const player = state.players[playerId];
+  const target = state.players[OPPONENT_BY_ID[playerId]];
+  advanceDunkAttempt(state, player, target, dt);
+}
+
+function movement(
+  state: GameState,
+  playerId: PlayerId,
   playerInput: PlayerFrameInput,
   dt: number,
+  observer?: SimulationStepObserver,
 ): void {
   const tuning = state.tuning;
   const player = state.players[playerId];
-  const playerStats = getCharacterStats(player);
-  const playerMoves = getCharacterMoves(player);
+  const playerStats = getCharacterStats(state, player);
+  const playerMoves = getCharacterMoves(state, player);
   const target = state.players[OPPONENT_BY_ID[playerId]];
-  const targetInput = playerId === 'P1' ? frameInput.p2 : frameInput.p1;
-
-  if (!state.winner && playerInput.breakLaunch && player.helpless > 0 && player.launchBreaks > 0) {
-    const breakMove = playerMoves.break;
-    player.launchBreaks -= 1;
-    player.helpless = 0;
-    player.breakFlash = BREAK_FLASH_SECONDS;
-    setStunned(player, framesToSeconds(breakMove.recoveryFrames));
-    player.vel.x *= breakMove.velocityRetain;
-    player.vel.y *= breakMove.velocityRetain;
-    if (player.lastLaunchedBy) {
-      resetChain(state.players[player.lastLaunchedBy]);
-      player.lastLaunchedBy = null;
-    }
-    return;
-  }
-
-  advanceLaunchAttempt(state, player, target, targetInput, dt);
-  advanceDunkAttempt(state, player, target, dt);
-  advanceSpecialAttempt(state, player, target, dt);
 
   if (player.recovering > 0 || player.stunned > 0 || player.helpless > 0 || state.winner) {
     finishCommittedBoost(player, true);
     return;
   }
 
-  if (playerInput.parry && player.parry <= 0 && player.endLag <= 0) {
-    const parryMove = playerMoves.parry;
-    player.parry = framesToSeconds(parryMove.activeFrames);
-    player.parryFlash = PARRY_FLASH_SECONDS;
-    player.endLag = Math.max(player.endLag, framesToSeconds(parryMove.recoveryFrames));
-  }
-
-  if (player.superBoost > 0 && (playerInput.launch || playerInput.dunk || playerInput.special)) {
-    player.didCommitAttackDuringSuperBoost = true;
-  }
-
   if (playerInput.special) {
-    startSpecialAttempt(player);
-    if (player.specialStartup <= 0 && player.specialActive > 0 && !player.specialDidResolve) {
-      advanceSpecialAttempt(state, player, target, 0);
+    if (startSpecialAttempt(state, player)) {
+      player.didCommitAttackDuringSuperBoost ||= player.superBoost > 0;
+      observer?.onActionStart({ playerId, action: 'special' });
+      if (player.specialStartup <= 0 && player.specialActive > 0 && !player.specialDidResolve) {
+        advanceSpecialAttempt(state, player, target, 0);
+      }
     }
   }
-  if (playerInput.launch) {
-    startLaunchAttempt(player);
+  if (playerInput.launch && startLaunchAttempt(state, player)) {
+    player.didCommitAttackDuringSuperBoost ||= player.superBoost > 0;
+    observer?.onActionStart({ playerId, action: 'launch' });
   }
-  if (playerInput.dunk) {
-    startDunkAttempt(player);
+  if (playerInput.dunk && startDunkAttempt(state, player)) {
+    player.didCommitAttackDuringSuperBoost ||= player.superBoost > 0;
+    observer?.onActionStart({ playerId, action: 'dunk' });
   }
+  const actionRecoveryControlMultiplier = player.endLag > 0
+    ? tuning.actionRecoveryControlMultiplier
+    : 1;
   const boostHeld = playerInput.boost && player.superBoost <= 0 && (
     playerMoves.boost.holdFuelPerSecond <= 0 || player.fuel > 0
-  );
+  ) && actionRecoveryControlMultiplier > 0;
   if (boostHeld && !player.boostActive) {
-    startCommittedBoost(player, target, playerInput);
+    if (startCommittedBoost(player, target, playerInput)) {
+      observer?.onActionStart({ playerId, action: 'boost' });
+    }
   } else if (!boostHeld) {
     finishCommittedBoost(player);
   }
@@ -1003,6 +1193,7 @@ function movement(
       tuning.boostHoldSpeed
       * playerStats.boostSpeedMultiplier
       * playerMoves.boost.holdSpeedMultiplier,
+      actionRecoveryControlMultiplier,
     );
     if (playerMoves.boost.holdFuelPerSecond > 0) {
       player.fuel = Math.max(0, player.fuel - dt * playerMoves.boost.holdFuelPerSecond);
@@ -1011,7 +1202,9 @@ function movement(
   if (playerInput.superBoost) {
     finishCommittedBoost(player, true);
     if (player.superBoost <= 0) {
-      startSuperBoost(state, player, playerInput);
+      if (startSuperBoost(state, player, playerInput)) {
+        observer?.onActionStart({ playerId, action: 'super_boost' });
+      }
     }
   } else if (player.superBoost > 0) {
     finishSuperBoost(state, player);
@@ -1026,13 +1219,16 @@ function movement(
 
   if (moveInputLengthSq > 0 && !boostHeld) {
     const moveDir = normalise(playerInput.moveX, playerInput.moveY);
-    player.vel.x += moveDir.x * tuning.playerMoveAccel * playerStats.moveAccelMultiplier * dt;
-    player.vel.y += moveDir.y * tuning.playerMoveAccel * playerStats.moveAccelMultiplier * dt;
+    player.vel.x += moveDir.x * tuning.playerMoveAccel * playerStats.moveAccelMultiplier
+      * actionRecoveryControlMultiplier * dt;
+    player.vel.y += moveDir.y * tuning.playerMoveAccel * playerStats.moveAccelMultiplier
+      * actionRecoveryControlMultiplier * dt;
     player.fuel = Math.max(0, player.fuel - dt * playerMoves.movement.fuelPerSecond);
   } else if (!boostHeld && player.superBoost <= 0) {
     // Extra controllable braking reduces slide when movement input is released.
-    player.vel.x *= 0.86;
-    player.vel.y *= 0.86;
+    const controllableBrake = lerp(1, 0.86, actionRecoveryControlMultiplier);
+    player.vel.x *= controllableBrake;
+    player.vel.y *= controllableBrake;
   }
 
   if (player.superBoost > 0) {
@@ -1046,7 +1242,13 @@ function movement(
     const turn = 1 - clamp(player.superDir.x * desired.x + player.superDir.y * desired.y, -1, 1);
     player.superTurnPenalty += turn * dt * 3 * superBoostMove.turnPenaltyGainMultiplier;
 
-    const steerLerp = clamp(tuning.superBoostSteerLerp * superBoostMove.steerLerpMultiplier, 0, 1);
+    const steerLerp = clamp(
+      tuning.superBoostSteerLerp
+        * superBoostMove.steerLerpMultiplier
+        * actionRecoveryControlMultiplier,
+      0,
+      1,
+    );
     const lerpedX = lerp(player.superDir.x, desired.x, steerLerp);
     const lerpedY = lerp(player.superDir.y, desired.y, steerLerp);
     player.superDir = normalise(lerpedX, lerpedY);
@@ -1056,11 +1258,19 @@ function movement(
       * superBoostMove.holdSpeedMultiplier;
     const stepX = player.superDir.x * superSpeed;
     const stepY = player.superDir.y * superSpeed;
-    const velocityBlend = clamp(tuning.superBoostVelocityBlend * superBoostMove.velocityBlendMultiplier, 0, 1);
+    const velocityBlend = clamp(
+      tuning.superBoostVelocityBlend
+        * superBoostMove.velocityBlendMultiplier
+        * actionRecoveryControlMultiplier,
+      0,
+      1,
+    );
     player.vel.x = lerp(player.vel.x, stepX, velocityBlend);
     player.vel.y = lerp(player.vel.y, stepY, velocityBlend);
     player.superDistance += Math.hypot(stepX, stepY) * dt;
   }
+
+  applyDunkStartupPursuit(state, player, target, dt);
 }
 
 function canTravelThroughBoundary(player: PlayerState): boolean {
@@ -1101,7 +1311,7 @@ function handleArenaBoundary(player: PlayerState): void {
   }
 }
 
-function updatePlayer(state: GameState, playerId: PlayerId, dt: number): void {
+function updatePlayer(state: GameState, playerId: PlayerId, dt: number): PlayerId | null {
   const player = state.players[playerId];
   const tuning = state.tuning;
   const previousHelpless = player.helpless;
@@ -1178,12 +1388,9 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): void {
     player.vel.y *= 0.35;
   }
 
-  if (previousHelpless > 0 && player.helpless <= 0) {
-    if (player.lastLaunchedBy) {
-      resetChain(state.players[player.lastLaunchedBy]);
-      player.lastLaunchedBy = null;
-    }
-  }
+  return previousHelpless > 0 && player.helpless <= 0
+    ? player.lastLaunchedBy
+    : null;
 }
 
 function resolveCloseRangeSeparation(state: GameState): void {
@@ -1192,30 +1399,36 @@ function resolveCloseRangeSeparation(state: GameState): void {
   if (state.winner || p1.recovering > 0 || p2.recovering > 0) {
     return;
   }
-  const p1InCommit = p1.helpless > 0
-    || p1.parry > 0
+  if (p1.helpless > 0 || p2.helpless > 0) {
+    return;
+  }
+  const p1InCommit = p1.parry > 0
     || p1.launchStartup > 0
     || p1.launchActive > 0
     || p1.dunkStartup > 0
     || p1.dunkActive > 0
     || p1.specialStartup > 0
     || p1.specialActive > 0;
-  const p2InCommit = p2.helpless > 0
-    || p2.parry > 0
+  const p2InCommit = p2.parry > 0
     || p2.launchStartup > 0
     || p2.launchActive > 0
     || p2.dunkStartup > 0
     || p2.dunkActive > 0
     || p2.specialStartup > 0
     || p2.specialActive > 0;
-  if (p1InCommit || p2InCommit) {
+  const responseMultiplier = p1InCommit || p2InCommit
+    ? state.tuning.closeRangeCommitSeparationMultiplier
+    : 1;
+  if (responseMultiplier <= 0) {
     return;
   }
 
   const dx = p2.pos.x - p1.pos.x;
   const dy = p2.pos.y - p1.pos.y;
   const distance = Math.hypot(dx, dy);
-  const minimumDistance = p1.radius + p2.radius + 4.2;
+  const minimumDistance = p1.radius
+    + p2.radius
+    + state.tuning.closeRangeSeparationPadding * responseMultiplier;
   if (distance >= minimumDistance) {
     return;
   }
@@ -1229,11 +1442,78 @@ function resolveCloseRangeSeparation(state: GameState): void {
   p2.pos.x += dir.x * separation;
   p2.pos.y += dir.y * separation;
 
-  const impulse = 10 + overlap * 2.2;
+  const impulse = (state.tuning.closeRangeSeparationImpulse + overlap * 2.2) * responseMultiplier;
   p1.vel.x -= dir.x * impulse;
   p1.vel.y -= dir.y * impulse;
   p2.vel.x += dir.x * impulse;
   p2.vel.y += dir.y * impulse;
+}
+
+function applyDefensiveReset(
+  state: GameState,
+  defender: PlayerState,
+  attacker: PlayerState,
+  multiplier = 1,
+): void {
+  const minimumDistance = state.tuning.defensiveResetDistance * multiplier;
+  const impulse = state.tuning.defensiveResetImpulse * multiplier;
+  if (minimumDistance <= 0 && impulse <= 0) {
+    return;
+  }
+
+  const dx = attacker.pos.x - defender.pos.x;
+  const dy = attacker.pos.y - defender.pos.y;
+  const distance = Math.hypot(dx, dy);
+  const fallbackDirection = defender.id === 'P1' ? { x: 1, y: 0 } : { x: -1, y: 0 };
+  const dir = distance > 0.001 ? { x: dx / distance, y: dy / distance } : fallbackDirection;
+
+  if (minimumDistance > 0 && distance < minimumDistance) {
+    const midpointX = (defender.pos.x + attacker.pos.x) * 0.5;
+    const midpointY = (defender.pos.y + attacker.pos.y) * 0.5;
+    defender.pos.x = midpointX - dir.x * minimumDistance * 0.5;
+    defender.pos.y = midpointY - dir.y * minimumDistance * 0.5;
+    attacker.pos.x = midpointX + dir.x * minimumDistance * 0.5;
+    attacker.pos.y = midpointY + dir.y * minimumDistance * 0.5;
+  }
+
+  defender.vel.x -= dir.x * impulse;
+  defender.vel.y -= dir.y * impulse;
+  attacker.vel.x += dir.x * impulse;
+  attacker.vel.y += dir.y * impulse;
+}
+
+function resolveNaturalControlReturns(
+  state: GameState,
+  launchedBy: PlayersById<PlayerId | null>,
+): void {
+  const globalMultiplier = state.tuning.naturalRecoveryResetMultiplier;
+  let resetApplied = false;
+
+  for (const playerId of ['P1', 'P2'] as const) {
+    const attackerId = launchedBy[playerId];
+    if (!attackerId) {
+      continue;
+    }
+
+    const defender = state.players[playerId];
+    const attacker = state.players[attackerId];
+    const characterMultiplier = getCharacterStats(state, defender).naturalRecoveryResetMultiplier;
+    const multiplier = globalMultiplier * characterMultiplier;
+    const minimumDistance = state.tuning.defensiveResetDistance * multiplier;
+    resetChain(attacker);
+
+    if (
+      !resetApplied
+      && minimumDistance > 0
+      && defender.fuel >= defender.maxFuel * 0.2
+      && distanceVec2(defender.pos, attacker.pos) < minimumDistance
+    ) {
+      applyDefensiveReset(state, defender, attacker, multiplier);
+      resetApplied = true;
+    }
+
+    defender.lastLaunchedBy = null;
+  }
 }
 
 function updateProjectiles(state: GameState, dt: number): void {
@@ -1262,16 +1542,60 @@ function updateProjectiles(state: GameState, dt: number): void {
   }
 }
 
-export function step(state: GameState, input: FrameInput, dt: number): GameState {
+export function step(
+  state: GameState,
+  input: FrameInput,
+  dt: number,
+  observer?: SimulationStepObserver,
+): GameState {
   state.gameTime += dt;
 
   if (!state.winner) {
-    movement(state, input, 'P1', input.p1, dt);
-    movement(state, input, 'P2', input.p2, dt);
+    startParryAttempt(state, 'P1', input.p1, observer);
+    startParryAttempt(state, 'P2', input.p2, observer);
+    const launchFrameStart: PlayersById<LaunchAttemptFrameState> = {
+      P1: {
+        startup: state.players.P1.launchStartup,
+        active: state.players.P1.launchActive,
+      },
+      P2: {
+        startup: state.players.P2.launchStartup,
+        active: state.players.P2.launchActive,
+      },
+    };
+    const p1BrokeLaunch = tryLaunchBreak(state, 'P1', input.p1, observer);
+    const p2BrokeLaunch = tryLaunchBreak(state, 'P2', input.p2, observer);
+    if (!p1BrokeLaunch) {
+      advanceCommittedSpecial(state, 'P1', dt);
+    }
+    if (!p2BrokeLaunch) {
+      advanceCommittedSpecial(state, 'P2', dt);
+    }
+    if (!p1BrokeLaunch) {
+      advanceCommittedLaunch(state, input, 'P1', launchFrameStart.P2, dt);
+    }
+    if (!p2BrokeLaunch) {
+      advanceCommittedLaunch(state, input, 'P2', launchFrameStart.P1, dt);
+    }
+    if (!p1BrokeLaunch) {
+      advanceCommittedDunk(state, 'P1', dt);
+    }
+    if (!p2BrokeLaunch) {
+      advanceCommittedDunk(state, 'P2', dt);
+    }
+    if (!p1BrokeLaunch) {
+      movement(state, 'P1', input.p1, dt, observer);
+    }
+    if (!p2BrokeLaunch) {
+      movement(state, 'P2', input.p2, dt, observer);
+    }
   }
 
-  updatePlayer(state, 'P1', dt);
-  updatePlayer(state, 'P2', dt);
+  const naturalControlReturns: PlayersById<PlayerId | null> = {
+    P1: updatePlayer(state, 'P1', dt),
+    P2: updatePlayer(state, 'P2', dt),
+  };
+  resolveNaturalControlReturns(state, naturalControlReturns);
   resolveCloseRangeSeparation(state);
   updateProjectiles(state, dt);
 
@@ -1286,6 +1610,46 @@ function getStatusText(state: GameState): string {
     return STATUS_TEXT.launch;
   }
   return STATUS_TEXT.neutral;
+}
+
+function getPlayerPresentationState(player: PlayerState): {
+  presentationAction: PlayerPresentationAction;
+  presentationPhase: PlayerPresentationPhase;
+} {
+  if (player.recovering > 0) {
+    return { presentationAction: 'recover', presentationPhase: 'recovery' };
+  }
+  if (player.helpless > 0) {
+    return { presentationAction: 'helpless', presentationPhase: 'sustain' };
+  }
+  if (player.dunkStartup > 0) {
+    return { presentationAction: 'dunk', presentationPhase: 'startup' };
+  }
+  if (player.dunkActive > 0) {
+    return { presentationAction: 'dunk', presentationPhase: 'active' };
+  }
+  if (player.launchStartup > 0) {
+    return { presentationAction: 'launch', presentationPhase: 'startup' };
+  }
+  if (player.launchActive > 0) {
+    return { presentationAction: 'launch', presentationPhase: 'active' };
+  }
+  if (player.specialStartup > 0) {
+    return { presentationAction: 'special', presentationPhase: 'startup' };
+  }
+  if (player.specialActive > 0) {
+    return { presentationAction: 'special', presentationPhase: 'active' };
+  }
+  if (player.parry > 0) {
+    return { presentationAction: 'parry', presentationPhase: 'active' };
+  }
+  if (player.breakFlash > 0) {
+    return { presentationAction: 'break', presentationPhase: 'active' };
+  }
+  if (player.superBoost > 0 || player.boostActive) {
+    return { presentationAction: 'boost', presentationPhase: 'sustain' };
+  }
+  return { presentationAction: 'idle', presentationPhase: 'none' };
 }
 
 export function getRenderSnapshot(state: GameState): RenderSnapshot {
@@ -1308,6 +1672,8 @@ export function getRenderSnapshot(state: GameState): RenderSnapshot {
         maxFuel: state.players.P1.maxFuel,
         fuel: state.players.P1.fuel,
         launchBreaks: state.players.P1.launchBreaks,
+        boostActive: state.players.P1.boostActive,
+        superBoost: state.players.P1.superBoost,
         helpless: state.players.P1.helpless,
         parry: state.players.P1.parry,
         launchFlash: state.players.P1.launchFlash,
@@ -1317,6 +1683,7 @@ export function getRenderSnapshot(state: GameState): RenderSnapshot {
         dunkFlash: state.players.P1.dunkFlash,
         recovering: state.players.P1.recovering,
         recoveryProgress: p1RecoveryProgress,
+        ...getPlayerPresentationState(state.players.P1),
       },
       P2: {
         id: 'P2',
@@ -1325,6 +1692,8 @@ export function getRenderSnapshot(state: GameState): RenderSnapshot {
         maxFuel: state.players.P2.maxFuel,
         fuel: state.players.P2.fuel,
         launchBreaks: state.players.P2.launchBreaks,
+        boostActive: state.players.P2.boostActive,
+        superBoost: state.players.P2.superBoost,
         helpless: state.players.P2.helpless,
         parry: state.players.P2.parry,
         launchFlash: state.players.P2.launchFlash,
@@ -1334,6 +1703,7 @@ export function getRenderSnapshot(state: GameState): RenderSnapshot {
         dunkFlash: state.players.P2.dunkFlash,
         recovering: state.players.P2.recovering,
         recoveryProgress: p2RecoveryProgress,
+        ...getPlayerPresentationState(state.players.P2),
       },
     },
     projectiles: state.projectiles.map((projectile) => ({

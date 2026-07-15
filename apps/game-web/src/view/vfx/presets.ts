@@ -182,6 +182,106 @@ export const COMBAT_VFX_PRESET_LIBRARY: CombatVfxPresetMap = {
       gain: 0.02,
     },
   },
+  special_cast: {
+    particles: {
+      color: '#ffe58c',
+      lifetimeSeconds: 0.3,
+      startScale: 1.7,
+      endScale: 4.4,
+      startOpacity: 0.84,
+      endOpacity: 0.05,
+      driftAlongDirection: 5.4,
+      driftVertical: 1.2,
+    },
+    trail: {
+      color: '#ffd46a',
+      width: 0.5,
+      length: 5.8,
+      lifetimeSeconds: 0.24,
+      startOpacity: 0.62,
+      endOpacity: 0.04,
+    },
+    flash: {
+      color: '#fff1b5',
+      radius: 3.1,
+      thickness: 0.2,
+      lifetimeSeconds: 0.28,
+      startScale: 0.9,
+      endScale: 2.2,
+      startOpacity: 0.9,
+      endOpacity: 0.05,
+    },
+    sound: {
+      waveform: 'triangle',
+      frequencyHz: 410,
+      durationSeconds: 0.13,
+      gain: 0.026,
+    },
+  },
+  special_vanguard_bastion: {
+    particles: {
+      color: '#83ffe2',
+      lifetimeSeconds: 0.46,
+      startScale: 3.4,
+      endScale: 5.9,
+      startOpacity: 0.48,
+      endOpacity: 0.03,
+      driftAlongDirection: 0,
+      driftVertical: 0.45,
+    },
+    flash: {
+      color: '#cafff3',
+      radius: 4.6,
+      thickness: 0.38,
+      lifetimeSeconds: 0.46,
+      startScale: 0.74,
+      endScale: 1.32,
+      startOpacity: 0.94,
+      endOpacity: 0.08,
+    },
+    sound: {
+      waveform: 'sine',
+      frequencyHz: 190,
+      durationSeconds: 0.2,
+      gain: 0.03,
+    },
+  },
+  special_duelist_pressure_dash: {
+    particles: {
+      color: '#ff70bc',
+      lifetimeSeconds: 0.3,
+      startScale: 1.1,
+      endScale: 3.2,
+      startOpacity: 0.88,
+      endOpacity: 0.04,
+      driftAlongDirection: 17,
+      driftVertical: 0.65,
+    },
+    trail: {
+      color: '#ff4da8',
+      width: 0.82,
+      length: 12.5,
+      lifetimeSeconds: 0.34,
+      startOpacity: 0.86,
+      endOpacity: 0.03,
+    },
+    flash: {
+      color: '#ffd0e9',
+      radius: 2.25,
+      thickness: 0.17,
+      lifetimeSeconds: 0.25,
+      startScale: 0.82,
+      endScale: 2.05,
+      startOpacity: 0.9,
+      endOpacity: 0.04,
+    },
+    sound: {
+      waveform: 'sawtooth',
+      frequencyHz: 520,
+      durationSeconds: 0.11,
+      gain: 0.026,
+    },
+  },
   break_burst: {
     particles: {
       color: '#ffb15f',
@@ -297,16 +397,27 @@ export const COMBAT_VFX_EVENT_BINDINGS: Record<CombatVfxEventType, string> = {
   launch: 'launch_strike',
   clash: 'clash_burst',
   parry: 'parry_guard',
+  special: 'special_cast',
   break: 'break_burst',
   projectile: 'projectile_cast',
   dunk: 'dunk_impact',
 };
 
 export const CHARACTER_VFX_EVENT_OVERRIDES: Record<string, Partial<Record<CombatVfxEventType, string>>> = {
+  character_vanguard_vfx: {
+    special: 'special_vanguard_bastion',
+  },
+  character_duelist_vfx: {
+    special: 'special_duelist_pressure_dash',
+  },
   character_ace_vfx: {
     launch: 'launch_arcane',
   },
 };
+
+export function hasCharacterVfxProfile(profileId: string): boolean {
+  return Boolean(CHARACTER_VFX_EVENT_OVERRIDES[profileId]);
+}
 
 export function resolveCombatVfxPresetId(event: CombatVfxEvent): string {
   const profileId = CHARACTER_BY_ID[event.characterId]?.visuals.vfxProfileId;

@@ -89,6 +89,19 @@ function readString(
   return trimmed;
 }
 
+function readNullableString(
+  root: Record<string, unknown>,
+  key: string,
+  path: string,
+  issues: CharacterPackageValidationIssue[],
+  options?: { minLength?: number; maxLength?: number; pattern?: RegExp },
+): string | null | undefined {
+  if (root[key] === null) {
+    return null;
+  }
+  return readString(root, key, path, issues, options) ?? undefined;
+}
+
 function readNumber(
   root: Record<string, unknown>,
   key: string,
@@ -110,6 +123,20 @@ function readNumber(
     return null;
   }
   return value;
+}
+
+function readOptionalNumber(
+  root: Record<string, unknown>,
+  key: string,
+  path: string,
+  issues: CharacterPackageValidationIssue[],
+  fallback: number,
+  options?: { min?: number; max?: number },
+): number | null {
+  if (!(key in root) || root[key] === undefined) {
+    return fallback;
+  }
+  return readNumber(root, key, path, issues, options);
 }
 
 function readBoolean(
@@ -215,6 +242,7 @@ function validateStats(
   const launchBasePowerMultiplier = readNumber(root, 'launchBasePowerMultiplier', 'stats.launchBasePowerMultiplier', issues, { min: 0.1, max: 10 });
   const launchChainBonusMultiplier = readNumber(root, 'launchChainBonusMultiplier', 'stats.launchChainBonusMultiplier', issues, { min: 0.1, max: 10 });
   const launchDurationTakenMultiplier = readNumber(root, 'launchDurationTakenMultiplier', 'stats.launchDurationTakenMultiplier', issues, { min: 0.1, max: 10 });
+  const naturalRecoveryResetMultiplier = readOptionalNumber(root, 'naturalRecoveryResetMultiplier', 'stats.naturalRecoveryResetMultiplier', issues, 1, { min: 0, max: 3 });
   const specialFuelCostMultiplier = readNumber(root, 'specialFuelCostMultiplier', 'stats.specialFuelCostMultiplier', issues, { min: 0.1, max: 10 });
   const superFuelMultiplier = readNumber(root, 'superFuelMultiplier', 'stats.superFuelMultiplier', issues, { min: 0.1, max: 10 });
   const dunkRecoveryFuelMultiplier = readNumber(root, 'dunkRecoveryFuelMultiplier', 'stats.dunkRecoveryFuelMultiplier', issues, { min: 0.1, max: 10 });
@@ -227,6 +255,7 @@ function validateStats(
     || launchBasePowerMultiplier === null
     || launchChainBonusMultiplier === null
     || launchDurationTakenMultiplier === null
+    || naturalRecoveryResetMultiplier === null
     || specialFuelCostMultiplier === null
     || superFuelMultiplier === null
     || dunkRecoveryFuelMultiplier === null
@@ -242,6 +271,7 @@ function validateStats(
     launchBasePowerMultiplier,
     launchChainBonusMultiplier,
     launchDurationTakenMultiplier,
+    naturalRecoveryResetMultiplier,
     specialFuelCostMultiplier,
     superFuelMultiplier,
     dunkRecoveryFuelMultiplier,
@@ -253,10 +283,10 @@ function validateVisuals(
   issues: CharacterPackageValidationIssue[],
 ): CharacterVisualProfile | null {
   const presentation = readString(root, 'presentation', 'visuals.presentation', issues, { minLength: 2, maxLength: 12 });
-  const modelId = readString(root, 'modelId', 'visuals.modelId', issues, { minLength: 2, maxLength: 120 });
-  const animationSetId = readString(root, 'animationSetId', 'visuals.animationSetId', issues, { minLength: 2, maxLength: 120 });
-  const vfxProfileId = readString(root, 'vfxProfileId', 'visuals.vfxProfileId', issues, { minLength: 2, maxLength: 120 });
-  const projectileVisualId = readString(root, 'projectileVisualId', 'visuals.projectileVisualId', issues, { minLength: 2, maxLength: 120 });
+  const modelId = readNullableString(root, 'modelId', 'visuals.modelId', issues, { minLength: 2, maxLength: 120 });
+  const animationSetId = readNullableString(root, 'animationSetId', 'visuals.animationSetId', issues, { minLength: 2, maxLength: 120 });
+  const vfxProfileId = readNullableString(root, 'vfxProfileId', 'visuals.vfxProfileId', issues, { minLength: 2, maxLength: 120 });
+  const projectileVisualId = readNullableString(root, 'projectileVisualId', 'visuals.projectileVisualId', issues, { minLength: 2, maxLength: 120 });
   const hudPortraitId = readString(root, 'hudPortraitId', 'visuals.hudPortraitId', issues, { minLength: 2, maxLength: 120 });
 
   if (
@@ -270,7 +300,21 @@ function validateVisuals(
     return null;
   }
 
-  if (!modelId || !animationSetId || !vfxProfileId || !projectileVisualId || !hudPortraitId) {
+  if (
+    modelId === undefined
+    || animationSetId === undefined
+    || vfxProfileId === undefined
+    || projectileVisualId === undefined
+    || !hudPortraitId
+  ) {
+    return null;
+  }
+  if ((presentation === '3d' || presentation === 'hybrid') && !modelId) {
+    pushIssue(issues, 'visuals.modelId', `must name a model for ${presentation} presentation.`);
+    return null;
+  }
+  if ((presentation === 'sprite' || presentation === 'hybrid') && !animationSetId) {
+    pushIssue(issues, 'visuals.animationSetId', `must name an animation set for ${presentation} presentation.`);
     return null;
   }
 
@@ -288,10 +332,10 @@ function validateAudio(
   root: Record<string, unknown>,
   issues: CharacterPackageValidationIssue[],
 ): CharacterAudioProfile | null {
-  const sfxProfileId = readString(root, 'sfxProfileId', 'audio.sfxProfileId', issues, { minLength: 2, maxLength: 120 });
-  const voiceProfileId = readString(root, 'voiceProfileId', 'audio.voiceProfileId', issues, { minLength: 2, maxLength: 120 });
-  const musicThemeId = readString(root, 'musicThemeId', 'audio.musicThemeId', issues, { minLength: 2, maxLength: 120 });
-  if (!sfxProfileId || !voiceProfileId || !musicThemeId) {
+  const sfxProfileId = readNullableString(root, 'sfxProfileId', 'audio.sfxProfileId', issues, { minLength: 2, maxLength: 120 });
+  const voiceProfileId = readNullableString(root, 'voiceProfileId', 'audio.voiceProfileId', issues, { minLength: 2, maxLength: 120 });
+  const musicThemeId = readNullableString(root, 'musicThemeId', 'audio.musicThemeId', issues, { minLength: 2, maxLength: 120 });
+  if (sfxProfileId === undefined || voiceProfileId === undefined || musicThemeId === undefined) {
     return null;
   }
   return {
@@ -331,6 +375,8 @@ function validateMoves(
     recoveryOnHitFrames: readNumber(dunk, 'recoveryOnHitFrames', 'moves.dunk.recoveryOnHitFrames', issues, { min: 0, max: 1200 }),
     recoveryOnWhiffFrames: readNumber(dunk, 'recoveryOnWhiffFrames', 'moves.dunk.recoveryOnWhiffFrames', issues, { min: 0, max: 1200 }),
     hitRange: readNumber(dunk, 'hitRange', 'moves.dunk.hitRange', issues, { min: 0, max: 100 }),
+    startupPursuitSpeed: readNumber(dunk, 'startupPursuitSpeed', 'moves.dunk.startupPursuitSpeed', issues, { min: 0, max: 500 }),
+    startupTracking: readNumber(dunk, 'startupTracking', 'moves.dunk.startupTracking', issues, { min: 0, max: 1 }),
   };
 
   const parryData = {

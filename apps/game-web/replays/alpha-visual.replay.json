@@ -1,0 +1,1768 @@
+{
+  "header": {
+    "payloadVersion": 1,
+    "rulesetVersion": "prototype-2026.02",
+    "simBuildHash": "visual-alpha-local",
+    "seed": 20260714,
+    "loadout": {
+      "P1": "vanguard",
+      "P2": "duelist"
+    },
+    "fixedDt": 0.016666666666666666,
+    "advanceRngPerFrame": true,
+    "startingSituation": {
+      "schemaVersion": "gw.balance-scenario.v1",
+      "id": "post_clash"
+    },
+    "reviewFocus": {
+      "schemaVersion": "gw.replay-focus.v1",
+      "source": "visual_alpha_smoke",
+      "label": "Deterministic alpha visual coverage",
+      "focusFrame": 0,
+      "endFrame": 179
+    }
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "label": "Alpha visual coverage",
+      "startFrame": 0,
+      "endFrame": 179
+    }
+  ],
+  "inputTimeline": [
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "boost": true
+      }
+    },
+    {
+      "p1": {
+        "special": true
+      },
+      "p2": {
+        "parry": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "launch": true
+      },
+      "p2": {
+        "launch": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveX": -1
+      },
+      "p2": {
+        "moveX": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1,
+        "superBoost": true
+      },
+      "p2": {
+        "moveY": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "special": true,
+        "dunk": true
+      },
+      "p2": {
+        "special": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1
+      },
+      "p2": {
+        "moveX": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 0
+      },
+      "p2": {
+        "special": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveY": 1
+      },
+      "p2": {
+        "moveY": -1
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "moveX": 1,
+        "boost": true
+      },
+      "p2": {
+        "moveX": -1,
+        "superBoost": true
+      }
+    },
+    {
+      "p1": {
+        "parry": true
+      },
+      "p2": {
+        "launch": true
+      }
+    },
+    {
+      "p1": {
+        "breakLaunch": true
+      },
+      "p2": {
+        "special": true
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    },
+    {
+      "p1": {
+        "moveY": -1
+      },
+      "p2": {
+        "moveY": 1
+      }
+    }
+  ],
+  "expectedChecksums": [
+    3265282331,
+    95520558,
+    1517312098,
+    2212046310,
+    3500846768,
+    2665730956,
+    2818501657,
+    1128596419,
+    2296564362,
+    483156235,
+    154685429,
+    2201203201,
+    1695838855,
+    1991767208,
+    2039543603,
+    2741011191,
+    1427104356,
+    1157631079,
+    2823028948,
+    700837101,
+    1568749862,
+    3207410122,
+    4245627062,
+    406335173,
+    2906809449,
+    834775812,
+    474526443,
+    2981986853,
+    1606171258,
+    680755134,
+    640437129,
+    228530076,
+    3310501531,
+    1794827515,
+    831694393,
+    1451583695,
+    3573013562,
+    139045357,
+    1994696987,
+    1735828262,
+    4056244825,
+    1181468357,
+    1815317665,
+    2007088440,
+    2376869605,
+    214938313,
+    3373599671,
+    132384551,
+    866873924,
+    462685006,
+    672638827,
+    1567829580,
+    1801007360,
+    39197296,
+    2509093456,
+    1811025639,
+    1056908454,
+    4056039475,
+    265816373,
+    585108848,
+    3732942276,
+    3879846694,
+    2013481069,
+    4017366116,
+    3364785618,
+    3928918049,
+    3975630979,
+    357529910,
+    2460235623,
+    1292025587,
+    1343780108,
+    3377067071,
+    94505027,
+    2924430473,
+    3114601796,
+    3808943991,
+    4173538137,
+    3056697689,
+    4006687800,
+    3844141850,
+    1671305109,
+    1597622822,
+    2780268521,
+    3853840488,
+    3461136065,
+    3383485092,
+    297306455,
+    2626117202,
+    755712448,
+    940689025,
+    3536167148,
+    896834049,
+    252874241,
+    3594832479,
+    1129509736,
+    3402501536,
+    2453804764,
+    3950236491,
+    3604134707,
+    979737323,
+    2263871071,
+    1340522223,
+    134990941,
+    1821884672,
+    1087353526,
+    1232607891,
+    183126090,
+    173037193,
+    131794598,
+    4236477023,
+    2075624292,
+    3885754198,
+    4289229764,
+    966553958,
+    1738660272,
+    4230355416,
+    2259493715,
+    2986236492,
+    2689550910,
+    3271098164,
+    1869653333,
+    3708272,
+    2905109417,
+    2168497929,
+    2524363969,
+    689927578,
+    106637597,
+    1484158209,
+    2786802000,
+    2579739811,
+    3313456099,
+    4043861478,
+    322305064,
+    3493406970,
+    857686347,
+    2940489817,
+    3849066759,
+    3856361325,
+    568985305,
+    3420161758,
+    1482838152,
+    3525905680,
+    336760129,
+    541806804,
+    1059363363,
+    2354109658,
+    917904880,
+    4231939689,
+    608635002,
+    581225550,
+    3581113957,
+    4202535516,
+    983400742,
+    3696631022,
+    4183945025,
+    2315617608,
+    49532652,
+    4141877238,
+    3093288422,
+    4228988002,
+    1037333451,
+    3397269255,
+    1385479748,
+    2854102989,
+    3021121515,
+    2356028845,
+    4027520511,
+    2425569964,
+    907694930,
+    665565671,
+    3570599713,
+    2966656927,
+    2889390150,
+    3229055133,
+    2155431359,
+    491128577,
+    961826408,
+    1980169957,
+    1256635382,
+    658131095
+  ]
+}

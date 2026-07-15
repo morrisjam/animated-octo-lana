@@ -1,6 +1,12 @@
 import type { PlatformServices, PlatformStorageService } from './types';
 import { createConfiguredEntitlementService, parseEntitlementMode } from './entitlement';
 import { createStorageBackedPersistenceService } from './persistence';
+import {
+  parseSteamWebApiTicketLease,
+  readSteamRuntimeBridge,
+  validateSteamWebApiIdentity,
+  type SteamRuntimeBridge,
+} from './steamRuntimeBridge';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -8,6 +14,9 @@ export interface SteamPlatformOptions {
   authApiBase?: string | null;
   devTicket?: string | null;
   fetchImpl?: typeof fetch;
+  runtimeBridge?: SteamRuntimeBridge | null;
+  steamWebApiIdentity?: string | null;
+  allowDevTicket?: boolean;
   getRuntimeSteamTicket?: () => string | null;
 }
 
@@ -39,14 +48,6 @@ function normaliseString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function readRuntimeSteamTicketDefault(): string | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  const runtime = window as unknown as { __GW_STEAM_TICKET__?: unknown };
-  return normaliseString(runtime.__GW_STEAM_TICKET__);
 }
 
 async function parseApiError(response: Response): Promise<string> {
@@ -86,12 +87,21 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
     ?? (import.meta.env.VITE_STEAM_DEV_TICKET as string | undefined)
     ?? ''
   ).trim();
+  const steamWebApiIdentityRaw = (
+    options?.steamWebApiIdentity
+    ?? (import.meta.env.VITE_STEAM_WEB_API_IDENTITY as string | undefined)
+    ?? ''
+  ).trim();
+  const allowDevTicket = options?.allowDevTicket ?? import.meta.env.DEV;
   const fetchImpl: typeof fetch | null = options?.fetchImpl
     ?? (typeof fetch === 'function' ? fetch.bind(globalThis) as typeof fetch : null);
-  const getRuntimeSteamTicket = options?.getRuntimeSteamTicket ?? readRuntimeSteamTicketDefault;
+  const runtimeBridge = options?.runtimeBridge === undefined
+    ? readSteamRuntimeBridge()
+    : options.runtimeBridge;
+  const getRuntimeSteamTicket = options?.getRuntimeSteamTicket ?? (() => null);
   const persistence = createStorageBackedPersistenceService(storage, ['local']);
   let presenceStatus: string | null = null;
-  let cachedSession: { accountId: string } | null = null;
+  let cachedSession: { accountId: string; accessToken: string; accessTokenExpiresAt: string } | null = null;
   let authAttempted = false;
   let authFailureMessage: string | null = null;
 
@@ -103,7 +113,23 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
     };
   }
 
-  async function exchangeSteamTicket(ticket: string): Promise<{ accountId: string; displayName: string | null; isAuthenticated: boolean }> {
+  function getAccessToken(): string | null {
+    if (!cachedSession) {
+      return null;
+    }
+    const expiresAt = Date.parse(cachedSession.accessTokenExpiresAt);
+    return Number.isFinite(expiresAt) && expiresAt > Date.now() + 5_000
+      ? cachedSession.accessToken
+      : null;
+  }
+
+  async function exchangeSteamTicket(ticket: string): Promise<{
+    accountId: string;
+    displayName: string | null;
+    isAuthenticated: boolean;
+    accessToken: string;
+    accessTokenExpiresAt: string;
+  }> {
     if (!fetchImpl) {
       throw new Error('Steam sign-in unavailable: runtime fetch API was not found.');
     }
@@ -122,14 +148,23 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
     const payload = await response.json() as {
       accountId?: string;
       isAuthenticated?: boolean;
+      accessToken?: string;
+      accessTokenExpiresAt?: string;
     };
-    if (!payload.isAuthenticated || !isUuid(payload.accountId)) {
+    if (
+      !payload.isAuthenticated
+      || !isUuid(payload.accountId)
+      || !payload.accessToken
+      || !payload.accessTokenExpiresAt
+    ) {
       throw new Error('Steam sign-in failed: invalid account response.');
     }
     return {
       accountId: payload.accountId,
       displayName: null,
       isAuthenticated: true,
+      accessToken: payload.accessToken,
+      accessTokenExpiresAt: payload.accessTokenExpiresAt,
     };
   }
 
@@ -139,13 +174,18 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
     entitlement,
     persistence,
     auth: {
+      getAccessToken,
       async getSession() {
-        if (cachedSession) {
+        if (cachedSession && getAccessToken()) {
           return {
             accountId: cachedSession.accountId,
             displayName: null,
             isAuthenticated: true,
           };
+        }
+        if (cachedSession) {
+          cachedSession = null;
+          authAttempted = false;
         }
         if (authAttempted) {
           return unauthenticatedSession();
@@ -157,16 +197,34 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
           return unauthenticatedSession();
         }
 
-        const runtimeTicket = normaliseString(getRuntimeSteamTicket());
-        const ticket = runtimeTicket ?? normaliseString(devTicket);
-        if (!ticket) {
-          authFailureMessage = 'Steam sign-in unavailable: no Steam ticket found. Set VITE_STEAM_DEV_TICKET for dev.';
-          return unauthenticatedSession();
-        }
-
+        let ticket = '';
+        let cancelTicket: (() => Promise<void>) | null = null;
         try {
+          if (runtimeBridge) {
+            const identity = validateSteamWebApiIdentity(steamWebApiIdentityRaw);
+            const lease = parseSteamWebApiTicketLease(
+              await runtimeBridge.requestWebApiTicket(identity),
+              identity,
+            );
+            ticket = lease.ticket;
+            cancelTicket = async () => {
+              await runtimeBridge.cancelWebApiTicket(lease.ticketId);
+            };
+          } else if (allowDevTicket) {
+            ticket = normaliseString(getRuntimeSteamTicket()) ?? normaliseString(devTicket) ?? '';
+            if (!ticket) {
+              throw new Error('native Steam ticket bridge was not found and no development ticket is configured.');
+            }
+          } else {
+            throw new Error('native Steam ticket bridge was not found. Launch the packaged client through Steam.');
+          }
+
           const session = await exchangeSteamTicket(ticket);
-          cachedSession = { accountId: session.accountId };
+          cachedSession = {
+            accountId: session.accountId,
+            accessToken: session.accessToken,
+            accessTokenExpiresAt: session.accessTokenExpiresAt,
+          };
           authFailureMessage = null;
           return session;
         } catch (error) {
@@ -174,6 +232,14 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
             ? `Steam sign-in failed: ${error.message}`
             : 'Steam sign-in failed. Retry sign-in and submit a fresh ticket.';
           return unauthenticatedSession();
+        } finally {
+          if (cancelTicket) {
+            try {
+              await cancelTicket();
+            } catch {
+              // The API session is already independent of the one-use Steam ticket.
+            }
+          }
         }
       },
     },

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="v-bg" cx="58%" cy="38%" r="78%">
+      <stop offset="0" stop-color="#19365f"/>
+      <stop offset="0.55" stop-color="#09162b"/>
+      <stop offset="1" stop-color="#030812"/>
+    </radialGradient>
+    <linearGradient id="v-armor" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#dce7f5"/>
+      <stop offset="1" stop-color="#7787a5"/>
+    </linearGradient>
+    <linearGradient id="v-blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8fdcff"/>
+      <stop offset="1" stop-color="#3474c9"/>
+    </linearGradient>
+    <filter id="v-glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="v-frame"><rect x="8" y="8" width="240" height="240" rx="28"/></clipPath>
+  </defs>
+  <g clip-path="url(#v-frame)">
+    <rect x="8" y="8" width="240" height="240" rx="28" fill="url(#v-bg)"/>
+    <circle cx="132" cy="128" r="86" fill="none" stroke="#74caff" stroke-width="2" opacity="0.13"/>
+    <circle cx="132" cy="128" r="63" fill="none" stroke="#74caff" stroke-width="1" opacity="0.1"/>
+    <path d="M-8 221 C38 163 62 122 81 50" fill="none" stroke="#4aa5ef" stroke-width="28" opacity="0.08"/>
+    <path d="M264 212 C215 160 198 98 198 24" fill="none" stroke="#8bdcff" stroke-width="22" opacity="0.06"/>
+
+    <path d="M34 244 L42 168 L73 139 L92 153 L84 244 Z" fill="#263c60"/>
+    <path d="M222 244 L214 168 L183 139 L164 153 L172 244 Z" fill="#263c60"/>
+    <path d="M20 190 L44 142 L78 130 L93 161 L67 203 Z" fill="url(#v-armor)"/>
+    <path d="M236 190 L212 142 L178 130 L163 161 L189 203 Z" fill="url(#v-armor)"/>
+    <path d="M44 153 L73 142 L84 161 L60 180 L34 177 Z" fill="url(#v-blue)"/>
+    <path d="M212 153 L183 142 L172 161 L196 180 L222 177 Z" fill="url(#v-blue)"/>
+
+    <path d="M78 244 L76 167 L95 136 L161 136 L180 167 L178 244 Z" fill="url(#v-armor)"/>
+    <path d="M95 244 L98 178 L116 158 L140 158 L158 178 L161 244 Z" fill="#a9b8ce"/>
+    <path d="M112 244 L114 183 L128 172 L142 183 L144 244 Z" fill="#172b49"/>
+
+    <path d="M90 76 L108 54 L148 54 L166 76 L158 128 L143 146 L113 146 L98 128 Z" fill="url(#v-armor)"/>
+    <path d="M103 71 L116 59 L140 59 L153 71 L149 88 L107 88 Z" fill="#f7fbff"/>
+    <path d="M104 89 L152 89 L148 107 L108 107 Z" fill="#233b60"/>
+    <path d="M112 94 L144 94 L140 101 L116 101 Z" fill="#85d8ff" filter="url(#v-glow)"/>
+    <path d="M99 118 L114 109 L142 109 L157 118 L143 139 L113 139 Z" fill="#7f8da8"/>
+    <path d="M118 45 L128 31 L138 45 L136 58 L120 58 Z" fill="#eef6ff"/>
+    <path d="M123 44 L133 44 L134 49 L122 49 Z" fill="#4f678c"/>
+
+    <circle cx="128" cy="172" r="15" fill="#183c64" stroke="#ddecff" stroke-width="4"/>
+    <circle cx="128" cy="172" r="7" fill="#8de1ff" filter="url(#v-glow)"/>
+    <path d="M32 226 Q128 150 224 226" fill="none" stroke="#8ad8ff" stroke-width="6" opacity="0.55"/>
+    <path d="M43 230 Q128 168 213 230" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.36"/>
+  </g>
+  <rect x="8" y="8" width="240" height="240" rx="28" fill="none" stroke="#8bcfff" stroke-width="2" opacity="0.62"/>
+</svg>

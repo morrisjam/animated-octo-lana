@@ -20,6 +20,7 @@ export interface WebAuthSigninRequest {
 
 export interface PlatformAuthService {
   getSession(): Promise<PlatformAuthSession>;
+  getAccessToken?(): string | null;
   signUp?(request: WebAuthSignupRequest): Promise<PlatformAuthSession>;
   signIn?(request: WebAuthSigninRequest): Promise<PlatformAuthSession>;
   signOut?(): Promise<PlatformAuthSession>;

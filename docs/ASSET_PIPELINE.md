@@ -461,6 +461,16 @@ This does not need to live in the shipped content folder, but it must live somew
 - asset manifest loading:
   - `apps/game-web/src/view/assets`
 
+### Runtime readiness labels
+
+Every manifest entry may declare `readiness`:
+
+- `prototype`: temporary exploration or a technical placeholder; this is also the default when the field is omitted.
+- `alpha`: reviewed, readable, budgeted, and acceptable for the controlled alpha.
+- `production`: final approved shipping content.
+
+Character-package QA requires every presentation asset, HUD portrait, and kit-required projectile texture to resolve at `alpha` or `production`. It separately verifies code-backed VFX and voice profile ids. Optional shared or unused package slots must be `null`; unresolved ids and prototype assets fail the alpha gate instead of receiving guessed fallback budgets.
+
 ### Validation already exists here
 
 - budget checks:
@@ -469,6 +479,7 @@ This does not need to live in the shipped content folder, but it must live somew
   - `docs/ASSET_BUDGET_VALIDATION.md`
   - `docs/ASSET_MANIFEST_LOADER.md`
   - `docs/CHARACTER_VISUAL_PROFILE_ABSTRACTION.md`
+  - `docs/SPRITE_ATLAS_RUNTIME.md`
   - `docs/VFX_EVENT_BINDING_PRESETS.md`
 
 ## Agent workflow around assets
@@ -527,15 +538,11 @@ You: merge them into one repo-local asset plan and call out risks.
 
 ## Immediate next actions for Gravity Well
 
-1. Create one stage brief for the wormhole environment.
-2. Decide whether the first fighter shipping style is:
-- direct sprites
-- 3D-rendered sprites
-- cutout rig
-- hybrid
-3. Define one approved naming and export format for sprite sheets.
-4. Add at least one source workflow JSON under `art/workflows/comfyui`.
-5. Add one prototype stage preset wired to the new wormhole direction.
+1. Replace the temporary Vanguard and Duelist SVG atlases with reviewed transparent production atlases.
+2. Add one reproducible source workflow under `art/workflows/comfyui` or the selected generation tool.
+3. Produce one reviewed VFX flipbook and wire it through the existing VFX preset runtime.
+4. Profile the shader-driven wormhole at alpha target resolution and hardware.
+5. Capture gameplay-scale visual review images for both fighters and every required clip.
 
 ## Default decision guidance
 

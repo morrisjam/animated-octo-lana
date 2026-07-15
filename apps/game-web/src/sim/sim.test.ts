@@ -1,19 +1,23 @@
 import { describe, expect, test } from 'vitest';
 import { CHARACTER_BY_ID } from './characters';
 import { computeStateChecksum } from './checksum';
+import { createCharacterBalanceConfig } from './characterBalance';
 import { framesToSeconds } from './moveData';
-import type { FrameInput } from './types';
+import type { FrameInput, GameState, PlayerFrameInput, PlayerId, PlayerState } from './types';
+import { createDefaultTuning } from './tuning';
 import {
   createInitialState,
   createStateSnapshot,
   deserialiseState,
+  getRenderSnapshot,
   nextDeterministicRandom,
   restoreStateFromSnapshot,
   serialiseState,
+  type SimulationActionStart,
   STATE_SNAPSHOT_VERSION,
   step,
 } from './sim';
-import { CHAIN_WINDOW_SECONDS } from './constants';
+import { CHAIN_WINDOW_SECONDS, MAX_FUEL } from './constants';
 
 const FIXED_DT = 1 / 60;
 const VANGUARD_LAUNCH = CHARACTER_BY_ID.vanguard.moves.launch;
@@ -77,6 +81,191 @@ function scriptedInputForFrame(frame: number): FrameInput {
   }
   return input;
 }
+
+function swapPlayerId(playerId: PlayerId | null): PlayerId | null {
+  if (playerId === null) {
+    return null;
+  }
+  return playerId === 'P1' ? 'P2' : 'P1';
+}
+
+function mirrorPlayerState(player: PlayerState, playerId: PlayerId): PlayerState {
+  return {
+    ...player,
+    id: playerId,
+    pos: { x: -player.pos.x, y: -player.pos.y },
+    vel: { x: -player.vel.x, y: -player.vel.y },
+    boostDir: { x: -player.boostDir.x, y: -player.boostDir.y },
+    superDir: { x: -player.superDir.x, y: -player.superDir.y },
+    lastLaunchedBy: swapPlayerId(player.lastLaunchedBy),
+    recoveryDir: { x: -player.recoveryDir.x, y: -player.recoveryDir.y },
+    cool: { ...player.cool },
+  };
+}
+
+function mirrorStateForPlayerSwap(state: GameState): GameState {
+  const source = createStateSnapshot(state);
+  return {
+    ...source,
+    loadout: {
+      P1: source.loadout.P2,
+      P2: source.loadout.P1,
+    },
+    players: {
+      P1: mirrorPlayerState(source.players.P2, 'P1'),
+      P2: mirrorPlayerState(source.players.P1, 'P2'),
+    },
+    projectiles: source.projectiles.map((projectile) => ({
+      ...projectile,
+      ownerId: swapPlayerId(projectile.ownerId) as PlayerId,
+      pos: { x: -projectile.pos.x, y: -projectile.pos.y },
+      vel: { x: -projectile.vel.x, y: -projectile.vel.y },
+    })),
+    winner: swapPlayerId(source.winner),
+  };
+}
+
+function mirrorPlayerInput(input: PlayerFrameInput): PlayerFrameInput {
+  return {
+    ...input,
+    moveX: -input.moveX,
+    moveY: -input.moveY,
+  };
+}
+
+function mirrorFrameInputForPlayerSwap(input: FrameInput): FrameInput {
+  return {
+    p1: mirrorPlayerInput(input.p2),
+    p2: mirrorPlayerInput(input.p1),
+  };
+}
+
+function canonicalSymmetryState(state: GameState): GameState {
+  const canonical = createStateSnapshot(state);
+  canonical.projectiles = canonical.projectiles
+    .map((projectile) => ({ ...projectile, id: 0 }))
+    .sort((first, second) => (
+      first.ownerId.localeCompare(second.ownerId)
+      || first.visualId.localeCompare(second.visualId)
+      || first.pos.x - second.pos.x
+      || first.pos.y - second.pos.y
+    ));
+  return JSON.parse(JSON.stringify(canonical)) as GameState;
+}
+
+function symmetryScriptedInputForFrame(frame: number): FrameInput {
+  const input = neutralInput();
+  const phase = frame % 180;
+  input.p1.moveX = phase < 60 ? 1 : phase < 120 ? -1 : 0;
+  input.p1.moveY = phase < 90 ? -1 : 1;
+  input.p2.moveX = phase < 45 ? -1 : phase < 135 ? 1 : 0;
+  input.p2.moveY = phase < 75 ? 1 : -1;
+
+  input.p1.boost = phase >= 6 && phase < 18;
+  input.p2.boost = phase >= 96 && phase < 108;
+  input.p1.superBoost = phase >= 30 && phase < 38;
+  input.p2.superBoost = phase >= 120 && phase < 128;
+  input.p1.special = phase === 48;
+  input.p2.special = phase === 138;
+  input.p1.launch = phase === 66 || phase === 156;
+  input.p2.launch = phase === 66 || phase === 84;
+  input.p1.parry = phase === 82;
+  input.p2.parry = phase === 154;
+  input.p1.dunk = phase === 112;
+  input.p2.dunk = phase === 22;
+  input.p1.breakLaunch = phase === 91;
+  input.p2.breakLaunch = phase === 169;
+  return input;
+}
+
+describe('player-order symmetry', () => {
+  test('keeps mirrored asymmetric matches equivalent frame by frame', () => {
+    const direct = createInitialState({
+      seed: 8181,
+      loadout: { P1: 'vanguard', P2: 'duelist' },
+      rules: { allowDunkWin: false },
+    });
+    direct.players.P1.pos = { x: -9, y: 2 };
+    direct.players.P2.pos = { x: 9, y: -2 };
+    const mirrored = mirrorStateForPlayerSwap(direct);
+    const acceptedActions = new Set<string>();
+
+    for (let frame = 0; frame < 720; frame += 1) {
+      const input = symmetryScriptedInputForFrame(frame);
+      step(direct, input, FIXED_DT, {
+        onActionStart: ({ action }) => acceptedActions.add(action),
+      });
+      step(mirrored, mirrorFrameInputForPlayerSwap(input), FIXED_DT);
+
+      expect(
+        canonicalSymmetryState(mirrorStateForPlayerSwap(mirrored)),
+        `first mirrored simulation divergence at frame ${frame}`,
+      ).toEqual(canonicalSymmetryState(direct));
+    }
+
+    expect(acceptedActions).toEqual(new Set(['boost', 'super_boost', 'special', 'dunk']));
+  });
+});
+
+describe('simulation step observation', () => {
+  test('reports only actions accepted by the simulator', () => {
+    const state = createInitialState();
+    const input = neutralInput();
+    input.p1.parry = true;
+    input.p1.launch = true;
+    const starts: SimulationActionStart[] = [];
+
+    step(state, input, FIXED_DT, {
+      onActionStart: (event) => starts.push(event),
+    });
+
+    expect(starts).toEqual([{ playerId: 'P1', action: 'parry' }]);
+    expect(state.players.P1.launchStartup).toBe(0);
+    expect(state.players.P1.launchActive).toBe(0);
+  });
+
+  test('observation does not alter deterministic state', () => {
+    const observed = createInitialState({ seed: 2026 });
+    const unobserved = createInitialState({ seed: 2026 });
+    const input = neutralInput();
+    input.p1.special = true;
+    input.p2.launch = true;
+    const starts: SimulationActionStart[] = [];
+
+    step(observed, input, FIXED_DT, {
+      onActionStart: (event) => starts.push(event),
+    });
+    step(unobserved, input, FIXED_DT);
+
+    expect(starts.length).toBeGreaterThan(0);
+    expect(computeStateChecksum(observed)).toBe(computeStateChecksum(unobserved));
+    expect(createStateSnapshot(observed)).toEqual(createStateSnapshot(unobserved));
+  });
+
+  test.each([
+    ['P1', 'P2'],
+    ['P2', 'P1'],
+  ] as const)(
+    'latches %s launch against %s parry without side-order bias',
+    (attackerId, defenderId) => {
+      const state = createInitialState({ seed: 2027 });
+      state.players.P1.pos = { x: -3, y: 0 };
+      state.players.P2.pos = { x: 3, y: 0 };
+      state.players[attackerId].launchActive = 0.1;
+      const input = neutralInput();
+      input[defenderId.toLowerCase() as 'p1' | 'p2'].parry = true;
+      const starts: SimulationActionStart[] = [];
+
+      step(state, input, FIXED_DT, {
+        onActionStart: (event) => starts.push(event),
+      });
+
+      expect(starts).toContainEqual({ playerId: defenderId, action: 'parry' });
+      expect(state.players[attackerId].stunned).toBeGreaterThan(0);
+      expect(state.players[defenderId].helpless).toBe(0);
+    },
+  );
+});
 
 describe('chain reset rules', () => {
   test('resets chain after chain window without follow-up launch', () => {
@@ -172,6 +361,46 @@ describe('dunk move rules', () => {
     reDunk.p1.dunk = true;
     step(state, reDunk, FIXED_DT);
     expect(state.players.P1.dunkStartup).toBe(0);
+  });
+
+  test('dunk startup pursues a launched target but releases tracking when helpless ends', () => {
+    const vanguard = createCharacterBalanceConfig('vanguard');
+    vanguard.moves.dunk.startupPursuitSpeed = 60;
+    vanguard.moves.dunk.startupTracking = 1;
+    const state = createInitialState({ characterBalanceOverrides: { vanguard } });
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 7, y: 0 };
+    state.players.P2.vel = { x: 0, y: 70 };
+    state.players.P2.helpless = 1;
+
+    const input = neutralInput();
+    input.p1.dunk = true;
+    step(state, input, FIXED_DT);
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P1.dunkStartup).toBeGreaterThan(0);
+    expect(state.players.P1.vel.y).toBeGreaterThan(20);
+
+    state.players.P1.vel = { x: 0, y: 0 };
+    state.players.P2.helpless = 0;
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P1.vel.x).toBe(0);
+    expect(state.players.P1.vel.y).toBe(0);
+  });
+
+  test('launch break severs a committed dunk chase immediately', () => {
+    const state = createInitialState();
+    state.players.P1.dunkStartup = 1;
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const input = neutralInput();
+    input.p2.breakLaunch = true;
+
+    step(state, input, FIXED_DT);
+
+    expect(state.players.P2.helpless).toBe(0);
+    expect(state.players.P2.lastLaunchedBy).toBeNull();
   });
 });
 
@@ -337,6 +566,160 @@ describe('launch recovery and spacing', () => {
     expect(state.players.P2.helpless).toBe(0);
   });
 
+  test('launch release speed ratio can preserve control loss at the same drift speed', () => {
+    const state = createInitialState();
+    state.tuning.helplessReleaseSpeedRatio = 0.05;
+    state.players.P2.helpless = 4;
+    state.players.P2.vel = { x: 6, y: 0 };
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P2.helpless).toBeGreaterThan(0);
+  });
+
+  test('natural control return preserves current movement when its reset scale is zero', () => {
+    const baseline = createInitialState();
+    const linked = createInitialState();
+    for (const state of [baseline, linked]) {
+      state.players.P1.pos = { x: -8, y: 0 };
+      state.players.P2.pos = { x: 8, y: 0 };
+      state.players.P2.vel = { x: 6, y: 0 };
+      state.players.P2.helpless = 4;
+      state.players.P1.chain = 1;
+      state.players.P1.chainTimer = 1;
+    }
+    linked.players.P2.lastLaunchedBy = 'P1';
+
+    step(baseline, neutralInput(), FIXED_DT);
+    step(linked, neutralInput(), FIXED_DT);
+
+    expect(linked.players.P1.pos).toEqual(baseline.players.P1.pos);
+    expect(linked.players.P2.pos).toEqual(baseline.players.P2.pos);
+    expect(linked.players.P1.vel).toEqual(baseline.players.P1.vel);
+    expect(linked.players.P2.vel).toEqual(baseline.players.P2.vel);
+    expect(linked.players.P1.chain).toBe(0);
+    expect(linked.players.P2.lastLaunchedBy).toBeNull();
+  });
+
+  test('natural recovery reset can create space when control returns inside pressure', () => {
+    const baseline = createInitialState();
+    const candidate = createInitialState();
+    candidate.tuning.naturalRecoveryResetMultiplier = 1;
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: -8, y: 0 };
+      state.players.P2.pos = { x: 8, y: 0 };
+      state.players.P1.vel = { x: 0, y: 0 };
+      state.players.P2.vel = { x: 6, y: 0 };
+      state.players.P2.helpless = 4;
+      state.players.P2.lastLaunchedBy = 'P1';
+    }
+
+    step(baseline, neutralInput(), FIXED_DT);
+    step(candidate, neutralInput(), FIXED_DT);
+
+    const baselineDistance = baseline.players.P2.pos.x - baseline.players.P1.pos.x;
+    const candidateDistance = candidate.players.P2.pos.x - candidate.players.P1.pos.x;
+    expect(candidateDistance).toBeGreaterThanOrEqual(26);
+    expect(candidateDistance).toBeGreaterThan(baselineDistance);
+    expect(candidate.players.P1.vel.x).toBeLessThan(0);
+    expect(candidate.players.P2.vel.x).toBeGreaterThan(baseline.players.P2.vel.x);
+  });
+
+  test('natural recovery reset does not add impulse after safe spacing is established', () => {
+    const baseline = createInitialState();
+    const candidate = createInitialState();
+    candidate.tuning.naturalRecoveryResetMultiplier = 0.5;
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: -20, y: 0 };
+      state.players.P2.pos = { x: 20, y: 0 };
+      state.players.P1.vel = { x: 0, y: 0 };
+      state.players.P2.vel = { x: 6, y: 0 };
+      state.players.P2.helpless = 4;
+      state.players.P2.lastLaunchedBy = 'P1';
+    }
+
+    step(baseline, neutralInput(), FIXED_DT);
+    step(candidate, neutralInput(), FIXED_DT);
+
+    expect(candidate.players.P1.pos).toEqual(baseline.players.P1.pos);
+    expect(candidate.players.P2.pos).toEqual(baseline.players.P2.pos);
+    expect(candidate.players.P1.vel).toEqual(baseline.players.P1.vel);
+    expect(candidate.players.P2.vel).toEqual(baseline.players.P2.vel);
+  });
+
+  test('character rules scale natural recovery reset without changing the global mechanic', () => {
+    const fullReset = createInitialState();
+    const duelist = createCharacterBalanceConfig('duelist');
+    duelist.stats.naturalRecoveryResetMultiplier = 0.5;
+    const reducedReset = createInitialState({ characterBalanceOverrides: { duelist } });
+    for (const state of [fullReset, reducedReset]) {
+      state.tuning.naturalRecoveryResetMultiplier = 1;
+      state.players.P1.pos = { x: -4, y: 0 };
+      state.players.P2.pos = { x: 4, y: 0 };
+      state.players.P1.vel = { x: 0, y: 0 };
+      state.players.P2.vel = { x: 6, y: 0 };
+      state.players.P2.helpless = 4;
+      state.players.P2.lastLaunchedBy = 'P1';
+    }
+
+    step(fullReset, neutralInput(), FIXED_DT);
+    step(reducedReset, neutralInput(), FIXED_DT);
+
+    const fullDistance = fullReset.players.P2.pos.x - fullReset.players.P1.pos.x;
+    const reducedDistance = reducedReset.players.P2.pos.x - reducedReset.players.P1.pos.x;
+    expect(fullDistance).toBeGreaterThanOrEqual(26);
+    expect(reducedDistance).toBeGreaterThanOrEqual(13);
+    expect(reducedDistance).toBeLessThan(fullDistance);
+  });
+
+  test('natural recovery does not grant free separation to a low-reserve finish target', () => {
+    const baseline = createInitialState();
+    const candidate = createInitialState();
+    candidate.tuning.naturalRecoveryResetMultiplier = 1;
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: -8, y: 0 };
+      state.players.P2.pos = { x: 8, y: 0 };
+      state.players.P1.vel = { x: 0, y: 0 };
+      state.players.P2.vel = { x: 6, y: 0 };
+      state.players.P2.fuel = state.players.P2.maxFuel * 0.1;
+      state.players.P2.helpless = 4;
+      state.players.P2.lastLaunchedBy = 'P1';
+    }
+
+    step(baseline, neutralInput(), FIXED_DT);
+    step(candidate, neutralInput(), FIXED_DT);
+
+    expect(candidate.players.P1.pos).toEqual(baseline.players.P1.pos);
+    expect(candidate.players.P2.pos).toEqual(baseline.players.P2.pos);
+    expect(candidate.players.P1.vel).toEqual(baseline.players.P1.vel);
+    expect(candidate.players.P2.vel).toEqual(baseline.players.P2.vel);
+  });
+
+  test('simultaneous natural returns apply one symmetric reset without player-order bias', () => {
+    const state = createInitialState();
+    state.tuning.naturalRecoveryResetMultiplier = 1;
+    for (const player of Object.values(state.players)) {
+      player.pos = { x: 0, y: 0 };
+      player.vel = { x: 0, y: 0 };
+      player.helpless = 4;
+      player.chain = 1;
+      player.chainTimer = 1;
+    }
+    state.players.P1.lastLaunchedBy = 'P2';
+    state.players.P2.lastLaunchedBy = 'P1';
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P1.pos.x).toBeCloseTo(-13);
+    expect(state.players.P2.pos.x).toBeCloseTo(13);
+    expect(state.players.P1.vel.x).toBeCloseTo(-14);
+    expect(state.players.P2.vel.x).toBeCloseTo(14);
+    expect(state.players.P1.lastLaunchedBy).toBeNull();
+    expect(state.players.P2.lastLaunchedBy).toBeNull();
+    expect(state.players.P1.chain).toBe(0);
+    expect(state.players.P2.chain).toBe(0);
+  });
+
   test('close-range neutral overlap applies separation so players do not stay stacked', () => {
     const state = createInitialState();
     state.players.P1.pos = { x: 0, y: 0 };
@@ -349,6 +732,136 @@ describe('launch recovery and spacing', () => {
     expect(state.players.P2.pos.x - state.players.P1.pos.x).toBeGreaterThan(1);
     expect(state.players.P1.vel.x).toBeLessThan(0);
     expect(state.players.P2.vel.x).toBeGreaterThan(0);
+  });
+
+  test('commit separation is disabled by default and can be enabled for local experiments', () => {
+    const baseline = createInitialState();
+    baseline.players.P1.pos = { x: 0, y: 0 };
+    baseline.players.P2.pos = { x: 1, y: 0 };
+    baseline.players.P1.launchStartup = 0.2;
+
+    step(baseline, neutralInput(), FIXED_DT);
+
+    expect(baseline.players.P2.pos.x - baseline.players.P1.pos.x).toBeCloseTo(1);
+
+    const candidate = createInitialState();
+    candidate.tuning.closeRangeSeparationPadding = 8;
+    candidate.tuning.closeRangeSeparationImpulse = 20;
+    candidate.tuning.closeRangeCommitSeparationMultiplier = 0.5;
+    candidate.players.P1.pos = { x: 0, y: 0 };
+    candidate.players.P2.pos = { x: 1, y: 0 };
+    candidate.players.P1.launchStartup = 0.2;
+
+    step(candidate, neutralInput(), FIXED_DT);
+
+    expect(candidate.players.P2.pos.x - candidate.players.P1.pos.x).toBeGreaterThan(8);
+    expect(candidate.players.P1.vel.x).toBeLessThan(0);
+    expect(candidate.players.P2.vel.x).toBeGreaterThan(0);
+  });
+
+  test('action recovery control can preserve recoil instead of letting held boost overwrite it', () => {
+    const createRecoveryState = () => {
+      const state = createInitialState();
+      state.players.P1.pos = { x: -8, y: 0 };
+      state.players.P2.pos = { x: 8, y: 0 };
+      state.players.P1.vel = { x: -40, y: 0 };
+      state.players.P1.endLag = 0.2;
+      return state;
+    };
+    const baseline = createRecoveryState();
+    const committed = createRecoveryState();
+    committed.tuning.actionRecoveryControlMultiplier = 0;
+    const input = neutralInput();
+    input.p1.moveX = 1;
+    input.p1.boost = true;
+
+    step(baseline, input, FIXED_DT);
+    step(committed, input, FIXED_DT);
+
+    expect(baseline.players.P1.vel.x).toBeGreaterThan(0);
+    expect(committed.players.P1.vel.x).toBeLessThan(0);
+    expect(committed.players.P1.boostActive).toBe(false);
+  });
+
+  test('default parry reset converts a successful defense into neutral space', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: -2, y: 0 };
+    state.players.P2.pos = { x: 2, y: 0 };
+    state.players.P1.launchActive = 0.12;
+    state.players.P2.parry = 0.12;
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P2.pos.x - state.players.P1.pos.x).toBeGreaterThanOrEqual(26);
+    expect(state.players.P1.stunned).toBeGreaterThan(0);
+    expect(state.players.P1.vel.x).toBeLessThan(0);
+    expect(state.players.P2.vel.x).toBeGreaterThan(0);
+  });
+
+  test('defense impulse still applies when fighters already exceed the configured reset distance', () => {
+    const baseline = createInitialState();
+    const candidate = createInitialState();
+    candidate.tuning.defensiveResetDistance = 4;
+    candidate.tuning.defensiveResetImpulse = 24;
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: -3, y: 0 };
+      state.players.P2.pos = { x: 3, y: 0 };
+      state.players.P1.launchActive = 0.12;
+      state.players.P2.parry = 0.12;
+    }
+
+    step(baseline, neutralInput(), FIXED_DT);
+    step(candidate, neutralInput(), FIXED_DT);
+
+    expect(candidate.players.P1.vel.x).toBeLessThan(baseline.players.P1.vel.x);
+    expect(candidate.players.P2.vel.x).toBeGreaterThan(baseline.players.P2.vel.x);
+  });
+
+  test('default launch break reset converts the resource spend into neutral space', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: -2, y: 0 };
+    state.players.P2.pos = { x: 2, y: 0 };
+    state.players.P1.vel = { x: 0, y: 0 };
+    state.players.P2.vel = { x: 0, y: 0 };
+    state.players.P1.helpless = 1;
+    state.players.P1.lastLaunchedBy = 'P2';
+    const input = neutralInput();
+    input.p1.breakLaunch = true;
+
+    step(state, input, FIXED_DT);
+
+    expect(state.players.P1.helpless).toBe(0);
+    expect(state.players.P2.pos.x - state.players.P1.pos.x).toBeGreaterThanOrEqual(26 * 1.1);
+    expect(state.players.P1.vel.x).toBeLessThan(0);
+    expect(state.players.P2.vel.x).toBeGreaterThan(0);
+  });
+
+  test('launch break reset scale can preserve parry spacing without moving a breaker', () => {
+    const baseline = createInitialState();
+    const candidate = createInitialState();
+    candidate.tuning.defensiveResetDistance = 28;
+    candidate.tuning.defensiveResetImpulse = 35;
+    candidate.tuning.launchBreakResetMultiplier = 0;
+    baseline.tuning.defensiveResetDistance = 0;
+    baseline.tuning.defensiveResetImpulse = 0;
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: -2, y: 0 };
+      state.players.P2.pos = { x: 2, y: 0 };
+      state.players.P1.vel = { x: 0, y: 0 };
+      state.players.P2.vel = { x: 0, y: 0 };
+      state.players.P1.helpless = 1;
+      state.players.P1.lastLaunchedBy = 'P2';
+    }
+    const input = neutralInput();
+    input.p1.breakLaunch = true;
+
+    step(baseline, input, FIXED_DT);
+    step(candidate, input, FIXED_DT);
+
+    expect(candidate.players.P1.pos).toEqual(baseline.players.P1.pos);
+    expect(candidate.players.P2.pos).toEqual(baseline.players.P2.pos);
+    expect(candidate.players.P1.vel).toEqual(baseline.players.P1.vel);
+    expect(candidate.players.P2.vel).toEqual(baseline.players.P2.vel);
   });
 
   test('simultaneous launch attempts clash and create a large spacing reset', () => {
@@ -365,6 +878,133 @@ describe('launch recovery and spacing', () => {
     expect(state.players.P2.pos.x - state.players.P1.pos.x).toBeGreaterThan(14);
     expect(state.players.P1.vel.x).toBeLessThan(0);
     expect(state.players.P2.vel.x).toBeGreaterThan(0);
+  });
+
+  test('clash distance and recoil are independently tunable', () => {
+    const createClashState = () => {
+      const state = createInitialState();
+      state.players.P1.pos = { x: -2.5, y: 0 };
+      state.players.P2.pos = { x: 2.5, y: 0 };
+      state.players.P1.launchActive = 0.12;
+      state.players.P2.launchActive = 0.12;
+      return state;
+    };
+    const baseline = createClashState();
+    const wider = createClashState();
+    const stronger = createClashState();
+    wider.tuning.launchClashSeparationPadding = 24;
+    stronger.tuning.launchClashRecoilMultiplier = 1;
+
+    step(baseline, neutralInput(), FIXED_DT);
+    step(wider, neutralInput(), FIXED_DT);
+    step(stronger, neutralInput(), FIXED_DT);
+
+    const baselineDistance = baseline.players.P2.pos.x - baseline.players.P1.pos.x;
+    const widerDistance = wider.players.P2.pos.x - wider.players.P1.pos.x;
+    const strongerDistance = stronger.players.P2.pos.x - stronger.players.P1.pos.x;
+    expect(widerDistance).toBeGreaterThan(baselineDistance);
+    expect(wider.players.P2.vel.x).toBeCloseTo(baseline.players.P2.vel.x);
+    expect(stronger.players.P2.vel.x).toBeGreaterThan(baseline.players.P2.vel.x);
+    expect(strongerDistance).toBeGreaterThan(baselineDistance);
+  });
+
+  test('startup clash grace lets near-simultaneous launch attempts trade', () => {
+    const state = createInitialState();
+    state.tuning.startupClashGraceSeconds = 0.033;
+    state.players.P1.pos = { x: -2.5, y: 0 };
+    state.players.P2.pos = { x: 2.5, y: 0 };
+    state.players.P1.launchActive = 0.12;
+    state.players.P2.launchStartup = 0.02;
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.players.P1.helpless).toBe(0);
+    expect(state.players.P2.helpless).toBe(0);
+    expect(state.players.P1.launchActive).toBe(0);
+    expect(state.players.P2.launchStartup).toBe(0);
+    expect(state.players.P2.pos.x - state.players.P1.pos.x).toBeGreaterThan(14);
+  });
+
+  test('startup clash grace uses frame-start state symmetrically for P1 and P2', () => {
+    const p1Active = createInitialState();
+    const p2Active = createInitialState();
+    for (const state of [p1Active, p2Active]) {
+      state.tuning.startupClashGraceSeconds = 0.033;
+      state.players.P1.pos = { x: -2.5, y: 0 };
+      state.players.P2.pos = { x: 2.5, y: 0 };
+    }
+    p1Active.players.P1.launchActive = 0.12;
+    p1Active.players.P2.launchStartup = 0.04;
+    p2Active.players.P1.launchStartup = 0.04;
+    p2Active.players.P2.launchActive = 0.12;
+
+    step(p1Active, neutralInput(), FIXED_DT);
+    step(p2Active, neutralInput(), FIXED_DT);
+
+    expect(p1Active.players.P1.chain).toBe(1);
+    expect(p1Active.players.P2.helpless).toBeGreaterThan(0);
+    expect(p2Active.players.P2.chain).toBe(1);
+    expect(p2Active.players.P1.helpless).toBeGreaterThan(0);
+  });
+
+  test('launch activation uses only frame-start clash state for both player orders', () => {
+    const p2Active = createInitialState();
+    const p1Active = createInitialState();
+    for (const state of [p2Active, p1Active]) {
+      state.tuning.startupClashGraceSeconds = 0;
+      state.players.P1.pos = { x: -2.5, y: 0 };
+      state.players.P2.pos = { x: 2.5, y: 0 };
+    }
+    p2Active.players.P1.launchStartup = 0.01;
+    p2Active.players.P2.launchActive = 0.12;
+    p1Active.players.P1.launchActive = 0.12;
+    p1Active.players.P2.launchStartup = 0.01;
+
+    step(p2Active, neutralInput(), FIXED_DT);
+    step(p1Active, neutralInput(), FIXED_DT);
+
+    expect(p2Active.players.P2.chain).toBe(1);
+    expect(p2Active.players.P1.helpless).toBeGreaterThan(0);
+    expect(p1Active.players.P1.chain).toBe(1);
+    expect(p1Active.players.P2.helpless).toBeGreaterThan(0);
+  });
+
+  test.each(['P1', 'P2'] as const)(
+    'resolves an active %s launch before the defender locomotion phase',
+    (attackerId) => {
+      const defenderId = attackerId === 'P1' ? 'P2' : 'P1';
+      const state = createInitialState();
+      state.players.P1.pos = { x: -2.5, y: 0 };
+      state.players.P2.pos = { x: 2.5, y: 0 };
+      state.players[attackerId].launchActive = 0.12;
+      const defenderFuel = state.players[defenderId].fuel;
+      const input = neutralInput();
+      input[defenderId === 'P1' ? 'p1' : 'p2'].moveY = 1;
+
+      step(state, input, FIXED_DT);
+
+      expect(state.players[defenderId].helpless).toBeGreaterThan(0);
+      expect(state.players[defenderId].fuel).toBe(defenderFuel);
+    },
+  );
+
+  test('uses action phase priority instead of player order for launch versus special', () => {
+    const direct = createInitialState({
+      loadout: { P1: 'vanguard', P2: 'duelist' },
+    });
+    direct.players.P1.pos = { x: -2.5, y: 0 };
+    direct.players.P2.pos = { x: 2.5, y: 0 };
+    direct.players.P1.launchActive = 0.12;
+    direct.players.P2.specialActive = 0.12;
+    direct.players.P2.specialDidResolve = false;
+    const mirrored = mirrorStateForPlayerSwap(direct);
+
+    step(direct, neutralInput(), FIXED_DT);
+    step(mirrored, neutralInput(), FIXED_DT);
+
+    expect(canonicalSymmetryState(mirrorStateForPlayerSwap(mirrored))).toEqual(
+      canonicalSymmetryState(direct),
+    );
   });
 
   test('boost keeps its original chase line instead of retargeting every frame', () => {
@@ -444,6 +1084,40 @@ describe('deterministic seed and rng', () => {
 
     expect(checksumSequenceA).toEqual(checksumSequenceB);
   });
+
+  test('checksum includes global tuning and local character rules', () => {
+    const baseline = createInitialState({ seed: 424243 });
+    const changedTuning = createInitialState({ seed: 424243 });
+    changedTuning.tuning.launchBasePower += 1;
+
+    const vanguard = createCharacterBalanceConfig('vanguard');
+    vanguard.moves.dunk.hitRange += 0.5;
+    const changedCharacter = createInitialState({
+      seed: 424243,
+      characterBalanceOverrides: { vanguard },
+    });
+
+    expect(computeStateChecksum(changedTuning)).not.toBe(computeStateChecksum(baseline));
+    expect(computeStateChecksum(changedCharacter)).not.toBe(computeStateChecksum(baseline));
+  });
+
+  test('local character rules drive move timing without mutating the package registry', () => {
+    const packageStartup = CHARACTER_BY_ID.vanguard.moves.launch.startupFrames;
+    const vanguard = createCharacterBalanceConfig('vanguard');
+    vanguard.moves.launch.startupFrames = 1;
+    vanguard.stats.fuelCapacityMultiplier = 1.4;
+    const state = createInitialState({ characterBalanceOverrides: { vanguard } });
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 5, y: 0 };
+    const input = neutralInput();
+    input.p1.launch = true;
+
+    step(state, input, FIXED_DT);
+
+    expect(state.players.P1.launchStartup).toBeCloseTo(framesToSeconds(1));
+    expect(state.players.P1.maxFuel).toBeCloseTo(MAX_FUEL * 1.4);
+    expect(CHARACTER_BY_ID.vanguard.moves.launch.startupFrames).toBe(packageStartup);
+  });
 });
 
 describe('state snapshot and restore', () => {
@@ -466,6 +1140,9 @@ describe('state snapshot and restore', () => {
     });
     state.loadout.P1 = 'ace';
     state.tuning.playerMoveAccel += 5;
+    const vanguardOverride = createCharacterBalanceConfig('vanguard');
+    vanguardOverride.moves.dunk.hitRange += 1;
+    state.characterBalanceOverrides.vanguard = vanguardOverride;
     state.rngState = 42;
 
     expect(snapshot.players.P1.pos.x).not.toBe(state.players.P1.pos.x);
@@ -473,6 +1150,7 @@ describe('state snapshot and restore', () => {
     expect(snapshot.projectiles.length).toBe(0);
     expect(snapshot.loadout.P1).toBe('vanguard');
     expect(snapshot.tuning.playerMoveAccel).not.toBe(state.tuning.playerMoveAccel);
+    expect(snapshot.characterBalanceOverrides.vanguard).toBeUndefined();
     expect(snapshot.rngState).not.toBe(state.rngState);
   });
 
@@ -502,6 +1180,47 @@ describe('state snapshot and restore', () => {
     expect(restoredChecksum).toBe(expectedChecksum);
   });
 
+  test('restore preserves finite custom tuning exactly instead of applying editor clamps', () => {
+    const state = createInitialState({ seed: 90210 });
+    state.tuning.defensiveResetImpulse = 151;
+    state.tuning.playerMoveAccel = 0.25;
+    const snapshot = createStateSnapshot(state);
+
+    const restored = restoreStateFromSnapshot(snapshot);
+
+    expect(restored.tuning.defensiveResetImpulse).toBe(151);
+    expect(restored.tuning.playerMoveAccel).toBe(0.25);
+    expect(computeStateChecksum(restored)).toBe(computeStateChecksum(state));
+  });
+
+  test('exposes deterministic presentation actions for sprite startup and active tells', () => {
+    const state = createInitialState({ seed: 8102 });
+    expect(getRenderSnapshot(state).players.P1).toMatchObject({
+      presentationAction: 'idle',
+      presentationPhase: 'none',
+    });
+
+    state.players.P1.launchStartup = 0.1;
+    expect(getRenderSnapshot(state).players.P1).toMatchObject({
+      presentationAction: 'launch',
+      presentationPhase: 'startup',
+    });
+
+    state.players.P1.launchStartup = 0;
+    state.players.P1.launchActive = 0.05;
+    expect(getRenderSnapshot(state).players.P1).toMatchObject({
+      presentationAction: 'launch',
+      presentationPhase: 'active',
+    });
+
+    state.players.P1.launchActive = 0;
+    state.players.P1.helpless = 0.3;
+    expect(getRenderSnapshot(state).players.P1).toMatchObject({
+      presentationAction: 'helpless',
+      presentationPhase: 'sustain',
+    });
+  });
+
   test('serialise and deserialise round-trip keeps state checksum', () => {
     const state = createInitialState({ seed: 9988 });
     for (let frame = 0; frame < 90; frame += 1) {
@@ -525,6 +1244,40 @@ describe('state snapshot and restore', () => {
     const legacyPayload = JSON.stringify(createStateSnapshot(state));
     const restored = deserialiseState(legacyPayload);
     expect(computeStateChecksum(restored)).toBe(computeStateChecksum(state));
+  });
+
+  test('deserialise v1 snapshots without character overrides as package-default state', () => {
+    const state = createStateSnapshot(createInitialState({ seed: 2024 }));
+    const legacyState = { ...state } as Partial<typeof state>;
+    delete legacyState.characterBalanceOverrides;
+    const restored = deserialiseState(JSON.stringify({ version: 1, state: legacyState }));
+
+    expect(restored.characterBalanceOverrides).toEqual({});
+    expect(restored.players.P1.maxFuel).toBe(state.players.P1.maxFuel);
+  });
+
+  test('deserialise fills new flow controls into older tuning snapshots', () => {
+    const state = createStateSnapshot(createInitialState({ seed: 2026 }));
+    const legacyTuning = { ...state.tuning } as Partial<typeof state.tuning>;
+    delete legacyTuning.helplessReleaseSpeedRatio;
+    delete legacyTuning.actionRecoveryControlMultiplier;
+    delete legacyTuning.startupClashGraceSeconds;
+    delete legacyTuning.launchClashSeparationPadding;
+    delete legacyTuning.launchClashRecoilMultiplier;
+    delete legacyTuning.closeRangeSeparationPadding;
+    delete legacyTuning.closeRangeSeparationImpulse;
+    delete legacyTuning.closeRangeCommitSeparationMultiplier;
+    delete legacyTuning.defensiveResetDistance;
+    delete legacyTuning.defensiveResetImpulse;
+    delete legacyTuning.launchBreakResetMultiplier;
+    delete legacyTuning.naturalRecoveryResetMultiplier;
+
+    const restored = deserialiseState(JSON.stringify({
+      version: STATE_SNAPSHOT_VERSION,
+      state: { ...state, tuning: legacyTuning },
+    }));
+
+    expect(restored.tuning).toEqual(createDefaultTuning());
   });
 
   test('deserialise rejects unsupported snapshot envelope versions', () => {

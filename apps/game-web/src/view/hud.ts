@@ -15,6 +15,7 @@ interface HudElements {
   p1InputHistory: HTMLDivElement;
   p2InputHistory: HTMLDivElement;
   matchTelemetry: HTMLDivElement;
+  analysisToggle: HTMLButtonElement;
   voiceSubtitle: HTMLDivElement;
 }
 
@@ -26,7 +27,7 @@ export interface RollbackDiagnosticsView {
   maxRollbackDepth: number;
   lastRollbackDepth: number;
   lastRollbackFromFrame: number | null;
-  desyncEventCount: number;
+  correctionEventCount: number;
 }
 
 export interface RuntimeMemoryDiagnosticsView {
@@ -57,6 +58,23 @@ export interface HudController {
 }
 
 const MAX_BREAK_ICONS = 3;
+const ANALYSIS_HUD_STORAGE_KEY = 'gravity_well.analysis_hud.hidden.v1';
+
+function readAnalysisHudHidden(): boolean {
+  try {
+    return sessionStorage.getItem(ANALYSIS_HUD_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function storeAnalysisHudHidden(hidden: boolean): void {
+  try {
+    sessionStorage.setItem(ANALYSIS_HUD_STORAGE_KEY, String(hidden));
+  } catch {
+    // Analysis HUD visibility is non-critical when storage is unavailable.
+  }
+}
 
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
@@ -101,6 +119,12 @@ export function createHud(): HudController {
   matchTelemetry.hidden = true;
   root.appendChild(matchTelemetry);
 
+  const analysisToggle = document.createElement('button');
+  analysisToggle.type = 'button';
+  analysisToggle.className = 'analysis-hud-toggle';
+  analysisToggle.hidden = true;
+  root.appendChild(analysisToggle);
+
   const voiceSubtitle = document.createElement('div');
   voiceSubtitle.className = 'voice-subtitle';
   voiceSubtitle.hidden = true;
@@ -117,6 +141,7 @@ export function createHud(): HudController {
     p1InputHistory,
     p2InputHistory,
     matchTelemetry,
+    analysisToggle,
     voiceSubtitle,
   };
   elements.frameData.hidden = true;
@@ -125,6 +150,25 @@ export function createHud(): HudController {
   let voiceSubtitlesEnabled = true;
   let subtitleHideAtSeconds = 0;
   let frameDataCharacterSignature = '';
+  let inputHistoryRequested = false;
+  let matchTelemetryRequested = false;
+  let analysisHudHidden = readAnalysisHudHidden();
+
+  function syncAnalysisHudVisibility(): void {
+    const analysisRequested = inputHistoryRequested || matchTelemetryRequested;
+    elements.analysisToggle.hidden = !analysisRequested;
+    elements.analysisToggle.textContent = analysisHudHidden ? 'Show Analysis HUD' : 'Hide Analysis HUD';
+    elements.analysisToggle.setAttribute('aria-expanded', String(!analysisHudHidden));
+    elements.p1InputHistory.hidden = !inputHistoryRequested || analysisHudHidden;
+    elements.p2InputHistory.hidden = !inputHistoryRequested || analysisHudHidden;
+    elements.matchTelemetry.hidden = !matchTelemetryRequested || analysisHudHidden;
+  }
+
+  elements.analysisToggle.addEventListener('click', () => {
+    analysisHudHidden = !analysisHudHidden;
+    storeAnalysisHudHidden(analysisHudHidden);
+    syncAnalysisHudVisibility();
+  });
 
   function renderInputHistoryPanel(
     element: HTMLDivElement,
@@ -168,11 +212,12 @@ export function createHud(): HudController {
       elements.rollbackDiagnostics.hidden = !visible;
     },
     setInputHistoryVisible(visible: boolean): void {
-      elements.p1InputHistory.hidden = !visible;
-      elements.p2InputHistory.hidden = !visible;
+      inputHistoryRequested = visible;
+      syncAnalysisHudVisibility();
     },
     setMatchTelemetryVisible(visible: boolean): void {
-      elements.matchTelemetry.hidden = !visible;
+      matchTelemetryRequested = visible;
+      syncAnalysisHudVisibility();
     },
     setVoiceSubtitlesEnabled(enabled: boolean): void {
       voiceSubtitlesEnabled = enabled;
@@ -205,15 +250,19 @@ export function createHud(): HudController {
 
       const playerRows = (label: 'P1' | 'P2', accentClass: 'p1' | 'p2') => {
         const player = summary.players[label];
+        const movement = player.movementIntent;
+        const percent = (frames: number, total: number): number => Math.round(frames / Math.max(1, total) * 100);
         return `
           <div class="match-telemetry-column ${accentClass}">
             <div class="player-title">${label}</div>
-            <div class="row">L ${player.launchPresses}/${player.launchHits} | Dk ${player.dunkPresses}/${player.dunkHits}</div>
-            <div class="row">Acc ${player.launchAccuracy.toFixed(2)} | DkConv ${player.dunkConversionRate.toFixed(2)} | Clash ${player.clashCount}</div>
-            <div class="row">SP ${player.specialPresses}/${player.specialResolves} | P ${player.parryPresses}</div>
+            <div class="row">L ${player.launchStarts}/${player.launchHits} | Dk ${player.dunkStarts}/${player.dunkHits}</div>
+            <div class="row">LConv ${player.launchConversionRate.toFixed(2)} | DkConv ${player.dunkConversionRate.toFixed(2)} | Clash ${player.clashCount}</div>
+            <div class="row">SP ${player.specialStarts}/${player.specialResolves} | P ${player.parryStarts}</div>
             <div class="row">Br ${player.breakPresses}/${player.breakEscapes} @ ${player.averageBreakReactionSeconds.toFixed(2)}s</div>
-            <div class="row">Boost ${player.boostFrames} | SB ${player.superBoostFrames}</div>
-            <div class="row">Projectiles ${player.projectilesSpawned}</div>
+            <div class="row">Boost ${player.boostStarts}/${player.boostFrames}f | SB ${player.superBoostStarts}/${player.superBoostFrames}f</div>
+            <div class="row">Proj ${player.projectilesSpawned}/${player.projectileImpacts} impact</div>
+            <div class="row">Move A/O/D/I ${percent(movement.approachFrames, movement.controllableFrames)}/${percent(movement.orbitFrames, movement.controllableFrames)}/${percent(movement.retreatFrames, movement.controllableFrames)}/${percent(movement.idleFrames, movement.controllableFrames)}%</div>
+            <div class="row">Both-active close A/D ${percent(movement.contestedPointBlankApproachFrames, movement.contestedPointBlankFrames)}/${percent(movement.contestedPointBlankRetreatFrames, movement.contestedPointBlankFrames)}%</div>
           </div>
         `;
       };
@@ -245,7 +294,7 @@ export function createHud(): HudController {
         rows.push(
           `<div class="row">Frames: ${diagnostics.totalFramesSimulated} | Predicted remote: ${diagnostics.predictedRemoteFrames} (${predictedRatio}%) | Authoritative remote: ${diagnostics.authoritativeRemoteFrames}</div>`,
           `<div class="row">Rollbacks: ${diagnostics.totalRollbacks} | Max depth: ${diagnostics.maxRollbackDepth} | Last depth: ${diagnostics.lastRollbackDepth}</div>`,
-          `<div class="row">Last rollback frame: ${diagnostics.lastRollbackFromFrame ?? '-'} | Desync events: ${diagnostics.desyncEventCount}</div>`,
+          `<div class="row">Last rollback frame: ${diagnostics.lastRollbackFromFrame ?? '-'} | State corrections: ${diagnostics.correctionEventCount}</div>`,
         );
       } else {
         rows.push('<div class="row">Rollback session inactive.</div>');

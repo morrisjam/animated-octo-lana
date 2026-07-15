@@ -16,6 +16,12 @@ export interface StageAtmosphereTokens {
   keyLightPositionX: number;
   keyLightPositionY: number;
   keyLightPositionZ: number;
+  cameraPitchDegrees: number;
+  cameraLaunchPitchBoostDegrees: number;
+  cameraLookAtYOffset: number;
+  arenaMouthOpacity: number;
+  arenaRimOpacity: number;
+  arenaDepthTickOpacity: number;
   gravityWellColor: string;
   gravityWellEmissive: string;
   gravityWellEmissiveIntensity: number;
@@ -33,8 +39,11 @@ export interface StageAtmosphereTokens {
   backgroundEffectTint: string;
   backgroundEffectSecondaryTint: string;
   backgroundEffectOpacity: number;
+  backgroundEffectCoreOpacity: number;
+  backgroundEffectFarFade: number;
   backgroundEffectSpeed: number;
   backgroundEffectScale: number;
+  backgroundEffectDepthTravel: number;
 }
 
 export interface StageAtmospherePreset {
@@ -51,6 +60,7 @@ export interface StageAtmosphereOption {
 }
 
 export const DEFAULT_STAGE_ATMOSPHERE_ID = 'default';
+export const ONLINE_ALPHA_STAGE_ATMOSPHERE_ID = 'wormhole_depths_v2';
 
 const DEFAULT_STAGE_ATMOSPHERE_TOKENS: StageAtmosphereTokens = {
   sceneBackgroundColor: '#040816',
@@ -64,6 +74,12 @@ const DEFAULT_STAGE_ATMOSPHERE_TOKENS: StageAtmosphereTokens = {
   keyLightPositionX: 24,
   keyLightPositionY: 16,
   keyLightPositionZ: 35,
+  cameraPitchDegrees: 8,
+  cameraLaunchPitchBoostDegrees: 1.5,
+  cameraLookAtYOffset: 2.2,
+  arenaMouthOpacity: 0,
+  arenaRimOpacity: 0.12,
+  arenaDepthTickOpacity: 0.16,
   gravityWellColor: '#7f3fff',
   gravityWellEmissive: '#5b1fcf',
   gravityWellEmissiveIntensity: 1.2,
@@ -81,8 +97,11 @@ const DEFAULT_STAGE_ATMOSPHERE_TOKENS: StageAtmosphereTokens = {
   backgroundEffectTint: '#8fb7ff',
   backgroundEffectSecondaryTint: '#7f66ff',
   backgroundEffectOpacity: 0.6,
+  backgroundEffectCoreOpacity: 0.14,
+  backgroundEffectFarFade: 0.46,
   backgroundEffectSpeed: 1,
   backgroundEffectScale: 1,
+  backgroundEffectDepthTravel: 0,
 };
 
 function mergeTokens(overrides: StageAtmospherePresetTokenOverrides): StageAtmosphereTokens {

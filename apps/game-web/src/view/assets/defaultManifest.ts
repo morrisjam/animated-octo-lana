@@ -1,6 +1,6 @@
 import type { AssetManifest } from './types';
 
-// Placeholder manifest to exercise preloading flow until concrete art/audio packs land.
+// Mixed alpha assets and explicit prototype placeholders. Omitted readiness is prototype.
 export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
   models: [
     {
@@ -34,6 +34,24 @@ export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
   ],
   sprites: [
     {
+      id: 'character_vanguard_animset',
+      src: new URL('../sprites/vanguard-alpha-atlas.svg', import.meta.url).href,
+      readiness: 'alpha',
+      budget: {
+        estimatedBytes: 12 * 1024,
+        estimatedTextureBytes: 512 * 256 * 4,
+      },
+    },
+    {
+      id: 'character_duelist_animset',
+      src: new URL('../sprites/duelist-alpha-atlas.svg', import.meta.url).href,
+      readiness: 'alpha',
+      budget: {
+        estimatedBytes: 12 * 1024,
+        estimatedTextureBytes: 512 * 256 * 4,
+      },
+    },
+    {
       id: 'fighter_placeholder_sprite',
       src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==',
       budget: {
@@ -42,6 +60,24 @@ export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
     },
   ],
   textures: [
+    {
+      id: 'character_vanguard_portrait',
+      src: new URL('../sprites/vanguard-alpha-portrait.svg', import.meta.url).href,
+      readiness: 'alpha',
+      budget: {
+        estimatedBytes: 8 * 1024,
+        estimatedTextureBytes: 256 * 256 * 4,
+      },
+    },
+    {
+      id: 'character_duelist_portrait',
+      src: new URL('../sprites/duelist-alpha-portrait.svg', import.meta.url).href,
+      readiness: 'alpha',
+      budget: {
+        estimatedBytes: 8 * 1024,
+        estimatedTextureBytes: 256 * 256 * 4,
+      },
+    },
     {
       id: 'arena_placeholder_texture',
       src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==',

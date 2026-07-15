@@ -135,17 +135,17 @@ function createPackagePayload(args: NewCharacterArgs): Record<string, unknown> {
       dunkRecoveryFuelMultiplier: 1,
     },
     visuals: {
-      presentation: '3d',
-      modelId: `${idPrefix}_model`,
+      presentation: 'sprite',
+      modelId: null,
       animationSetId: `${idPrefix}_animset`,
-      vfxProfileId: `${idPrefix}_vfx`,
-      projectileVisualId: `${idPrefix}_projectile`,
+      vfxProfileId: null,
+      projectileVisualId: null,
       hudPortraitId: `${idPrefix}_portrait`,
     },
     audio: {
-      sfxProfileId: `${idPrefix}_sfx`,
+      sfxProfileId: null,
       voiceProfileId: `${idPrefix}_voice`,
-      musicThemeId: `${idPrefix}_theme`,
+      musicThemeId: null,
     },
     moves: {
       launch: {
@@ -160,6 +160,8 @@ function createPackagePayload(args: NewCharacterArgs): Record<string, unknown> {
         recoveryOnHitFrames: 24,
         recoveryOnWhiffFrames: 66,
         hitRange: 8,
+        startupPursuitSpeed: 58,
+        startupTracking: 0.18,
       },
       parry: {
         startupFrames: 0,

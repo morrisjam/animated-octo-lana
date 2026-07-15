@@ -1,5 +1,46 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadRuntimeConfig } from './features';
+import { loadRuntimeConfig, shouldEnableOnlineDiagnostics } from './features';
+
+describe('shouldEnableOnlineDiagnostics', () => {
+  it('honours the deployment flag outside development', () => {
+    expect(shouldEnableOnlineDiagnostics({
+      platformKind: 'web',
+      configuredEnabled: true,
+      queryOverride: null,
+      developmentBuild: false,
+    })).toBe(true);
+  });
+
+  it('allows a query-only opt-in only in a development build', () => {
+    expect(shouldEnableOnlineDiagnostics({
+      platformKind: 'web',
+      configuredEnabled: false,
+      queryOverride: '1',
+      developmentBuild: true,
+    })).toBe(true);
+    expect(shouldEnableOnlineDiagnostics({
+      platformKind: 'web',
+      configuredEnabled: false,
+      queryOverride: '1',
+      developmentBuild: false,
+    })).toBe(false);
+  });
+
+  it('allows an explicit query opt-out and never enables the web overlay on Steam', () => {
+    expect(shouldEnableOnlineDiagnostics({
+      platformKind: 'web',
+      configuredEnabled: true,
+      queryOverride: '0',
+      developmentBuild: false,
+    })).toBe(false);
+    expect(shouldEnableOnlineDiagnostics({
+      platformKind: 'steam',
+      configuredEnabled: true,
+      queryOverride: null,
+      developmentBuild: true,
+    })).toBe(false);
+  });
+});
 
 describe('loadRuntimeConfig', () => {
   afterEach(() => {

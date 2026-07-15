@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  SteamAccountLinkError,
   logIdentityLinkEvent,
-  mergeAccountIntoTarget,
+  resolveSteamAccountLink,
   type SqlClient,
 } from './steamLinkService';
 
@@ -32,194 +33,234 @@ class ScriptedSqlClient implements SqlClient {
   }
 
   assertComplete(): void {
-    assert.equal(this.steps.length, 0, `Expected all scripted queries to be consumed, pending: ${this.steps.length}`);
+    assert.equal(this.steps.length, 0, `Pending scripted queries: ${this.steps.length}`);
   }
 }
 
-function findCalls(client: ScriptedSqlClient, contains: string): Array<{ text: string; values: unknown[] | undefined }> {
-  return client.calls.filter((call) => call.text.includes(contains));
-}
+const webAccountId = '11111111-1111-4111-8111-111111111111';
+const steamAccountId = '22222222-2222-4222-8222-222222222222';
+const steamUserId = '76561198012345678';
 
-test('logIdentityLinkEvent writes audit row with metadata json', async () => {
-  const client = new ScriptedSqlClient([
-    { contains: 'INSERT INTO identity_link_events' },
-  ]);
+test('logIdentityLinkEvent writes an auditable metadata payload', async () => {
+  const client = new ScriptedSqlClient([{ contains: 'INSERT INTO identity_link_events' }]);
   await logIdentityLinkEvent(client, {
-    accountId: '11111111-1111-4111-8111-111111111111',
+    accountId: webAccountId,
     provider: 'steam',
-    providerUserId: '76561198012345678',
+    providerUserId: steamUserId,
     eventType: 'linked',
-    actor: 'system',
-    metadata: { reason: 'steam_first_signin_create_account' },
+    actor: webAccountId,
+    metadata: { reason: 'explicit_authenticated_steam_link' },
   });
   client.assertComplete();
-  assert.equal(client.calls.length, 1);
-  assert.equal(client.calls[0].values?.[0], '11111111-1111-4111-8111-111111111111');
-  assert.equal(client.calls[0].values?.[1], 'steam');
-  assert.equal(client.calls[0].values?.[2], '76561198012345678');
-  assert.equal(client.calls[0].values?.[3], 'linked');
-  assert.equal(client.calls[0].values?.[4], 'system');
-  assert.equal(client.calls[0].values?.[5], JSON.stringify({ reason: 'steam_first_signin_create_account' }));
+  assert.deepEqual(client.calls[0].values, [
+    webAccountId,
+    'steam',
+    steamUserId,
+    'linked',
+    webAccountId,
+    JSON.stringify({ reason: 'explicit_authenticated_steam_link' }),
+  ]);
 });
 
-test('mergeAccountIntoTarget transfers web identity, credentials, and profile when safe', async () => {
-  const sourceAccountId = '11111111-1111-4111-8111-111111111111';
-  const targetAccountId = '22222222-2222-4222-8222-222222222222';
-  const actorAccountId = '33333333-3333-4333-8333-333333333333';
-
+test('first Steam sign-in creates an account and links its verified identity', async () => {
   const client = new ScriptedSqlClient([
-    { contains: 'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE', rowCount: 1, rows: [{ id: sourceAccountId, status: 'active' }] },
-    { contains: 'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE', rowCount: 1, rows: [{ id: targetAccountId, status: 'active' }] },
-    { contains: `SELECT 1 FROM identities WHERE account_id = $1 AND provider = 'web' LIMIT 1`, rowCount: 0, rows: [] },
-    { contains: 'SELECT id, provider_user_id', rowCount: 1, rows: [{ id: 41, provider_user_id: 'web_user_1' }] },
-    { contains: 'UPDATE identities SET account_id = $1 WHERE id = $2' },
+    { contains: 'pg_advisory_xact_lock' },
+    { contains: "WHERE i.provider = 'steam'", rowCount: 0 },
+    { contains: 'INSERT INTO accounts', rowCount: 1, rows: [{ id: steamAccountId }] },
+    { contains: 'INSERT INTO identities' },
     { contains: 'INSERT INTO identity_link_events' },
-    { contains: 'SELECT id, provider, provider_user_id', rowCount: 0, rows: [] },
-    { contains: 'SELECT 1 FROM web_auth_credentials WHERE account_id = $1 LIMIT 1', rowCount: 0, rows: [] },
-    { contains: 'SELECT account_id FROM web_auth_credentials WHERE account_id = $1 LIMIT 1 FOR UPDATE', rowCount: 1, rows: [{ account_id: sourceAccountId }] },
-    { contains: 'UPDATE web_auth_credentials SET account_id = $1 WHERE account_id = $2' },
-    { contains: 'SELECT display_name, settings_json FROM profiles WHERE account_id = $1 LIMIT 1 FOR UPDATE', rowCount: 1, rows: [{ display_name: 'Source', settings_json: { input: 'legacy' } }] },
-    { contains: 'SELECT account_id, display_name, settings_json FROM profiles WHERE account_id = $1 LIMIT 1 FOR UPDATE', rowCount: 0, rows: [] },
-    { contains: 'UPDATE profiles SET account_id = $1 WHERE account_id = $2' },
-    { contains: 'UPDATE accounts' },
-    { contains: 'INSERT INTO account_merge_events' },
   ]);
 
-  const result = await mergeAccountIntoTarget(client, sourceAccountId, targetAccountId, actorAccountId);
-  client.assertComplete();
-
-  assert.deepEqual(result, {
-    merged: true,
-    transferredWebIdentity: true,
-    transferredWebCredential: true,
-    mergedProfile: true,
+  const result = await resolveSteamAccountLink(client, {
+    steamUserId,
+    authenticatedAccountId: null,
+    linkToAuthenticatedAccount: false,
   });
 
-  const identityEventCalls = findCalls(client, 'INSERT INTO identity_link_events');
-  assert.equal(identityEventCalls.length, 1);
-  const identityValues = identityEventCalls[0].values ?? [];
-  assert.equal(identityValues[0], targetAccountId);
-  assert.equal(identityValues[1], 'web');
-  assert.equal(identityValues[3], 'linked');
-  assert.equal(identityValues[4], actorAccountId);
+  client.assertComplete();
+  assert.deepEqual(result, {
+    accountId: steamAccountId,
+    createdAccount: true,
+    linkedToExistingAccount: false,
+    identityAlreadyLinked: false,
+  });
+  assert.deepEqual(client.calls[3].values, [steamAccountId, steamUserId]);
   assert.equal(
-    identityValues[5],
-    JSON.stringify({
-      reason: 'merge_transfer_web_identity',
-      sourceAccountId,
-    }),
-  );
-
-  const mergeEventCalls = findCalls(client, 'INSERT INTO account_merge_events');
-  assert.equal(mergeEventCalls.length, 1);
-  const mergeValues = mergeEventCalls[0].values ?? [];
-  assert.equal(mergeValues[0], sourceAccountId);
-  assert.equal(mergeValues[1], targetAccountId);
-  assert.equal(mergeValues[2], actorAccountId);
-  assert.equal(mergeValues[3], 'steam_link_merge');
-  assert.equal(
-    mergeValues[4],
-    JSON.stringify({
-      transferredWebIdentity: true,
-      transferredWebCredential: true,
-      mergedProfile: true,
-    }),
+    client.calls[4].values?.[5],
+    JSON.stringify({ reason: 'steam_first_signin_create_account' }),
   );
 });
 
-test('mergeAccountIntoTarget discards duplicate source identities and records unlink audit events', async () => {
-  const sourceAccountId = '11111111-1111-4111-8111-111111111111';
-  const targetAccountId = '22222222-2222-4222-8222-222222222222';
-
+test('explicit linking preserves the authenticated account and adds only the Steam identity', async () => {
   const client = new ScriptedSqlClient([
-    { contains: 'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE', rowCount: 1, rows: [{ id: sourceAccountId, status: 'active' }] },
-    { contains: 'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE', rowCount: 1, rows: [{ id: targetAccountId, status: 'active' }] },
-    { contains: `SELECT 1 FROM identities WHERE account_id = $1 AND provider = 'web' LIMIT 1`, rowCount: 1, rows: [{ exists: 1 }] },
-    { contains: 'SELECT id, provider_user_id', rowCount: 1, rows: [{ id: 51, provider_user_id: 'web_user_2' }] },
-    { contains: 'DELETE FROM identities WHERE id = $1' },
+    { contains: 'pg_advisory_xact_lock' },
+    { contains: "WHERE i.provider = 'steam'", rowCount: 0 },
+    { contains: 'SELECT id, status FROM accounts', rowCount: 1, rows: [{ id: webAccountId, status: 'active' }] },
+    { contains: "WHERE account_id = $1 AND provider = 'steam'", rowCount: 0 },
+    { contains: 'INSERT INTO identities' },
     { contains: 'INSERT INTO identity_link_events' },
-    { contains: 'SELECT id, provider, provider_user_id', rowCount: 1, rows: [{ id: 52, provider: 'steam', provider_user_id: '76561198099999999' }] },
-    { contains: 'DELETE FROM identities WHERE id = $1' },
-    { contains: 'INSERT INTO identity_link_events' },
-    { contains: 'SELECT 1 FROM web_auth_credentials WHERE account_id = $1 LIMIT 1', rowCount: 1, rows: [{ exists: 1 }] },
-    { contains: 'SELECT account_id FROM web_auth_credentials WHERE account_id = $1 LIMIT 1 FOR UPDATE', rowCount: 1, rows: [{ account_id: sourceAccountId }] },
-    { contains: 'DELETE FROM web_auth_credentials WHERE account_id = $1' },
-    { contains: 'SELECT display_name, settings_json FROM profiles WHERE account_id = $1 LIMIT 1 FOR UPDATE', rowCount: 0, rows: [] },
-    { contains: 'UPDATE accounts' },
-    { contains: 'INSERT INTO account_merge_events' },
   ]);
 
-  const result = await mergeAccountIntoTarget(client, sourceAccountId, targetAccountId, null);
-  client.assertComplete();
-
-  assert.deepEqual(result, {
-    merged: true,
-    transferredWebIdentity: false,
-    transferredWebCredential: false,
-    mergedProfile: false,
+  const result = await resolveSteamAccountLink(client, {
+    steamUserId,
+    authenticatedAccountId: webAccountId,
+    linkToAuthenticatedAccount: true,
   });
 
-  const identityEventCalls = findCalls(client, 'INSERT INTO identity_link_events');
-  assert.equal(identityEventCalls.length, 2);
-  const firstMetadata = (identityEventCalls[0].values?.[5] as string) ?? '';
-  const secondMetadata = (identityEventCalls[1].values?.[5] as string) ?? '';
-  assert.ok(firstMetadata.includes('merge_discard_duplicate_web_identity'));
-  assert.ok(secondMetadata.includes('merge_discard_non_web_identity'));
-  assert.ok(secondMetadata.includes(targetAccountId));
-
-  const mergeEventCalls = findCalls(client, 'INSERT INTO account_merge_events');
-  assert.equal(mergeEventCalls.length, 1);
-  const mergeMetadata = (mergeEventCalls[0].values?.[4] as string) ?? '';
+  client.assertComplete();
+  assert.deepEqual(result, {
+    accountId: webAccountId,
+    createdAccount: false,
+    linkedToExistingAccount: true,
+    identityAlreadyLinked: false,
+  });
+  assert.equal(client.calls.some((call) => call.text.includes('UPDATE accounts')), false);
+  assert.equal(client.calls.some((call) => call.text.includes('DELETE FROM')), false);
+  assert.deepEqual(client.calls[4].values, [webAccountId, steamUserId]);
   assert.equal(
-    mergeMetadata,
-    JSON.stringify({
-      transferredWebIdentity: false,
-      transferredWebCredential: false,
-      mergedProfile: false,
+    client.calls[5].values?.[5],
+    JSON.stringify({ reason: 'explicit_authenticated_steam_link' }),
+  );
+});
+
+test('existing Steam sign-in is idempotent and creates no account mutations', async () => {
+  const client = new ScriptedSqlClient([
+    { contains: 'pg_advisory_xact_lock' },
+    {
+      contains: "WHERE i.provider = 'steam'",
+      rowCount: 1,
+      rows: [{ account_id: steamAccountId, status: 'active' }],
+    },
+  ]);
+
+  const result = await resolveSteamAccountLink(client, {
+    steamUserId,
+    authenticatedAccountId: null,
+    linkToAuthenticatedAccount: false,
+  });
+
+  client.assertComplete();
+  assert.deepEqual(result, {
+    accountId: steamAccountId,
+    createdAccount: false,
+    linkedToExistingAccount: false,
+    identityAlreadyLinked: true,
+  });
+  assert.equal(client.calls.length, 2);
+});
+
+test('same-account explicit link is idempotent', async () => {
+  const client = new ScriptedSqlClient([
+    { contains: 'pg_advisory_xact_lock' },
+    {
+      contains: "WHERE i.provider = 'steam'",
+      rowCount: 1,
+      rows: [{ account_id: webAccountId, status: 'active' }],
+    },
+  ]);
+
+  const result = await resolveSteamAccountLink(client, {
+    steamUserId,
+    authenticatedAccountId: webAccountId,
+    linkToAuthenticatedAccount: true,
+  });
+
+  client.assertComplete();
+  assert.equal(result.accountId, webAccountId);
+  assert.equal(result.identityAlreadyLinked, true);
+});
+
+test('cross-account explicit linking fails before any mutation', async () => {
+  const client = new ScriptedSqlClient([
+    { contains: 'pg_advisory_xact_lock' },
+    {
+      contains: "WHERE i.provider = 'steam'",
+      rowCount: 1,
+      rows: [{ account_id: steamAccountId, status: 'active' }],
+    },
+  ]);
+
+  await assert.rejects(
+    resolveSteamAccountLink(client, {
+      steamUserId,
+      authenticatedAccountId: webAccountId,
+      linkToAuthenticatedAccount: true,
     }),
+    (error: unknown) => error instanceof SteamAccountLinkError
+      && error.code === 'steam_identity_already_linked',
   );
+  client.assertComplete();
+  assert.equal(client.calls.length, 2);
 });
 
-test('mergeAccountIntoTarget fails safely for missing or disabled source account', async () => {
-  const missingSource = new ScriptedSqlClient([
-    { contains: 'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE', rowCount: 0, rows: [] },
-  ]);
-  await assert.rejects(
-    mergeAccountIntoTarget(
-      missingSource,
-      '11111111-1111-4111-8111-111111111111',
-      '22222222-2222-4222-8222-222222222222',
-      null,
-    ),
-    { message: 'Merge source account not found.' },
-  );
-  missingSource.assertComplete();
-
-  const disabledSource = new ScriptedSqlClient([
-    { contains: 'SELECT id, status FROM accounts WHERE id = $1 LIMIT 1 FOR UPDATE', rowCount: 1, rows: [{ id: '11111111-1111-4111-8111-111111111111', status: 'disabled' }] },
-  ]);
-  await assert.rejects(
-    mergeAccountIntoTarget(
-      disabledSource,
-      '11111111-1111-4111-8111-111111111111',
-      '22222222-2222-4222-8222-222222222222',
-      null,
-    ),
-    { message: 'Merge source account is disabled.' },
-  );
-  disabledSource.assertComplete();
-});
-
-test('mergeAccountIntoTarget is a no-op when source and target are the same account', async () => {
+test('explicit linking requires authentication before querying the database', async () => {
   const client = new ScriptedSqlClient([]);
-  const accountId = '11111111-1111-4111-8111-111111111111';
-  const result = await mergeAccountIntoTarget(client, accountId, accountId, null);
+  await assert.rejects(
+    resolveSteamAccountLink(client, {
+      steamUserId,
+      authenticatedAccountId: null,
+      linkToAuthenticatedAccount: true,
+    }),
+    (error: unknown) => error instanceof SteamAccountLinkError
+      && error.code === 'steam_link_authentication_required',
+  );
   client.assertComplete();
-  assert.deepEqual(result, {
-    merged: false,
-    transferredWebIdentity: false,
-    transferredWebCredential: false,
-    mergedProfile: false,
-  });
   assert.equal(client.calls.length, 0);
+});
+
+test('disabled or missing targets fail without identity mutation', async () => {
+  for (const scenario of [
+    { rowCount: 0, rows: [], code: 'steam_link_target_not_found' },
+    {
+      rowCount: 1,
+      rows: [{ id: webAccountId, status: 'disabled' }],
+      code: 'steam_link_target_disabled',
+    },
+  ] as const) {
+    const client = new ScriptedSqlClient([
+      { contains: 'pg_advisory_xact_lock' },
+      { contains: "WHERE i.provider = 'steam'", rowCount: 0 },
+      {
+        contains: 'SELECT id, status FROM accounts',
+        rowCount: scenario.rowCount,
+        rows: [...scenario.rows],
+      },
+    ]);
+    await assert.rejects(
+      resolveSteamAccountLink(client, {
+        steamUserId,
+        authenticatedAccountId: webAccountId,
+        linkToAuthenticatedAccount: true,
+      }),
+      (error: unknown) => error instanceof SteamAccountLinkError
+        && error.code === scenario.code,
+    );
+    client.assertComplete();
+    assert.equal(client.calls.length, 3);
+  }
+});
+
+test('an account with a different Steam identity cannot be overwritten', async () => {
+  const client = new ScriptedSqlClient([
+    { contains: 'pg_advisory_xact_lock' },
+    { contains: "WHERE i.provider = 'steam'", rowCount: 0 },
+    { contains: 'SELECT id, status FROM accounts', rowCount: 1, rows: [{ id: webAccountId, status: 'active' }] },
+    {
+      contains: "WHERE account_id = $1 AND provider = 'steam'",
+      rowCount: 1,
+      rows: [{ provider_user_id: '76561198099999999' }],
+    },
+  ]);
+
+  await assert.rejects(
+    resolveSteamAccountLink(client, {
+      steamUserId,
+      authenticatedAccountId: webAccountId,
+      linkToAuthenticatedAccount: true,
+    }),
+    (error: unknown) => error instanceof SteamAccountLinkError
+      && error.code === 'steam_link_target_already_has_identity',
+  );
+  client.assertComplete();
+  assert.equal(client.calls.length, 4);
 });

@@ -1,4 +1,5 @@
 export type AssetKind = 'model' | 'sprite' | 'texture' | 'audio' | 'shader';
+export type AssetReadiness = 'prototype' | 'alpha' | 'production';
 
 export interface AssetBudgetHint {
   estimatedBytes?: number;
@@ -11,6 +12,7 @@ export interface AssetBudgetHint {
 export interface AssetManifestEntryBase {
   id: string;
   preload?: boolean;
+  readiness?: AssetReadiness;
   budget?: AssetBudgetHint;
 }
 

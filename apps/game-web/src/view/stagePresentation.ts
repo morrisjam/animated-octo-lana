@@ -9,6 +9,10 @@ export interface ArenaGuidePoint {
   z: number;
 }
 
+export interface ArenaLipShelfVertex extends ArenaGuidePoint {
+  band: number;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -21,11 +25,15 @@ function positiveModulo(value: number, divisor: number): number {
   return ((value % divisor) + divisor) % divisor;
 }
 
-function arenaPoint(radius: number, angle: number): ArenaGuidePoint {
+function arenaPoint(
+  radius: number,
+  angle: number,
+  depth = ARENA_GUIDE_DEPTH,
+): ArenaGuidePoint {
   return {
     x: Math.cos(angle) * radius,
     y: Math.sin(angle) * radius,
-    z: ARENA_GUIDE_DEPTH,
+    z: depth,
   };
 }
 
@@ -136,6 +144,108 @@ export function createArenaLipSegmentPoints(arenaRadius: number): ArenaGuidePoin
   }
 
   return points;
+}
+
+export function createArenaLipDepthSegmentPoints(arenaRadius: number): ArenaGuidePoint[] {
+  const radius = Math.max(0, finiteOr(arenaRadius, 0));
+  if (radius === 0) {
+    return [];
+  }
+
+  const points: ArenaGuidePoint[] = [];
+  const contourLayers = [
+    { radiusScale: 1.012, depth: -1.1, visibleRun: 12 },
+    { radiusScale: 0.982, depth: -2.8, visibleRun: 10 },
+    { radiusScale: 0.948, depth: -4.8, visibleRun: 8 },
+  ] as const;
+  const segmentCount = 84;
+
+  contourLayers.forEach((layer, layerIndex) => {
+    for (let segment = 0; segment < segmentCount; segment += 1) {
+      const clusterPosition = (segment + layerIndex * 5) % 19;
+      if (clusterPosition >= layer.visibleRun) {
+        continue;
+      }
+
+      // Only the camera-facing half receives an underside contour. Leaving the far edge open
+      // keeps the arena from resolving into another perfect neon ring.
+      const angleStart = Math.PI * (1.035 + (segment / segmentCount) * 0.93);
+      const angleEnd = Math.PI * (1.035 + ((segment + 1) / segmentCount) * 0.93);
+      const startRadius = radius * layer.radiusScale * (
+        1 + Math.sin(angleStart * 4.0 + layerIndex * 1.7) * 0.006
+      );
+      const endRadius = radius * layer.radiusScale * (
+        1 + Math.sin(angleEnd * 4.0 + layerIndex * 1.7) * 0.006
+      );
+      points.push(
+        arenaPoint(startRadius, angleStart, layer.depth + Math.sin(angleStart * 3.0) * 0.12),
+        arenaPoint(endRadius, angleEnd, layer.depth + Math.sin(angleEnd * 3.0) * 0.12),
+      );
+    }
+  });
+
+  // Split braces expose the shelf's taper without creating a solid wall beneath the fighters.
+  for (let index = 0; index < 13; index += 1) {
+    const angle = Math.PI * (1.105 + index * 0.064);
+    const topRadius = radius * (1.012 + Math.sin(index * 1.9) * 0.004);
+    const bottomRadius = radius * (0.948 + Math.cos(index * 1.3) * 0.005);
+    points.push(
+      arenaPoint(topRadius, angle, -0.38),
+      arenaPoint(radius * 0.987, angle, -1.72),
+      arenaPoint(radius * 0.973, angle, -2.34),
+      arenaPoint(bottomRadius, angle, -4.68),
+    );
+  }
+
+  return points;
+}
+
+export function createArenaLipShelfTriangleVertices(arenaRadius: number): ArenaLipShelfVertex[] {
+  const radius = Math.max(0, finiteOr(arenaRadius, 0));
+  if (radius === 0) {
+    return [];
+  }
+
+  const vertices: ArenaLipShelfVertex[] = [];
+  const segmentCount = 72;
+  for (let segment = 0; segment < segmentCount; segment += 1) {
+    if ((segment + 3) % 17 >= 12) {
+      continue;
+    }
+
+    const angleStart = Math.PI * (1.025 + (segment / segmentCount) * 0.95);
+    const angleEnd = Math.PI * (1.025 + ((segment + 1) / segmentCount) * 0.95);
+    const innerStartRadius = radius * (0.89 + Math.sin(angleStart * 3.0) * 0.009);
+    const innerEndRadius = radius * (0.89 + Math.sin(angleEnd * 3.0) * 0.009);
+    const outerStartRadius = radius * (1.035 + Math.sin(angleStart * 5.0) * 0.004);
+    const outerEndRadius = radius * (1.035 + Math.sin(angleEnd * 5.0) * 0.004);
+    const innerStart = {
+      ...arenaPoint(innerStartRadius, angleStart, -1.42 + Math.sin(angleStart * 4.0) * 0.12),
+      band: 0,
+    };
+    const innerEnd = {
+      ...arenaPoint(innerEndRadius, angleEnd, -1.42 + Math.sin(angleEnd * 4.0) * 0.12),
+      band: 0,
+    };
+    const outerStart = {
+      ...arenaPoint(outerStartRadius, angleStart, -0.18 + Math.sin(angleStart * 4.0) * 0.06),
+      band: 1,
+    };
+    const outerEnd = {
+      ...arenaPoint(outerEndRadius, angleEnd, -0.18 + Math.sin(angleEnd * 4.0) * 0.06),
+      band: 1,
+    };
+    vertices.push(
+      innerStart,
+      outerStart,
+      outerEnd,
+      innerStart,
+      outerEnd,
+      innerEnd,
+    );
+  }
+
+  return vertices;
 }
 
 export function resolveWormholeCoreOpacity(

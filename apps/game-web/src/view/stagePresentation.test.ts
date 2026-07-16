@@ -5,6 +5,8 @@ import {
   WORMHOLE_FAR_DEPTH,
   WORMHOLE_NEAR_DEPTH,
   createArenaGuideSegmentPoints,
+  createArenaLipDepthSegmentPoints,
+  createArenaLipShelfTriangleVertices,
   createArenaLipSegmentPoints,
   resolveStageCameraPitchDegrees,
   resolveStageCameraYOffset,
@@ -41,6 +43,39 @@ describe('stage presentation math', () => {
     expect(Math.min(...first.map((point) => Math.hypot(point.x, point.y)))).toBeGreaterThan(55);
     expect(createArenaLipSegmentPoints(0)).toEqual([]);
     expect(createArenaLipSegmentPoints(Number.NaN)).toEqual([]);
+  });
+
+  test('builds a broken near-edge depth shelf below the arena plane', () => {
+    const first = createArenaLipDepthSegmentPoints(60);
+    const second = createArenaLipDepthSegmentPoints(60);
+
+    expect(first).toEqual(second);
+    expect(first.length).toBeGreaterThan(250);
+    expect(first.length % 2).toBe(0);
+    expect(first.every((point) => point.y < 0)).toBe(true);
+    expect(Math.max(...first.map((point) => point.z))).toBeLessThan(0);
+    expect(Math.min(...first.map((point) => point.z))).toBeGreaterThan(-5);
+    expect(Math.max(...first.map((point) => Math.hypot(point.x, point.y)))).toBeLessThan(62);
+    expect(Math.min(...first.map((point) => Math.hypot(point.x, point.y)))).toBeGreaterThan(56);
+    expect(createArenaLipDepthSegmentPoints(0)).toEqual([]);
+    expect(createArenaLipDepthSegmentPoints(Number.NaN)).toEqual([]);
+  });
+
+  test('builds a segmented camera-facing lip ribbon without closing the arena', () => {
+    const first = createArenaLipShelfTriangleVertices(60);
+    const second = createArenaLipShelfTriangleVertices(60);
+
+    expect(first).toEqual(second);
+    expect(first.length).toBeGreaterThan(250);
+    expect(first.length % 6).toBe(0);
+    expect(first.every((vertex) => vertex.y < 0)).toBe(true);
+    expect(new Set(first.map((vertex) => vertex.band))).toEqual(new Set([0, 1]));
+    expect(Math.max(...first.map((vertex) => vertex.z))).toBeLessThan(0);
+    expect(Math.min(...first.map((vertex) => vertex.z))).toBeGreaterThan(-1.6);
+    expect(Math.max(...first.map((vertex) => Math.hypot(vertex.x, vertex.y)))).toBeLessThan(63);
+    expect(Math.min(...first.map((vertex) => Math.hypot(vertex.x, vertex.y)))).toBeGreaterThan(52);
+    expect(createArenaLipShelfTriangleVertices(0)).toEqual([]);
+    expect(createArenaLipShelfTriangleVertices(Number.NaN)).toEqual([]);
   });
 
   test('adds launch pitch without exceeding the authored safety bound', () => {

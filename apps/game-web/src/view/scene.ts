@@ -10,6 +10,8 @@ import {
   resolveStageAtmosphere,
 } from './stageAtmosphere';
 import {
+  createArenaLipDepthSegmentPoints,
+  createArenaLipShelfTriangleVertices,
   createArenaLipSegmentPoints,
   createArenaGuideSegmentPoints,
   MAX_STAGE_CAMERA_PITCH_DEGREES,
@@ -48,6 +50,8 @@ export interface SceneContext {
   ring: THREE.Mesh;
   arenaMouth: THREE.Mesh;
   arenaRim: THREE.LineSegments;
+  arenaLipShelf: THREE.Mesh;
+  arenaLipDepth: THREE.LineSegments;
   arenaDepthTicks: THREE.LineSegments;
   playerVisuals: PlayersById<CharacterVisualHandle>;
   playerMeshes: PlayersById<THREE.Object3D>;
@@ -196,12 +200,55 @@ function createArenaMouthMaterial(): THREE.ShaderMaterial {
   });
 }
 
+function createArenaLipShelfMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uOpacity: { value: 0.24 },
+      uOuterColor: { value: new THREE.Color('#56bfff') },
+      uInnerColor: { value: new THREE.Color('#231b58') },
+    },
+    vertexShader: `
+      attribute float aBand;
+      varying float vBand;
+      varying vec3 vPosition;
+
+      void main() {
+        vBand = aBand;
+        vPosition = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      precision highp float;
+
+      uniform float uOpacity;
+      uniform vec3 uOuterColor;
+      uniform vec3 uInnerColor;
+      varying float vBand;
+      varying vec3 vPosition;
+
+      void main() {
+        float outerEnergy = smoothstep(0.0, 1.0, vBand);
+        float striation = 0.78 + 0.22 * sin(vPosition.x * 0.42 + vPosition.y * 0.18);
+        vec3 color = mix(uInnerColor, uOuterColor, outerEnergy);
+        float alpha = uOpacity * mix(0.16, 0.72, outerEnergy) * striation;
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+}
+
 function addArena(scene: THREE.Scene): {
   boundary: THREE.LineLoop;
   gravityWell: THREE.Mesh;
   ring: THREE.Mesh;
   arenaMouth: THREE.Mesh;
   arenaRim: THREE.LineSegments;
+  arenaLipShelf: THREE.Mesh;
+  arenaLipDepth: THREE.LineSegments;
   arenaDepthTicks: THREE.LineSegments;
 } {
   const boundaryPoints: THREE.Vector3[] = [];
@@ -227,6 +274,24 @@ function addArena(scene: THREE.Scene): {
   arenaMouth.renderOrder = -2;
   scene.add(arenaMouth);
 
+  const arenaLipShelfVertices = createArenaLipShelfTriangleVertices(ARENA_RADIUS);
+  const arenaLipShelfGeometry = new THREE.BufferGeometry();
+  arenaLipShelfGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      arenaLipShelfVertices.flatMap((vertex) => [vertex.x, vertex.y, vertex.z]),
+      3,
+    ),
+  );
+  arenaLipShelfGeometry.setAttribute(
+    'aBand',
+    new THREE.Float32BufferAttribute(arenaLipShelfVertices.map((vertex) => vertex.band), 1),
+  );
+  const arenaLipShelf = new THREE.Mesh(arenaLipShelfGeometry, createArenaLipShelfMaterial());
+  arenaLipShelf.name = 'arena-broken-lip-shelf';
+  arenaLipShelf.renderOrder = -1;
+  scene.add(arenaLipShelf);
+
   const arenaLipPoints = createArenaLipSegmentPoints(ARENA_RADIUS).map(
     (point) => new THREE.Vector3(point.x, point.y, point.z),
   );
@@ -243,6 +308,23 @@ function addArena(scene: THREE.Scene): {
   arenaRim.name = 'arena-broken-lip';
   arenaRim.position.z = -0.32;
   scene.add(arenaRim);
+
+  const arenaLipDepthPoints = createArenaLipDepthSegmentPoints(ARENA_RADIUS).map(
+    (point) => new THREE.Vector3(point.x, point.y, point.z),
+  );
+  const arenaLipDepth = new THREE.LineSegments(
+    new THREE.BufferGeometry().setFromPoints(arenaLipDepthPoints),
+    new THREE.LineBasicMaterial({
+      color: '#56bfff',
+      transparent: true,
+      opacity: 0.18,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  arenaLipDepth.name = 'arena-broken-lip-depth';
+  arenaLipDepth.renderOrder = -1;
+  scene.add(arenaLipDepth);
 
   const tickPoints = createArenaGuideSegmentPoints(ARENA_RADIUS).map(
     (point) => new THREE.Vector3(point.x, point.y, point.z),
@@ -281,7 +363,16 @@ function addArena(scene: THREE.Scene): {
   ring.position.z = 0.1;
   scene.add(ring);
 
-  return { boundary, gravityWell, ring, arenaMouth, arenaRim, arenaDepthTicks };
+  return {
+    boundary,
+    gravityWell,
+    ring,
+    arenaMouth,
+    arenaRim,
+    arenaLipShelf,
+    arenaLipDepth,
+    arenaDepthTicks,
+  };
 }
 
 function addStars(scene: THREE.Scene): THREE.Points {
@@ -545,6 +636,8 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
     ring,
     arenaMouth,
     arenaRim,
+    arenaLipShelf,
+    arenaLipDepth,
     arenaDepthTicks,
   } = addArena(scene);
   const stars = addStars(scene);
@@ -575,6 +668,8 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
     ring,
     arenaMouth,
     arenaRim,
+    arenaLipShelf,
+    arenaLipDepth,
     arenaDepthTicks,
     playerVisuals,
     playerMeshes,
@@ -651,6 +746,19 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   arenaRimMaterial.color.set(tokens.ringColor);
   arenaRimMaterial.opacity = clampOpacity(tokens.arenaRimOpacity);
   context.arenaRim.visible = arenaRimMaterial.opacity > 0;
+
+  const arenaLipShelfMaterial = context.arenaLipShelf.material;
+  if (arenaLipShelfMaterial instanceof THREE.ShaderMaterial) {
+    arenaLipShelfMaterial.uniforms.uOuterColor.value.set(tokens.backgroundEffectTint);
+    arenaLipShelfMaterial.uniforms.uInnerColor.value.set(tokens.backgroundEffectSecondaryTint);
+    arenaLipShelfMaterial.uniforms.uOpacity.value = clampOpacity(tokens.arenaRimOpacity * 0.9);
+  }
+  context.arenaLipShelf.visible = tokens.arenaRimOpacity > 0;
+
+  const arenaLipDepthMaterial = context.arenaLipDepth.material as THREE.LineBasicMaterial;
+  arenaLipDepthMaterial.color.set(tokens.backgroundEffectTint);
+  arenaLipDepthMaterial.opacity = clampOpacity(tokens.arenaRimOpacity * 0.72);
+  context.arenaLipDepth.visible = arenaLipDepthMaterial.opacity > 0;
 
   const arenaDepthTickMaterial = context.arenaDepthTicks.material as THREE.LineBasicMaterial;
   arenaDepthTickMaterial.color.set(tokens.ringColor);

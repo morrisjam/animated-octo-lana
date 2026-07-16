@@ -473,6 +473,14 @@ export function cleanupRender(context: SceneContext): void {
   context.arenaRim.geometry.dispose();
   (context.arenaRim.material as THREE.Material).dispose();
 
+  context.scene.remove(context.arenaLipShelf);
+  context.arenaLipShelf.geometry.dispose();
+  (context.arenaLipShelf.material as THREE.Material).dispose();
+
+  context.scene.remove(context.arenaLipDepth);
+  context.arenaLipDepth.geometry.dispose();
+  (context.arenaLipDepth.material as THREE.Material).dispose();
+
   context.scene.remove(context.arenaDepthTicks);
   context.arenaDepthTicks.geometry.dispose();
   (context.arenaDepthTicks.material as THREE.Material).dispose();

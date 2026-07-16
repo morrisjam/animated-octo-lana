@@ -1,5 +1,6 @@
 import process from 'node:process';
 import type { RollbackSchemaCompatibilityProbeEvidence } from '../src/ops/rollbackSchemaCompatibility';
+import { createRollbackRankedQueueJoinBody } from '../src/ops/rollbackProbeContract';
 import { assertSafeSmokeTarget } from './smokeTargetGuard';
 
 interface AccountResponse {
@@ -111,13 +112,7 @@ async function joinRankedQueue(
   const response = await requestJson<QueueTicketResponse>(`${baseUrl}/matchmaking/queue/join`, {
     method: 'POST',
     headers: { ...authHeaders(account), 'content-type': 'application/json' },
-    body: JSON.stringify({
-      queueType: 'ranked',
-      regionPreferences: ['eu-west'],
-      buildVersion,
-      platform: 'web',
-      characterId: 'vanguard',
-    }),
+    body: JSON.stringify(createRollbackRankedQueueJoinBody(buildVersion)),
   });
   expectStatus('Ranked queue join', response, 201);
   if (!response.body.ticketId) {

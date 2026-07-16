@@ -20,6 +20,7 @@ import {
   isExactGitSha,
   validateRollbackSchemaCompatibilityReport,
 } from '../src/ops/rollbackSchemaCompatibility';
+import { createRollbackProbeServerEnvironment } from '../src/ops/rollbackProbeContract';
 import { runRollbackApiCompatibilityProbe } from './rollbackApiCompatibilityProbe';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -341,6 +342,7 @@ function startRollbackApi(
         MATCHMAKING_SNAPSHOT_INTERVAL_MS: '60000',
         MATCHMAKING_STUN_URLS: '',
         MATCHMAKING_TURN_URLS: '',
+        ...createRollbackProbeServerEnvironment(),
         REPLAY_BLOB_PROVIDER: 'local',
         REPLAY_BLOB_DIR: path.join(snapshotRoot, 'data', `rollback-compat-replays-${phase}`),
         API_CORS_ORIGINS: `http://127.0.0.1:${port}`,
@@ -398,12 +400,21 @@ async function stopManagedApi(api: ManagedApi | null): Promise<void> {
 }
 
 async function runMigrations(workspaceRoot: string, databaseUrl: string, label: string): Promise<void> {
+  await runMigrationsFromSnapshot(workspaceRoot, workspaceRoot, databaseUrl, label);
+}
+
+async function runMigrationsFromSnapshot(
+  runtimeWorkspaceRoot: string,
+  migrationWorkspaceRoot: string,
+  databaseUrl: string,
+  label: string,
+): Promise<void> {
   await runCommand(
     label,
     process.execPath,
-    ['--import', 'tsx', path.join(workspaceRoot, 'scripts/migrate.ts')],
+    ['--import', 'tsx', path.join(runtimeWorkspaceRoot, 'scripts/migrate.ts')],
     {
-      cwd: workspaceRoot,
+      cwd: migrationWorkspaceRoot,
       env: { DATABASE_URL: databaseUrl },
       timeoutMs: 120_000,
     },
@@ -473,12 +484,12 @@ async function run(): Promise<void> {
     throw new Error('Rollback compatibility release evidence requires a clean candidate checkout.');
   }
 
-  await mkdir(defaultArtifactDir, { recursive: true });
-  await mkdir(path.dirname(options.reportPath), { recursive: true });
   const runId = `${process.pid}-${Date.now()}-${randomBytes(3).toString('hex')}`;
-  const snapshotRoot = path.join(defaultArtifactDir, `snapshot-${runId}`);
-  const archivePath = path.join(defaultArtifactDir, `snapshot-${runId}.tar`);
-  await mkdir(snapshotRoot, { recursive: true });
+  const rollbackSnapshotRoot = path.join(defaultArtifactDir, `rollback-snapshot-${runId}`);
+  const rollbackArchivePath = path.join(defaultArtifactDir, `rollback-snapshot-${runId}.tar`);
+  const candidateSnapshotRoot = path.join(defaultArtifactDir, `candidate-snapshot-${runId}`);
+  const candidateArchivePath = path.join(defaultArtifactDir, `candidate-snapshot-${runId}.tar`);
+  const candidateSnapshotApiRoot = path.join(candidateSnapshotRoot, 'apps/api');
 
   const phases: RollbackSchemaCompatibilityPhase[] = [];
   let beforeUpgrade: RollbackSchemaCompatibilityProbeEvidence | null = null;
@@ -487,6 +498,20 @@ async function run(): Promise<void> {
   let postgresStartedByRunner = false;
   let databaseCreated = false;
   let api: ManagedApi | null = null;
+  let candidate: RollbackSchemaCompatibilityReport['candidate'] = {
+    sha: checkedOutCandidateSha,
+    dirty: candidateDirty,
+    migrationHead: 'unavailable',
+    migrationCount: 0,
+    migrationDigest: '0'.repeat(64),
+  };
+  let rollback: RollbackSchemaIdentity = {
+    sha: options.rollbackSha,
+    migrationHead: 'unavailable',
+    migrationCount: 0,
+    migrationDigest: '0'.repeat(64),
+  };
+  let compatibilityExceptions: RollbackSchemaCompatibilityExceptionEvidence[] = [];
   const baseDatabaseUrl = String(
     process.env.ROLLBACK_COMPAT_DATABASE_URL
       ?? process.env.LOCAL_DATABASE_URL
@@ -498,52 +523,78 @@ async function run(): Promise<void> {
   assertLocalDatabaseTarget(adminUrl, 'Rollback schema compatibility admin connection');
   assertLocalDatabaseTarget(databaseUrl, 'Rollback schema compatibility isolated database');
 
-  await runCommand(
-    'Rollback source archive',
-    'git',
-    ['archive', '--format=tar', `--output=${archivePath}`, options.rollbackSha],
-    { echo: false, timeoutMs: 60_000 },
-  );
-  await runCommand(
-    'Rollback source extraction',
-    'tar',
-    ['-xf', archivePath, '-C', snapshotRoot],
-    { echo: false, timeoutMs: 60_000 },
-  );
-
-  const candidateIdentityWithFiles = await collectMigrationIdentity(
-    path.join(apiWorkspaceRoot, 'migrations'),
-    checkedOutCandidateSha,
-  );
-  const rollbackIdentityWithFiles = await collectMigrationIdentity(
-    path.join(snapshotRoot, 'apps/api/migrations'),
-    options.rollbackSha,
-  );
-  const compatibilityExceptions = await collectCompatibilityExceptions(
-    path.join(apiWorkspaceRoot, 'migrations'),
-    candidateIdentityWithFiles.files,
-  );
-  const candidate: RollbackSchemaCompatibilityReport['candidate'] = {
-    sha: checkedOutCandidateSha,
-    dirty: candidateDirty,
-    migrationHead: candidateIdentityWithFiles.migrationHead,
-    migrationCount: candidateIdentityWithFiles.migrationCount,
-    migrationDigest: candidateIdentityWithFiles.migrationDigest,
-  };
-  const rollback: RollbackSchemaIdentity = {
-    sha: options.rollbackSha,
-    migrationHead: rollbackIdentityWithFiles.migrationHead,
-    migrationCount: rollbackIdentityWithFiles.migrationCount,
-    migrationDigest: rollbackIdentityWithFiles.migrationDigest,
-  };
-
   try {
+    await mkdir(defaultArtifactDir, { recursive: true });
+    await mkdir(path.dirname(options.reportPath), { recursive: true });
+    await mkdir(rollbackSnapshotRoot, { recursive: true });
+    await mkdir(candidateSnapshotRoot, { recursive: true });
+    await runCommand(
+      'Rollback source archive',
+      'git',
+      ['archive', '--format=tar', `--output=${rollbackArchivePath}`, options.rollbackSha],
+      { echo: false, timeoutMs: 60_000 },
+    );
+    await runCommand(
+      'Rollback source extraction',
+      'tar',
+      ['-xf', rollbackArchivePath, '-C', rollbackSnapshotRoot],
+      { echo: false, timeoutMs: 60_000 },
+    );
+    await runCommand(
+      'Candidate migration archive',
+      'git',
+      [
+        'archive',
+        '--format=tar',
+        `--output=${candidateArchivePath}`,
+        checkedOutCandidateSha,
+        'apps/api/migrations',
+      ],
+      { echo: false, timeoutMs: 60_000 },
+    );
+    await runCommand(
+      'Candidate migration extraction',
+      'tar',
+      ['-xf', candidateArchivePath, '-C', candidateSnapshotRoot],
+      { echo: false, timeoutMs: 60_000 },
+    );
+
+    const candidateIdentityWithFiles = await collectMigrationIdentity(
+      path.join(candidateSnapshotApiRoot, 'migrations'),
+      checkedOutCandidateSha,
+    );
+    const rollbackIdentityWithFiles = await collectMigrationIdentity(
+      path.join(rollbackSnapshotRoot, 'apps/api/migrations'),
+      options.rollbackSha,
+    );
+    compatibilityExceptions = await collectCompatibilityExceptions(
+      path.join(candidateSnapshotApiRoot, 'migrations'),
+      candidateIdentityWithFiles.files,
+    );
+    candidate = {
+      sha: checkedOutCandidateSha,
+      dirty: candidateDirty,
+      migrationHead: candidateIdentityWithFiles.migrationHead,
+      migrationCount: candidateIdentityWithFiles.migrationCount,
+      migrationDigest: candidateIdentityWithFiles.migrationDigest,
+    };
+    rollback = {
+      sha: options.rollbackSha,
+      migrationHead: rollbackIdentityWithFiles.migrationHead,
+      migrationCount: rollbackIdentityWithFiles.migrationCount,
+      migrationDigest: rollbackIdentityWithFiles.migrationDigest,
+    };
+
     postgresStartedByRunner = await ensureLocalPostgres(adminUrl);
     await createIsolatedDatabase(adminUrl, databaseName);
     databaseCreated = true;
 
     await recordPhase(phases, 'rollback_migrations', async () => {
-      await runMigrations(path.join(snapshotRoot, 'apps/api'), databaseUrl, 'Rollback migrations');
+      await runMigrations(
+        path.join(rollbackSnapshotRoot, 'apps/api'),
+        databaseUrl,
+        'Rollback migrations',
+      );
       await assertAppliedMigrationChain(databaseUrl, rollbackIdentityWithFiles.files);
     });
 
@@ -551,7 +602,7 @@ async function run(): Promise<void> {
     const baseUrl = `http://127.0.0.1:${port}`;
     process.env.ROLLBACK_SHA = options.rollbackSha;
     await recordPhase(phases, 'rollback_pre_upgrade_probe', async () => {
-      api = startRollbackApi(snapshotRoot, databaseUrl, port, 'before');
+      api = startRollbackApi(rollbackSnapshotRoot, databaseUrl, port, 'before');
       await waitForRollbackApi(api, baseUrl);
       beforeUpgrade = await runRollbackApiCompatibilityProbe(baseUrl, 'before', {
         internallyManagedLoopback: true,
@@ -561,12 +612,17 @@ async function run(): Promise<void> {
     });
 
     await recordPhase(phases, 'candidate_migrations', async () => {
-      await runMigrations(apiWorkspaceRoot, databaseUrl, 'Candidate migrations');
+      await runMigrationsFromSnapshot(
+        apiWorkspaceRoot,
+        candidateSnapshotApiRoot,
+        databaseUrl,
+        'Candidate migrations',
+      );
       await assertAppliedMigrationChain(databaseUrl, candidateIdentityWithFiles.files);
     });
 
     await recordPhase(phases, 'rollback_post_upgrade_probe', async () => {
-      api = startRollbackApi(snapshotRoot, databaseUrl, port, 'after');
+      api = startRollbackApi(rollbackSnapshotRoot, databaseUrl, port, 'after');
       await waitForRollbackApi(api, baseUrl);
       afterUpgrade = await runRollbackApiCompatibilityProbe(baseUrl, 'after', {
         internallyManagedLoopback: true,
@@ -577,10 +633,17 @@ async function run(): Promise<void> {
   } catch (error) {
     failure = redact(error instanceof Error ? error.message : String(error), [databaseUrl, adminUrl]);
   } finally {
+    const recordCleanupFailure = (label: string, error: unknown): void => {
+      const message = `${label} cleanup failed: ${redact(
+        error instanceof Error ? error.message : String(error),
+        [databaseUrl, adminUrl],
+      )}`;
+      failure = failure ? `${failure}; ${message}` : message;
+    };
     await stopManagedApi(api).catch(() => undefined);
     if (databaseCreated) {
       await dropIsolatedDatabase(adminUrl, databaseName).catch((error) => {
-        failure ??= `Database cleanup failed: ${redact(error instanceof Error ? error.message : String(error))}`;
+        recordCleanupFailure('Database', error);
       });
     }
     if (postgresStartedByRunner) {
@@ -588,11 +651,19 @@ async function run(): Promise<void> {
         echo: false,
         timeoutMs: 60_000,
       }).catch((error) => {
-        failure ??= `PostgreSQL cleanup failed: ${redact(error instanceof Error ? error.message : String(error))}`;
+        recordCleanupFailure('PostgreSQL', error);
       });
     }
-    await rm(snapshotRoot, { recursive: true, force: true });
-    await rm(archivePath, { force: true });
+    for (const [label, target, recursive] of [
+      ['Rollback snapshot', rollbackSnapshotRoot, true],
+      ['Rollback archive', rollbackArchivePath, false],
+      ['Candidate snapshot', candidateSnapshotRoot, true],
+      ['Candidate archive', candidateArchivePath, false],
+    ] as const) {
+      await rm(target, { recursive, force: true }).catch((error) => {
+        recordCleanupFailure(label, error);
+      });
+    }
   }
 
   const report: RollbackSchemaCompatibilityReport = {

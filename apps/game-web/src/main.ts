@@ -3060,6 +3060,8 @@ const startMenu = createStartMenu({
 });
 startMenu.setEntitlementGate(true, null);
 applyArcadeHistoryView();
+document.documentElement.dataset.assetPreloadState = 'loading';
+document.documentElement.dataset.assetPreloadBytes = '0';
 void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
   onProgress: (progress) => {
     if (runtimeConfig.features.debugToolsEnabled && progress.loaded === progress.total) {
@@ -3068,7 +3070,10 @@ void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
   },
 }).then((result) => {
   assetPreloadBytesLoaded = result.entries.reduce((total, entry) => total + entry.bytes, 0);
+  document.documentElement.dataset.assetPreloadBytes = String(assetPreloadBytesLoaded);
+  document.documentElement.dataset.assetPreloadState = 'ready';
 }).catch((error) => {
+  document.documentElement.dataset.assetPreloadState = 'failed';
   console.error('[assets] preload failed', error);
 });
 

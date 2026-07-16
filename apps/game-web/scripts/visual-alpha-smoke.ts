@@ -109,6 +109,12 @@ interface DiagnosticsQueryGuardSummary {
   blocked: boolean;
 }
 
+interface AssetPreloadReadinessSummary {
+  context: 'diagnostics_guard' | 'home' | 'balance_return';
+  state: 'ready';
+  bytesLoaded: number;
+}
+
 interface LoopbackApiStubSummary {
   attestationSchemaVersion: typeof LOCAL_RANKED_ROOT_SMOKE_BUILD_SCHEMA_VERSION;
   buildId: string;
@@ -168,6 +174,7 @@ interface VisualSmokeReport {
   presentationFrameTiming: PresentationFrameTimingSummary | null;
   alphaActionCoverage: ReplayActionCoverageSummary | null;
   diagnosticsQueryGuard: DiagnosticsQueryGuardSummary | null;
+  assetPreloadReadiness: AssetPreloadReadinessSummary[];
   loopbackApiStub: LoopbackApiStubSummary | null;
   localRoundReview: LocalRoundReviewSummary | null;
   balanceSparring: BalanceSparringSummary | null;
@@ -409,6 +416,36 @@ async function waitForRenderedFrame(page: Page): Promise<void> {
       requestAnimationFrame(() => requestAnimationFrame(() => resolveFrame()));
     });
   });
+}
+
+async function waitForAssetPreload(
+  page: Page,
+  context: AssetPreloadReadinessSummary['context'],
+  timeoutMs: number,
+): Promise<AssetPreloadReadinessSummary> {
+  await page.waitForFunction(
+    () => {
+      const state = document.documentElement.dataset.assetPreloadState;
+      return state === 'ready' || state === 'failed';
+    },
+    undefined,
+    { timeout: timeoutMs },
+  );
+  const result = await page.evaluate(() => ({
+    state: document.documentElement.dataset.assetPreloadState ?? 'missing',
+    bytesLoaded: Number(document.documentElement.dataset.assetPreloadBytes ?? Number.NaN),
+  }));
+  if (result.state !== 'ready') {
+    throw new Error(`Asset preload reached ${result.state} before ${context}.`);
+  }
+  if (!Number.isSafeInteger(result.bytesLoaded) || result.bytesLoaded <= 0) {
+    throw new Error(`Asset preload reported invalid byte evidence before ${context}: ${result.bytesLoaded}.`);
+  }
+  return {
+    context,
+    state: 'ready',
+    bytesLoaded: result.bytesLoaded,
+  };
 }
 
 async function measurePresentationFrameTiming(page: Page): Promise<PresentationFrameTimingSummary> {
@@ -1129,6 +1166,7 @@ async function run(): Promise<void> {
     presentationFrameTiming: null,
     alphaActionCoverage: null,
     diagnosticsQueryGuard: null,
+    assetPreloadReadiness: [],
     loopbackApiStub: null,
     localRoundReview: null,
     balanceSparring: null,
@@ -1297,6 +1335,7 @@ async function run(): Promise<void> {
     assertLoopbackUrl(diagnosticsGuardUrl);
     await page.goto(diagnosticsGuardUrl, { waitUntil: 'networkidle', timeout: timeoutMs });
     await page.locator('canvas#game').waitFor({ state: 'visible', timeout: timeoutMs });
+    report.assetPreloadReadiness.push(await waitForAssetPreload(page, 'diagnostics_guard', timeoutMs));
     const overlayElements = await page.locator('.online-diagnostics-overlay').count();
     const launcherElements = await page.locator('.online-diagnostics-launcher').count();
     report.diagnosticsQueryGuard = {
@@ -1313,6 +1352,7 @@ async function run(): Promise<void> {
     assertLoopbackUrl(targetUrl);
     await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: timeoutMs });
     await page.locator('canvas#game').waitFor({ state: 'visible', timeout: timeoutMs });
+    report.assetPreloadReadiness.push(await waitForAssetPreload(page, 'home', timeoutMs));
     await page.getByRole('heading', { name: 'Gravity Well', exact: true })
       .waitFor({ state: 'visible', timeout: timeoutMs });
     report.webgl = await verifyWebGl(page);
@@ -1371,6 +1411,7 @@ async function run(): Promise<void> {
 
     await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: timeoutMs });
     await page.locator('canvas#game').waitFor({ state: 'visible', timeout: timeoutMs });
+    report.assetPreloadReadiness.push(await waitForAssetPreload(page, 'balance_return', timeoutMs));
     report.balanceSparring = await verifyBalanceSparring(page, report.screenshots, timeoutMs);
 
     await page.waitForLoadState('networkidle', { timeout: timeoutMs });

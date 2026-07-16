@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   resolveAllowInsecureAccountHeader,
+  resolveAuthSessionPreviousSecrets,
   resolveAuthSessionSecret,
 } from './sessionConfig';
 
@@ -20,6 +21,26 @@ test('returns the trimmed configured session secret', () => {
   assert.equal(
     resolveAuthSessionSecret({ AUTH_SESSION_SECRET: '  configured-secret-with-at-least-32-characters  ' }),
     'configured-secret-with-at-least-32-characters',
+  );
+});
+
+test('resolves one distinct previous session secret for a rotation overlap', () => {
+  const currentSecret = 'current-session-secret-with-at-least-32-characters';
+  const previousSecret = 'previous-session-secret-with-at-least-32-characters';
+
+  assert.deepEqual(resolveAuthSessionPreviousSecrets({}, currentSecret), []);
+  assert.deepEqual(resolveAuthSessionPreviousSecrets({
+    AUTH_SESSION_PREVIOUS_SECRET: `  ${previousSecret}  `,
+  }, currentSecret), [previousSecret]);
+  assert.throws(
+    () => resolveAuthSessionPreviousSecrets({ AUTH_SESSION_PREVIOUS_SECRET: 'too-short' }, currentSecret),
+    /at least 32 characters/,
+  );
+  assert.throws(
+    () => resolveAuthSessionPreviousSecrets({
+      AUTH_SESSION_PREVIOUS_SECRET: currentSecret,
+    }, currentSecret),
+    /must differ/,
   );
 });
 

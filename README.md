@@ -48,6 +48,8 @@ Steam packaging flow:
 npm run steam:ci
 ```
 
+`steam:ci` builds and validates the native Windows shell that owns the Steamworks ticket bridge. The older static web-only artifact remains available as `npm run steam:web-artifact:ci` for non-shipping inspection; it cannot perform production Steam sign-in and must not be uploaded as the game client.
+
 API and database:
 
 ```bash

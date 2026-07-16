@@ -109,6 +109,7 @@ import {
 import { createAuthSessionTokenService } from './auth/sessionToken';
 import {
   resolveAllowInsecureAccountHeader,
+  resolveAuthSessionPreviousSecrets,
   resolveAuthSessionSecret,
 } from './auth/sessionConfig';
 import {
@@ -256,6 +257,7 @@ const deploymentDatabaseId = String(
 const authSessionSecret = resolveAuthSessionSecret(process.env);
 const authSessionTokenService = createAuthSessionTokenService({
   secret: authSessionSecret,
+  previousSecrets: resolveAuthSessionPreviousSecrets(process.env, authSessionSecret),
   ttlSeconds: parsePositiveIntegerEnv(process.env.AUTH_SESSION_TTL_SECONDS),
 });
 const authRateLimiter = createAuthRateLimiter({

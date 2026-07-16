@@ -191,6 +191,30 @@ test('requires a distinct auth throttle secret and explicit hosted proxy boundar
   );
 });
 
+test('accepts only a strong purpose-distinct previous session secret during rotation', () => {
+  const valid = createValidEnvironment();
+  valid.AUTH_SESSION_PREVIOUS_SECRET = 'previous-alpha-session-secret-at-least-32-characters';
+  const validReport = auditAlphaProviderConfig(valid);
+  assert.equal(validReport.ready, true);
+  assert.equal(JSON.stringify(validReport).includes(valid.AUTH_SESSION_PREVIOUS_SECRET), false);
+
+  for (const previousSecret of [
+    'weak',
+    valid.AUTH_SESSION_SECRET,
+    valid.AUTH_RATE_LIMIT_SECRET,
+  ]) {
+    const env = createValidEnvironment();
+    env.AUTH_SESSION_PREVIOUS_SECRET = previousSecret;
+    const report = auditAlphaProviderConfig(env);
+
+    assert.equal(report.ready, false);
+    assert.deepEqual(
+      report.checks.filter((check) => check.status === 'fail').map((check) => check.id),
+      ['auth_session_rotation_secret'],
+    );
+  }
+});
+
 test('rejects weak identity administration and unsafe Steam verifier transport settings', () => {
   const env = createValidEnvironment();
   env.AUTH_IDENTITY_ADMIN_KEY = 'weak';

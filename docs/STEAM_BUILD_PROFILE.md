@@ -23,11 +23,10 @@ The identity is public routing metadata and must exactly match `STEAM_WEB_API_ID
 The native shell lives outside the root npm workspaces so ordinary API/web installs do not download Electron or Steam binaries.
 
 ```bash
-npm ci --prefix apps/steam-shell
-npm run steam:native:ci
+npm run steam:ci
 ```
 
-The command builds the Steam web profile, runs native ticket-broker tests, stages the local web files, packages a Windows x64 Electron application, copies the required Steamworks redistributable, strips non-runtime package dependencies, and checks the artifact structure.
+The command aliases the native Steam pipeline. It installs the isolated shell dependencies, builds the Steam web profile, runs native ticket-broker tests, stages the local web files, packages a Windows x64 Electron application, copies the required Steamworks redistributable, strips non-runtime package dependencies, and checks the artifact structure.
 
 Output:
 

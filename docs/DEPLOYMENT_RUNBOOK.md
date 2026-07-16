@@ -91,6 +91,8 @@ DEPLOYMENT_DATABASE_ID=<stable_non_secret_database_identity>
 DATABASE_URL=<neon_connection_string>
 API_CORS_ORIGINS=https://play.gravitywell.space
 AUTH_SESSION_SECRET=<32+ character random secret>
+# Rotation overlap only; normally omit:
+AUTH_SESSION_PREVIOUS_SECRET=<retired 32+ character random secret>
 AUTH_SESSION_TTL_SECONDS=43200
 AUTH_RATE_LIMIT_SECRET=<distinct 32+ character random HMAC secret>
 API_TRUST_PROXY_HOPS=<verified reverse-proxy hop count>
@@ -137,10 +139,20 @@ Do not use quotes around values unless needed by provider UI.
 - Never commit `.env` with live secrets.
 - `.env` is ignored in git (`.gitignore`).
 - Keep production secrets only in provider secret managers (Render/Cloudflare).
-- Never expose `AUTH_SESSION_SECRET`, `AUTH_RATE_LIMIT_SECRET`, `AUTH_IDENTITY_ADMIN_KEY`, or `STEAM_WEB_API_KEY` to Cloudflare Pages or any `VITE_*` variable.
+- Never expose `AUTH_SESSION_SECRET`, `AUTH_SESSION_PREVIOUS_SECRET`, `AUTH_RATE_LIMIT_SECRET`, `AUTH_IDENTITY_ADMIN_KEY`, or `STEAM_WEB_API_KEY` to Cloudflare Pages or any `VITE_*` variable.
 - Never enable `ALLOW_INSECURE_ACCOUNT_HEADER` or `STEAM_ALLOW_DEV_TICKETS` in production.
 - Do not deploy permanent `MATCHMAKING_TURN_USERNAME` and `MATCHMAKING_TURN_CREDENTIAL` values for player clients; the alpha gate requires short-lived credentials derived from `MATCHMAKING_TURN_SHARED_SECRET`.
 - If a secret is accidentally exposed, rotate it immediately.
+
+### Signed-session key rotation
+
+Run the cryptographic overlap/cutover/expiry proof locally before changing provider secrets:
+
+```powershell
+npm run api:smoke:auth-session-rotation
+```
+
+For a planned, non-compromise rotation, first deploy with `AUTH_SESSION_SECRET=<new>` and `AUTH_SESSION_PREVIOUS_SECRET=<old>`. Confirm existing and newly issued sessions, then wait at least `AUTH_SESSION_TTL_SECONDS` before removing `AUTH_SESSION_PREVIOUS_SECRET`. New tokens are never signed with the previous key. Do not leave the overlap configured indefinitely, and do not change the auth-rate-limit secret as part of this operation. If the old key may be compromised, do not configure it as previous: rotate immediately and accept forced sign-in for every existing session.
 
 ## Deployment flow
 

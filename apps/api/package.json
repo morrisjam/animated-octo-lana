@@ -18,6 +18,7 @@
     "smoke:matchmaking-multi-instance": "tsx scripts/matchmakingMultiInstanceSmoke.ts",
     "smoke:auth-rate-limit": "tsx scripts/authRateLimitSmoke.ts",
     "smoke:auth-security": "tsx scripts/authSecuritySmoke.ts",
+    "smoke:auth-session-rotation": "tsx scripts/authSessionRotationSmoke.ts",
     "smoke:database-interruption": "tsx scripts/databaseInterruptionSmoke.ts",
     "smoke:rollback-schema-compatibility": "tsx scripts/rollbackSchemaCompatibilitySmoke.ts",
     "smoke:local-alpha-integration": "tsx scripts/localAlphaIntegration.ts",

@@ -148,8 +148,23 @@ export function auditAlphaProviderConfig(
     'Use a 32+ character AUTH_SESSION_SECRET and set ALLOW_INSECURE_ACCOUNT_HEADER=false.',
   );
   const authSessionSecret = String(env.AUTH_SESSION_SECRET ?? '').trim();
+  const authSessionPreviousSecret = String(env.AUTH_SESSION_PREVIOUS_SECRET ?? '').trim();
   const authRateLimitSecret = String(env.AUTH_RATE_LIMIT_SECRET ?? '').trim();
   const authIdentityAdminKey = String(env.AUTH_IDENTITY_ADMIN_KEY ?? '').trim();
+  addCheck(
+    checks,
+    'auth_session_rotation_secret',
+    !authSessionPreviousSecret || (
+      authSessionPreviousSecret.length >= 32
+      && authSessionPreviousSecret !== authSessionSecret
+      && authSessionPreviousSecret !== authRateLimitSecret
+      && authSessionPreviousSecret !== authIdentityAdminKey
+    ),
+    authSessionPreviousSecret
+      ? 'The temporary previous session-signing secret is strong and purpose-distinct.'
+      : 'No session-signing rotation overlap is active.',
+    'AUTH_SESSION_PREVIOUS_SECRET must be absent or a distinct 32+ character value used only during a bounded rotation overlap.',
+  );
   addCheck(
     checks,
     'auth_rate_limit_secret',

@@ -22,6 +22,7 @@ export type AuthSessionTokenValidationResult =
 
 export interface AuthSessionTokenServiceOptions {
   secret: string;
+  previousSecrets?: readonly string[];
   ttlSeconds?: number;
   now?: () => number;
 }
@@ -67,17 +68,34 @@ function parseSerializedPayload(rawPayload: string): SerializedAuthSessionToken 
 }
 
 export class AuthSessionTokenService {
-  private readonly secret: string;
+  private readonly signingSecret: string;
+
+  private readonly verificationSecrets: readonly string[];
 
   private readonly ttlSeconds: number;
 
   private readonly now: () => number;
 
   public constructor(options: AuthSessionTokenServiceOptions) {
-    if (options.secret.trim().length < 32) {
+    const signingSecret = options.secret.trim();
+    if (signingSecret.length < 32) {
       throw new Error('Auth session token secret must contain at least 32 characters.');
     }
-    this.secret = options.secret;
+    const previousSecrets = (options.previousSecrets ?? []).map((secret) => secret.trim());
+    if (previousSecrets.length > 2) {
+      throw new Error('Auth session token verification supports at most two previous secrets.');
+    }
+    for (const previousSecret of previousSecrets) {
+      if (previousSecret.trim().length < 32) {
+        throw new Error('Every previous auth session token secret must contain at least 32 characters.');
+      }
+    }
+    const verificationSecrets = [signingSecret, ...previousSecrets];
+    if (new Set(verificationSecrets).size !== verificationSecrets.length) {
+      throw new Error('Auth session token secrets must be distinct.');
+    }
+    this.signingSecret = signingSecret;
+    this.verificationSecrets = verificationSecrets;
     this.ttlSeconds = Math.max(60, Math.floor(options.ttlSeconds ?? DEFAULT_TTL_SECONDS));
     this.now = options.now ?? Date.now;
   }
@@ -98,7 +116,7 @@ export class AuthSessionTokenService {
     };
     const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
     const tokenBody = `${TOKEN_PREFIX}.${encodedPayload}`;
-    const signature = signTokenBody(this.secret, tokenBody).toString('base64url');
+    const signature = signTokenBody(this.signingSecret, tokenBody).toString('base64url');
     return {
       accessToken: `${tokenBody}.${signature}`,
       accessTokenExpiresAt: new Date(expiresAt * 1000).toISOString(),
@@ -122,11 +140,17 @@ export class AuthSessionTokenService {
     } catch {
       return { ok: false, code: 'malformed' };
     }
-    const expectedSignature = signTokenBody(this.secret, tokenBody);
-    if (
-      providedSignature.length !== expectedSignature.length
-      || !timingSafeEqual(providedSignature, expectedSignature)
-    ) {
+    let validSignature = false;
+    for (const secret of this.verificationSecrets) {
+      const expectedSignature = signTokenBody(secret, tokenBody);
+      if (
+        providedSignature.length === expectedSignature.length
+        && timingSafeEqual(providedSignature, expectedSignature)
+      ) {
+        validSignature = true;
+      }
+    }
+    if (!validSignature) {
       return { ok: false, code: 'invalid_signature' };
     }
 

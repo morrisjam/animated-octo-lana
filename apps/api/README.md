@@ -18,6 +18,7 @@ Optional:
 - `PORT` overrides `API_PORT` when provided by your hosting platform.
 - `API_CORS_ORIGINS` is a comma-separated browser origin allowlist (defaults to localhost dev URLs).
 - `AUTH_SESSION_TTL_SECONDS` defaults to `43200` (12 hours).
+- `AUTH_SESSION_PREVIOUS_SECRET` optionally accepts tokens signed by one retired 32+ character key during a bounded rotation overlap. New tokens always use `AUTH_SESSION_SECRET`; remove the previous key after one full session TTL.
 - `AUTH_RATE_LIMIT_SECRET` is the 32+ character HMAC key for pseudonymous durable auth buckets. It falls back to `AUTH_SESSION_SECRET`; use a distinct production secret.
 - `API_TRUST_PROXY_HOPS` enables forwarded client-IP handling for source throttles and must match the verified reverse-proxy path. Leave it unset for direct/local traffic.
 - `AUTH_IDENTITY_ADMIN_KEY` optionally enables the emergency identity-link and identity-lookup routes. Without it those routes return `404`.

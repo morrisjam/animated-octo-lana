@@ -4,6 +4,7 @@ import { createAuthSessionTokenService } from './sessionToken';
 
 const ACCOUNT_ID = '11111111-1111-4111-8111-111111111111';
 const SECRET = 'test-only-auth-session-secret-at-least-32-characters';
+const PREVIOUS_SECRET = 'previous-test-session-secret-at-least-32-characters';
 
 test('issues and verifies a signed auth session token', () => {
   const service = createAuthSessionTokenService({
@@ -53,6 +54,46 @@ test('rejects expired tokens', () => {
   nowMs += 60_000;
   const verified = service.verify(issued.accessToken);
   assert.deepEqual(verified, { ok: false, code: 'expired' });
+});
+
+test('accepts old tokens during a bounded key-rotation overlap while signing with the new key', () => {
+  const previousService = createAuthSessionTokenService({ secret: PREVIOUS_SECRET });
+  const previousToken = previousService.issue(ACCOUNT_ID, 'steam').accessToken;
+  const rotatingService = createAuthSessionTokenService({
+    secret: SECRET,
+    previousSecrets: [PREVIOUS_SECRET],
+  });
+  const currentToken = rotatingService.issue(ACCOUNT_ID, 'steam').accessToken;
+
+  assert.equal(rotatingService.verify(previousToken).ok, true);
+  assert.equal(rotatingService.verify(currentToken).ok, true);
+  assert.equal(previousService.verify(currentToken).ok, false);
+
+  const cutoverService = createAuthSessionTokenService({ secret: SECRET });
+  assert.deepEqual(cutoverService.verify(previousToken), { ok: false, code: 'invalid_signature' });
+  assert.equal(cutoverService.verify(currentToken).ok, true);
+});
+
+test('rejects weak, duplicate, or unbounded previous session secrets', () => {
+  assert.throws(
+    () => createAuthSessionTokenService({ secret: SECRET, previousSecrets: ['too-short'] }),
+    /previous auth session token secret must contain at least 32 characters/,
+  );
+  assert.throws(
+    () => createAuthSessionTokenService({ secret: SECRET, previousSecrets: [SECRET] }),
+    /must be distinct/,
+  );
+  assert.throws(
+    () => createAuthSessionTokenService({
+      secret: SECRET,
+      previousSecrets: [
+        PREVIOUS_SECRET,
+        'second-previous-session-secret-at-least-32-characters',
+        'third-previous-session-secret-at-least-32-characters',
+      ],
+    }),
+    /at most two previous secrets/,
+  );
 });
 
 test('requires a production-grade secret length', () => {

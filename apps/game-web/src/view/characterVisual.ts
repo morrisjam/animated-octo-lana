@@ -7,6 +7,7 @@ import {
 } from '../sim/characters';
 import type { PlayerId, PlayerRenderSnapshot } from '../sim/types';
 import {
+  getSpriteAnimationSets,
   resolveSpriteAnimationSet,
   resolveSpriteClip,
   resolveSpriteFrame,
@@ -57,8 +58,34 @@ interface SpriteVisualRuntime {
   phase: number;
 }
 
+export type RequiredPackagedAtlasRuntimeState = 'loading' | 'ready' | 'failed';
+
+export interface RequiredPackagedAtlasRuntimeSnapshot {
+  state: RequiredPackagedAtlasRuntimeState;
+  requiredIds: string[];
+  loadingIds: string[];
+  readyIds: string[];
+  failedIds: string[];
+  fallbackIds: string[];
+}
+
+interface SpriteAtlasRuntimeRecord {
+  animationSet: SpriteAnimationSet;
+  state: RequiredPackagedAtlasRuntimeState;
+  image: HTMLImageElement | null;
+  error: Error | null;
+  fallbackTextures: Set<THREE.Texture>;
+  ready: Promise<void>;
+}
+
 const SPRITE_TEXTURE_CACHE = new Map<string, THREE.Texture>();
 const SPRITE_ATLAS_IMAGE_CACHE = new Map<string, Promise<HTMLImageElement>>();
+const REQUIRED_PACKAGED_SPRITE_ANIMATION_SETS = getSpriteAnimationSets()
+  .sort((left, right) => left.id.localeCompare(right.id));
+const REQUIRED_PACKAGED_SPRITE_ANIMATION_SET_IDS = REQUIRED_PACKAGED_SPRITE_ANIMATION_SETS
+  .map((animationSet) => animationSet.id);
+const SPRITE_ATLAS_RUNTIME_BY_ID = new Map<string, SpriteAtlasRuntimeRecord>();
+let requiredPackagedAtlasRuntimeReady: Promise<RequiredPackagedAtlasRuntimeSnapshot> | null = null;
 
 function getPalette(playerId: PlayerId): CharacterPalette {
   if (playerId === 'P1') {
@@ -306,31 +333,169 @@ function loadAtlasImage(textureUrl: string): Promise<HTMLImageElement> {
   if (cached) {
     return cached;
   }
-  const pending = new Promise<HTMLImageElement>((resolve, reject) => {
+
+  const pending = (async () => {
+    if (typeof Image === 'undefined') {
+      throw new Error(`Browser image decoding is unavailable for sprite atlas ${textureUrl}.`);
+    }
     const image = new Image();
     image.decoding = 'async';
     image.crossOrigin = 'anonymous';
-    image.addEventListener('load', () => resolve(image), { once: true });
-    image.addEventListener('error', () => reject(new Error(`Unable to decode sprite atlas ${textureUrl}.`)), { once: true });
     image.src = textureUrl;
-  });
+    if (typeof image.decode !== 'function') {
+      throw new Error(`Browser image decoding is unavailable for sprite atlas ${textureUrl}.`);
+    }
+    try {
+      await image.decode();
+    } catch {
+      throw new Error(`Unable to decode sprite atlas ${textureUrl}.`);
+    }
+    return image;
+  })();
   SPRITE_ATLAS_IMAGE_CACHE.set(textureUrl, pending);
   return pending;
 }
 
-function loadAtlasTexture(animationSet: SpriteAnimationSet): THREE.Texture {
-  const texture = createFallbackAtlasTexture(animationSet);
-  if (typeof document === 'undefined' || typeof Image === 'undefined') {
-    return texture;
+export function getRequiredPackagedAtlasRuntimeSnapshot(): RequiredPackagedAtlasRuntimeSnapshot {
+  const loadingIds: string[] = [];
+  const readyIds: string[] = [];
+  const failedIds: string[] = [];
+  const fallbackIds: string[] = [];
+
+  for (const animationSet of REQUIRED_PACKAGED_SPRITE_ANIMATION_SETS) {
+    const runtime = SPRITE_ATLAS_RUNTIME_BY_ID.get(animationSet.id);
+    if (!runtime || runtime.state === 'loading') {
+      loadingIds.push(animationSet.id);
+    } else if (runtime.state === 'ready') {
+      readyIds.push(animationSet.id);
+    } else {
+      failedIds.push(animationSet.id);
+    }
+    if (!runtime || runtime.fallbackTextures.size > 0) {
+      fallbackIds.push(animationSet.id);
+    }
   }
-  void loadAtlasImage(animationSet.textureUrl).then((image) => {
-    texture.image = image;
-    texture.needsUpdate = true;
-    document.documentElement.dataset.characterAssetState = 'ready';
-  }).catch((error) => {
-    document.documentElement.dataset.characterAssetState = 'failed';
-    console.error(`[character-assets] ${animationSet.id} retained visible fallback`, error);
+
+  return {
+    state: failedIds.length > 0
+      ? 'failed'
+      : readyIds.length === REQUIRED_PACKAGED_SPRITE_ANIMATION_SET_IDS.length && fallbackIds.length === 0
+        ? 'ready'
+        : 'loading',
+    requiredIds: [...REQUIRED_PACKAGED_SPRITE_ANIMATION_SET_IDS],
+    loadingIds,
+    readyIds,
+    failedIds,
+    fallbackIds,
+  };
+}
+
+function publishRequiredPackagedAtlasRuntimeSnapshot(): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const snapshot = getRequiredPackagedAtlasRuntimeSnapshot();
+  const dataset = document.documentElement.dataset;
+  dataset.characterAssetState = snapshot.state;
+  dataset.characterAssetRequiredIds = snapshot.requiredIds.join(',');
+  dataset.characterAssetLoadingIds = snapshot.loadingIds.join(',');
+  dataset.characterAssetReadyIds = snapshot.readyIds.join(',');
+  dataset.characterAssetFailedIds = snapshot.failedIds.join(',');
+  dataset.characterAssetFallbackIds = snapshot.fallbackIds.join(',');
+}
+
+function ensureSpriteAtlasRuntime(animationSet: SpriteAnimationSet): SpriteAtlasRuntimeRecord {
+  const existing = SPRITE_ATLAS_RUNTIME_BY_ID.get(animationSet.id);
+  if (existing) {
+    return existing;
+  }
+
+  const runtime: SpriteAtlasRuntimeRecord = {
+    animationSet,
+    state: 'loading',
+    image: null,
+    error: null,
+    fallbackTextures: new Set(),
+    ready: Promise.resolve(),
+  };
+  SPRITE_ATLAS_RUNTIME_BY_ID.set(animationSet.id, runtime);
+  publishRequiredPackagedAtlasRuntimeSnapshot();
+
+  runtime.ready = loadAtlasImage(animationSet.textureUrl).then((image) => {
+    if (
+      image.naturalWidth !== animationSet.atlasWidthPixels
+      || image.naturalHeight !== animationSet.atlasHeightPixels
+    ) {
+      throw new Error(
+        `Decoded sprite atlas ${animationSet.id} is ${image.naturalWidth}x${image.naturalHeight}; `
+          + `expected ${animationSet.atlasWidthPixels}x${animationSet.atlasHeightPixels}.`,
+      );
+    }
+
+    for (const texture of runtime.fallbackTextures) {
+      texture.image = image;
+      texture.needsUpdate = true;
+    }
+    if ([...runtime.fallbackTextures].some((texture) => texture.image !== image)) {
+      throw new Error(`Unable to replace every fallback texture for sprite atlas ${animationSet.id}.`);
+    }
+    runtime.fallbackTextures.clear();
+    runtime.image = image;
+    runtime.state = 'ready';
+    publishRequiredPackagedAtlasRuntimeSnapshot();
+  }).catch((error: unknown) => {
+    runtime.error = error instanceof Error ? error : new Error(String(error));
+    runtime.state = 'failed';
+    publishRequiredPackagedAtlasRuntimeSnapshot();
+    throw runtime.error;
   });
+  void runtime.ready.catch((error) => {
+    console.error(
+      `[character-assets] required atlas ${animationSet.id} failed; gameplay remains gated`,
+      error,
+    );
+  });
+  return runtime;
+}
+
+export function getRequiredPackagedAtlasRuntimeReadyPromise(): Promise<RequiredPackagedAtlasRuntimeSnapshot> {
+  if (!requiredPackagedAtlasRuntimeReady) {
+    const runtimes = REQUIRED_PACKAGED_SPRITE_ANIMATION_SETS.map(ensureSpriteAtlasRuntime);
+    requiredPackagedAtlasRuntimeReady = Promise.all(runtimes.map((runtime) => runtime.ready)).then(() => {
+      const snapshot = getRequiredPackagedAtlasRuntimeSnapshot();
+      if (snapshot.state !== 'ready') {
+        throw new Error(
+          `Required packaged sprite atlases did not become ready: ${snapshot.fallbackIds.join(',')}.`,
+        );
+      }
+      return snapshot;
+    });
+  }
+  return requiredPackagedAtlasRuntimeReady;
+}
+
+function createDecodedAtlasTexture(image: HTMLImageElement): THREE.Texture {
+  const texture = configureAtlasTexture(new THREE.Texture(image));
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function loadAtlasTexture(animationSet: SpriteAnimationSet): THREE.Texture {
+  if (typeof Image === 'undefined') {
+    return createFallbackAtlasTexture(animationSet);
+  }
+
+  const runtime = ensureSpriteAtlasRuntime(animationSet);
+  if (runtime.state === 'ready') {
+    if (!runtime.image) {
+      throw new Error(`Sprite atlas ${animationSet.id} reached ready without a decoded image.`);
+    }
+    return createDecodedAtlasTexture(runtime.image);
+  }
+
+  const texture = createFallbackAtlasTexture(animationSet);
+  runtime.fallbackTextures.add(texture);
+  publishRequiredPackagedAtlasRuntimeSnapshot();
   return texture;
 }
 

@@ -217,6 +217,7 @@ import { buildAssetBudgetReport, DEFAULT_ASSET_BUDGET_LIMITS } from './view/asse
 import { DEFAULT_ASSET_MANIFEST } from './view/assets/defaultManifest';
 import { preloadAssetManifest } from './view/assets/loader';
 import { loadStageModelAssets } from './view/stageModelRuntime';
+import { getRequiredPackagedAtlasRuntimeReadyPromise } from './view/characterVisual';
 import type { OnlineDiagnosticsUpdate, OnlineDevSectionId } from './view/onlineDevMenu';
 import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay';
 import {
@@ -3092,14 +3093,19 @@ document.documentElement.dataset.assetPreloadState = 'loading';
 document.documentElement.dataset.assetPreloadBytes = '0';
 document.documentElement.dataset.stageModelState = 'loading';
 document.documentElement.dataset.stageModelLoadedIds = '';
-void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
-  onProgress: (progress) => {
-    if (runtimeConfig.features.debugToolsEnabled && progress.loaded === progress.total) {
-      console.info(`[assets] preloaded ${progress.loaded}/${progress.total} manifest entries`);
-    }
-  },
-}).then(async (result) => {
-  const stageModelResult = await loadStageModelAssets(sceneContext.stageBackgroundModel);
+void Promise.all([
+  preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
+    onProgress: (progress) => {
+      if (runtimeConfig.features.debugToolsEnabled && progress.loaded === progress.total) {
+        console.info(`[assets] preloaded ${progress.loaded}/${progress.total} manifest entries`);
+      }
+    },
+  }).then(async (result) => ({
+    result,
+    stageModelResult: await loadStageModelAssets(sceneContext.stageBackgroundModel),
+  })),
+  getRequiredPackagedAtlasRuntimeReadyPromise(),
+]).then(([{ result, stageModelResult }]) => {
   selectedStageAtmosphereId = applyStageAtmospherePreset(sceneContext, selectedStageAtmosphereId);
   assetPreloadBytesLoaded = result.entries.reduce((total, entry) => total + entry.bytes, 0);
   document.documentElement.dataset.assetPreloadBytes = String(assetPreloadBytesLoaded);

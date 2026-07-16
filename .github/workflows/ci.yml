@@ -108,6 +108,13 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
 
+      - name: Production controlled-alpha access and build allowlist smoke
+        run: npm run api:smoke:controlled-alpha-access
+        env:
+          CONTROLLED_ALPHA_ACCESS_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
+          CONTROLLED_ALPHA_ACCESS_MANAGE_POSTGRES: "0"
+          CONTROLLED_ALPHA_ACCESS_SMOKE_REPORT_PATH: apps/api/build-artifacts/ci-controlled-alpha-access.json
+
       - name: Durable authentication rate-limit smoke
         run: npm run api:smoke:auth-rate-limit
         env:

@@ -84,7 +84,7 @@ export const BALANCE_CANDIDATE_PRESETS: readonly BalanceCandidatePreset[] = [
     label: 'Post-control reposition V1',
     description: 'Give a fighter one weighted orbit-or-retreat choice after regaining control, without delaying ordinary neutral or suppressing an immediate defensive response.',
     designerQuestion: 'Does the returning fighter create readable space and a new decision without turning the match passive?',
-    evidence: 'A mirrored Cadet/Veteran 12-set screen reduced Blocked Chase rounds from 16 to 2 and Blocked Commitment rounds from 14 to 4. All 100 candidate rounds reached a finish with no timeouts or drawn sets; human feel review is still required.',
+    evidence: 'The cancellation-safe flow-v18 screen reduced Blocked Commitment from 14/102 to 2/100 and Blocked Chase from 16/102 to 8/100, but issue ratios remained 70% and 92% and Veteran Vanguard converted 0/7 finish starts. Use this only for direct human comparison, not promotion.',
     status: 'human_review',
     rules: [
       {

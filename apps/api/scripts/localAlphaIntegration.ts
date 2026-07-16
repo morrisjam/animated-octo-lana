@@ -459,6 +459,7 @@ async function run(): Promise<void> {
   const ports = {
     api: parsePort('LOCAL_ALPHA_API_PORT', 28_787),
     web: parsePort('LOCAL_ALPHA_WEB_PORT', 25_191),
+    access: parsePort('LOCAL_ALPHA_ACCESS_PORT', 28_789),
     restart: parsePort('LOCAL_ALPHA_RESTART_PORT', 28_791),
     multiA: parsePort('LOCAL_ALPHA_MULTI_PORT_A', 28_792),
     multiB: parsePort('LOCAL_ALPHA_MULTI_PORT_B', 28_793),
@@ -552,6 +553,23 @@ async function run(): Promise<void> {
       process.execPath,
       ['--import', 'tsx', 'scripts/migrate.ts'],
       { cwd: apiWorkspaceRoot, env: sharedEnv, timeoutMs: 60_000 },
+    ));
+    await recordStep(steps, 'production controlled-alpha access smoke', () => runCommand(
+      'Controlled-alpha access smoke',
+      process.execPath,
+      ['--import', 'tsx', 'apps/api/scripts/controlledAlphaAccessSmoke.ts'],
+      {
+        env: {
+          CONTROLLED_ALPHA_ACCESS_DATABASE_URL: databaseUrl,
+          CONTROLLED_ALPHA_ACCESS_MANAGE_POSTGRES: '0',
+          CONTROLLED_ALPHA_ACCESS_SMOKE_PORT: String(ports.access),
+          CONTROLLED_ALPHA_ACCESS_SMOKE_REPORT_PATH: path.join(
+            artifactDir,
+            'controlled-alpha-access.json',
+          ),
+        },
+        timeoutMs: 120_000,
+      },
     ));
     await recordStep(steps, 'durable authentication rate-limit smoke', () => runCommand(
       'Authentication rate-limit smoke',
@@ -818,7 +836,7 @@ async function run(): Promise<void> {
   }
 
   const report = {
-    schemaVersion: 'gw.local-alpha-integration.v3',
+    schemaVersion: 'gw.local-alpha-integration.v4',
     generatedAt: new Date().toISOString(),
     ok: failure === null,
     localOnly: true,

@@ -7,7 +7,7 @@ import type { FrameInput, GameState, PlayerFrameInput, PlayerId, PlayerState } f
 
 export type AiDifficultyId = 'rookie' | 'cadet' | 'veteran' | 'ace';
 
-export const AI_POLICY_REVISION = 'flow-v17';
+export const AI_POLICY_REVISION = 'flow-v18';
 export const AI_RECOVERY_POLICY_IDS = ['legacy', 'spacing', 'evasive'] as const;
 export type AiRecoveryPolicyId = (typeof AI_RECOVERY_POLICY_IDS)[number];
 export const DEFAULT_AI_RECOVERY_POLICY: AiRecoveryPolicyId = 'legacy';
@@ -1187,6 +1187,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && !state.winner;
   if (tacticalRepositionFramesRemaining > 0 && !tacticalRepositionActive) {
     tacticalRepositionFramesRemaining = 0;
+    // Reposition owns both locks while active. Cancelling for a threat or finish
+    // must not leave the fighter unable to take the action that caused the cancel.
+    decisionLockFrames = 0;
+    reactionFramesRemaining = 0;
   }
 
   if (maneuverFramesRemaining <= 0) {

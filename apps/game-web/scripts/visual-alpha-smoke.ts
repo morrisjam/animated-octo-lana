@@ -42,9 +42,13 @@ const LOOPBACK_HOST = '127.0.0.1';
 const VIEWPORT = { width: 1280, height: 720 } as const;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const RANDOM_SEED = 0x4757_2026;
-const REPORT_SCHEMA_VERSION = 'gw.visual-alpha-smoke.v10';
+const REPORT_SCHEMA_VERSION = 'gw.visual-alpha-smoke.v11';
 const EXPECTED_ALPHA_STAGE_ID = 'wormhole_authored_v4';
 const EXPECTED_STAGE_MODEL_ID = 'wormhole_arena_lip_v1';
+const EXPECTED_CHARACTER_ATLAS_IDS = [
+  'character_duelist_animset',
+  'character_vanguard_animset',
+] as const;
 const ALPHA_ACTION_MARKER_FRAMES = [24, 40, 56, 76, 95, 120, 140, 160, 161, 179] as const;
 const REQUIRED_ALPHA_ACTION_STARTS = [
   { frame: 40, playerId: 'P1', action: 'special' },
@@ -117,6 +121,12 @@ interface AssetPreloadReadinessSummary {
   bytesLoaded: number;
   stageModelState: 'ready';
   stageModelLoadedIds: string[];
+  characterAssetState: 'ready';
+  characterAssetRequiredIds: string[];
+  characterAssetReadyIds: string[];
+  characterAssetLoadingIds: string[];
+  characterAssetFailedIds: string[];
+  characterAssetFallbackIds: string[];
   selectedStageId: typeof EXPECTED_ALPHA_STAGE_ID;
   requestedStageModelId: typeof EXPECTED_STAGE_MODEL_ID;
   visibleStageModelId: typeof EXPECTED_STAGE_MODEL_ID;
@@ -438,18 +448,34 @@ async function waitForAssetPreload(
     undefined,
     { timeout: timeoutMs },
   );
-  const result = await page.evaluate(() => ({
+  const rawResult = await page.evaluate(() => ({
     state: document.documentElement.dataset.assetPreloadState ?? 'missing',
     bytesLoaded: Number(document.documentElement.dataset.assetPreloadBytes ?? Number.NaN),
     stageModelState: document.documentElement.dataset.stageModelState ?? 'missing',
-    stageModelLoadedIds: (document.documentElement.dataset.stageModelLoadedIds ?? '')
-      .split(',')
-      .map((id) => id.trim())
-      .filter(Boolean),
+    stageModelLoadedIds: document.documentElement.dataset.stageModelLoadedIds,
+    characterAssetState: document.documentElement.dataset.characterAssetState ?? 'missing',
+    characterAssetRequiredIds: document.documentElement.dataset.characterAssetRequiredIds,
+    characterAssetReadyIds: document.documentElement.dataset.characterAssetReadyIds,
+    characterAssetLoadingIds: document.documentElement.dataset.characterAssetLoadingIds,
+    characterAssetFailedIds: document.documentElement.dataset.characterAssetFailedIds,
+    characterAssetFallbackIds: document.documentElement.dataset.characterAssetFallbackIds,
     selectedStageId: document.querySelector<HTMLCanvasElement>('canvas#game')?.dataset.stageAtmosphereId ?? 'missing',
     requestedStageModelId: document.querySelector<HTMLCanvasElement>('canvas#game')?.dataset.stageModelId ?? 'missing',
     visibleStageModelId: document.querySelector<HTMLCanvasElement>('canvas#game')?.dataset.stageModelVisibleId ?? 'missing',
   }));
+  const parseIds = (value: string | undefined) => (value ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const result = {
+    ...rawResult,
+    stageModelLoadedIds: parseIds(rawResult.stageModelLoadedIds),
+    characterAssetRequiredIds: parseIds(rawResult.characterAssetRequiredIds),
+    characterAssetReadyIds: parseIds(rawResult.characterAssetReadyIds),
+    characterAssetLoadingIds: parseIds(rawResult.characterAssetLoadingIds),
+    characterAssetFailedIds: parseIds(rawResult.characterAssetFailedIds),
+    characterAssetFallbackIds: parseIds(rawResult.characterAssetFallbackIds),
+  };
   if (result.state !== 'ready') {
     throw new Error(`Asset preload reached ${result.state} before ${context}.`);
   }
@@ -461,6 +487,34 @@ async function waitForAssetPreload(
   }
   if (!result.stageModelLoadedIds.includes(EXPECTED_STAGE_MODEL_ID)) {
     throw new Error(`Stage model runtime did not load ${EXPECTED_STAGE_MODEL_ID} before ${context}.`);
+  }
+  const expectedCharacterAtlasIds = [...EXPECTED_CHARACTER_ATLAS_IDS];
+  if (result.characterAssetState !== 'ready') {
+    throw new Error(`Character atlas runtime reached ${result.characterAssetState} before ${context}.`);
+  }
+  if (result.characterAssetRequiredIds.join(',') !== expectedCharacterAtlasIds.join(',')) {
+    throw new Error(
+      `Character atlas runtime required ${result.characterAssetRequiredIds.join(',') || 'no IDs'} before ${context}; `
+        + `expected ${expectedCharacterAtlasIds.join(',')}.`,
+    );
+  }
+  if (result.characterAssetReadyIds.join(',') !== expectedCharacterAtlasIds.join(',')) {
+    throw new Error(
+      `Character atlas runtime readied ${result.characterAssetReadyIds.join(',') || 'no IDs'} before ${context}; `
+        + `expected ${expectedCharacterAtlasIds.join(',')}.`,
+    );
+  }
+  if (
+    result.characterAssetLoadingIds.length > 0
+    || result.characterAssetFailedIds.length > 0
+    || result.characterAssetFallbackIds.length > 0
+  ) {
+    throw new Error(
+      `Character atlas runtime retained non-ready IDs before ${context}: `
+        + `loading=${result.characterAssetLoadingIds.join(',') || 'none'}, `
+        + `failed=${result.characterAssetFailedIds.join(',') || 'none'}, `
+        + `fallback=${result.characterAssetFallbackIds.join(',') || 'none'}.`,
+    );
   }
   if (result.selectedStageId !== EXPECTED_ALPHA_STAGE_ID) {
     throw new Error(`Selected stage ${result.selectedStageId} does not match ${EXPECTED_ALPHA_STAGE_ID} before ${context}.`);
@@ -480,6 +534,12 @@ async function waitForAssetPreload(
     bytesLoaded: result.bytesLoaded,
     stageModelState: 'ready',
     stageModelLoadedIds: result.stageModelLoadedIds,
+    characterAssetState: 'ready',
+    characterAssetRequiredIds: result.characterAssetRequiredIds,
+    characterAssetReadyIds: result.characterAssetReadyIds,
+    characterAssetLoadingIds: result.characterAssetLoadingIds,
+    characterAssetFailedIds: result.characterAssetFailedIds,
+    characterAssetFallbackIds: result.characterAssetFallbackIds,
     selectedStageId: EXPECTED_ALPHA_STAGE_ID,
     requestedStageModelId: EXPECTED_STAGE_MODEL_ID,
     visibleStageModelId: EXPECTED_STAGE_MODEL_ID,

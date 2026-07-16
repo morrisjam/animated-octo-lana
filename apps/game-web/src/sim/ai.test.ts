@@ -246,6 +246,8 @@ describe('sim AI behaviour framework', () => {
     const threatened = tickAiController(state, 'P1', held.next);
     expect(threatened.decision.movementIntent).not.toBe('tactical_reposition');
     expect(threatened.next.tacticalRepositionFramesRemaining).toBe(0);
+    expect(threatened.next.decisionLockFrames).toBe(0);
+    expect(threatened.next.reactionFramesRemaining).toBe(0);
   });
 
   test('starts an offense-only decision read after authored attack recovery', () => {

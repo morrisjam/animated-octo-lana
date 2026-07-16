@@ -1,11 +1,79 @@
 import * as THREE from 'three';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { PlayerRenderSnapshot } from '../sim/types';
 import {
   createCharacterVisualHandle,
   disposeCharacterVisualNode,
   updateCharacterVisualHandle,
 } from './characterVisual';
+
+class ControlledImage {
+  static readonly requests = new Map<string, ControlledImage>();
+
+  decoding = '';
+  crossOrigin: string | null = null;
+  naturalWidth = 0;
+  naturalHeight = 0;
+  private source = '';
+  private readonly decoded: Promise<void>;
+  private resolveDecoded!: () => void;
+  private rejectDecoded!: () => void;
+
+  constructor() {
+    this.decoded = new Promise<void>((resolve, reject) => {
+      this.resolveDecoded = resolve;
+      this.rejectDecoded = reject;
+    });
+  }
+
+  get src(): string {
+    return this.source;
+  }
+
+  set src(value: string) {
+    this.source = value;
+    ControlledImage.requests.set(value, this);
+  }
+
+  decode(): Promise<void> {
+    return this.decoded;
+  }
+
+  succeed(width = 512, height = 256): void {
+    this.naturalWidth = width;
+    this.naturalHeight = height;
+    this.resolveDecoded();
+  }
+
+  fail(): void {
+    this.rejectDecoded();
+  }
+
+  static reset(): void {
+    ControlledImage.requests.clear();
+  }
+}
+
+async function importControlledCharacterVisual() {
+  vi.resetModules();
+  ControlledImage.reset();
+  vi.stubGlobal('Image', ControlledImage);
+  return import('./characterVisual');
+}
+
+function findControlledImage(characterId: 'vanguard' | 'duelist'): ControlledImage {
+  const entry = [...ControlledImage.requests.entries()]
+    .find(([source]) => source.includes(`/characters/${characterId}/`));
+  if (!entry) {
+    throw new Error(`Missing controlled image request for ${characterId}.`);
+  }
+  return entry[1];
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function makeSnapshot(characterId: PlayerRenderSnapshot['characterId']): PlayerRenderSnapshot {
   return {
@@ -104,5 +172,90 @@ describe('character visual adapters', () => {
 
     disposeCharacterVisualNode(p1.node);
     disposeCharacterVisualNode(p2.node);
+  });
+});
+
+describe('required packaged atlas runtime', () => {
+  test('resolves only after every required decoded image replaces visible fallback textures', async () => {
+    const characterVisual = await importControlledCharacterVisual();
+    const vanguard = characterVisual.createCharacterVisualHandle('vanguard', 'P1');
+    const duelist = characterVisual.createCharacterVisualHandle('duelist', 'P2');
+    const vanguardBody = vanguard.node.getObjectByName('sprite-body') as THREE.Sprite;
+    const duelistBody = duelist.node.getObjectByName('sprite-body') as THREE.Sprite;
+    const vanguardImage = findControlledImage('vanguard');
+    const duelistImage = findControlledImage('duelist');
+
+    const ready = characterVisual.getRequiredPackagedAtlasRuntimeReadyPromise();
+    expect(characterVisual.getRequiredPackagedAtlasRuntimeSnapshot()).toMatchObject({
+      state: 'loading',
+      loadingIds: ['character_duelist_animset', 'character_vanguard_animset'],
+      readyIds: [],
+      failedIds: [],
+      fallbackIds: ['character_duelist_animset', 'character_vanguard_animset'],
+    });
+
+    duelistImage.succeed();
+    vanguardImage.succeed();
+    await expect(ready).resolves.toMatchObject({
+      state: 'ready',
+      requiredIds: ['character_duelist_animset', 'character_vanguard_animset'],
+      readyIds: ['character_duelist_animset', 'character_vanguard_animset'],
+      failedIds: [],
+      fallbackIds: [],
+    });
+    expect((vanguardBody.material as THREE.SpriteMaterial).map?.image).toBe(vanguardImage);
+    expect((duelistBody.material as THREE.SpriteMaterial).map?.image).toBe(duelistImage);
+
+    characterVisual.disposeCharacterVisualNode(vanguard.node);
+    characterVisual.disposeCharacterVisualNode(duelist.node);
+  });
+
+  test('keeps the aggregate failed when another animation set resolves later', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const characterVisual = await importControlledCharacterVisual();
+    const vanguard = characterVisual.createCharacterVisualHandle('vanguard', 'P1');
+    const duelist = characterVisual.createCharacterVisualHandle('duelist', 'P2');
+    const ready = characterVisual.getRequiredPackagedAtlasRuntimeReadyPromise();
+    const duelistImage = findControlledImage('duelist');
+    const vanguardImage = findControlledImage('vanguard');
+
+    duelistImage.fail();
+    await expect(ready).rejects.toThrow('Unable to decode sprite atlas');
+    vanguardImage.succeed();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(characterVisual.getRequiredPackagedAtlasRuntimeSnapshot()).toEqual({
+      state: 'failed',
+      requiredIds: ['character_duelist_animset', 'character_vanguard_animset'],
+      loadingIds: [],
+      readyIds: ['character_vanguard_animset'],
+      failedIds: ['character_duelist_animset'],
+      fallbackIds: ['character_duelist_animset'],
+    });
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    characterVisual.disposeCharacterVisualNode(vanguard.node);
+    characterVisual.disposeCharacterVisualNode(duelist.node);
+  });
+
+  test('fails runtime readiness when decoded atlas dimensions differ from the package', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const characterVisual = await importControlledCharacterVisual();
+    const vanguard = characterVisual.createCharacterVisualHandle('vanguard', 'P1');
+    const duelist = characterVisual.createCharacterVisualHandle('duelist', 'P2');
+    const ready = characterVisual.getRequiredPackagedAtlasRuntimeReadyPromise();
+
+    findControlledImage('duelist').succeed(256, 256);
+    findControlledImage('vanguard').succeed();
+
+    await expect(ready).rejects.toThrow(
+      'Decoded sprite atlas character_duelist_animset is 256x256; expected 512x256.',
+    );
+    expect(characterVisual.getRequiredPackagedAtlasRuntimeSnapshot()).toMatchObject({
+      state: 'failed',
+      failedIds: ['character_duelist_animset'],
+      fallbackIds: ['character_duelist_animset'],
+    });
+    characterVisual.disposeCharacterVisualNode(vanguard.node);
+    characterVisual.disposeCharacterVisualNode(duelist.node);
   });
 });

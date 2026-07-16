@@ -82,7 +82,7 @@ Authored stage models use embedded GLB 2.0 files. The runtime intentionally supp
 - Runtime output: `apps/game-web/public/assets/stages/wormhole/wormhole-arena-lip-v1.glb`.
 - Current output: `52,088` bytes, `1,528` runtime vertices, `1,752` triangles, six meshes, and two materials.
 - `stage:model-validate` checks the GLB structure, embedded-resource policy, source metrics, SHA-256, and manifest ceilings.
-- `gw.visual-alpha-smoke.v10` requires the V4 preset and model to be selected, parsed, and visible at every production navigation checkpoint.
+- `gw.visual-alpha-smoke.v11` requires the V4 preset and model to be selected, parsed, and visible at every production navigation checkpoint.
 
 The model remains `prototype` readiness until direct human play confirms fighter silhouettes, boundary readability, and launch zoom behaviour on target alpha hardware.
 

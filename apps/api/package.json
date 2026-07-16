@@ -22,6 +22,7 @@
     "smoke:auth-session-rotation": "tsx scripts/authSessionRotationSmoke.ts",
     "smoke:database-interruption": "tsx scripts/databaseInterruptionSmoke.ts",
     "smoke:rollback-schema-compatibility": "tsx scripts/rollbackSchemaCompatibilitySmoke.ts",
+    "smoke:controlled-alpha-access": "tsx scripts/controlledAlphaAccessSmoke.ts",
     "smoke:local-alpha-integration": "tsx scripts/localAlphaIntegration.ts",
     "smoke:local-alpha-turn-integration": "tsx scripts/localAlphaIntegration.ts --with-coturn",
     "deploy:drain-gate": "tsx scripts/deploymentDrainGate.ts",

@@ -42,7 +42,7 @@ describe('sprite animation sets', () => {
     ]);
     for (const set of sets) {
       expect(validateSpriteAnimationSet(set)).toEqual([]);
-      expect(set.textureUrl).toMatch(/^\/assets\/characters\/.+-alpha-atlas\.svg\?v=1$/);
+      expect(set.textureUrl).toMatch(/^\/assets\/characters\/[^?#]+\?v=\d+$/);
     }
   });
 

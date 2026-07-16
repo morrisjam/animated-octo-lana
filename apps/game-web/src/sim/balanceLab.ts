@@ -13,6 +13,7 @@ import type {
   CombatAction,
   CombatDistanceBand,
   CombatDistanceTransitionContext,
+  CombatMovementIntent,
   CombatTelemetryEvent,
 } from './combatEventTelemetry';
 import type { BalanceTestRecipeId } from './balanceTestRecipes';
@@ -45,7 +46,7 @@ export type {
 const LEGACY_BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v1';
 const PREVIOUS_BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v2';
 export const BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v3';
-export const BALANCE_LAB_EXPERIMENT_SCHEMA_VERSION = 'gw.balance-lab-experiment.v7';
+export const BALANCE_LAB_EXPERIMENT_SCHEMA_VERSION = 'gw.balance-lab-experiment.v8';
 
 export type BalanceLabDiagnosticSeverity = 'info' | 'warning' | 'critical';
 export type BalanceLabAiBehaviorControl = Exclude<keyof AiBehaviorTuning, 'schemaVersion'>;
@@ -145,11 +146,23 @@ export const BALANCE_LAB_CONTROL_RETURN_ACTIONS = [
   'launch_break',
 ] as const satisfies readonly CombatAction[];
 
+export const BALANCE_LAB_POST_CONTROL_MOVEMENT_INTENTS = [
+  'approach',
+  'orbit',
+  'retreat',
+  'idle',
+  'uncontrollable',
+  'unavailable',
+] as const;
+export type BalanceLabPostControlMovementIntent =
+  (typeof BALANCE_LAB_POST_CONTROL_MOVEMENT_INTENTS)[number];
+
 export interface BalanceLabControlReturnActionFlow {
   starts: number;
   startsInPressure: number;
   immediateRelaunches: number;
   sustainedResets: number;
+  movementIntents: Record<BalanceLabPostControlMovementIntent, number>;
 }
 
 export interface BalanceLabControlReturnReview {
@@ -164,6 +177,7 @@ export interface BalanceLabControlReturnReview {
   firstActionSeconds: number | null;
   firstActionDelaySeconds: number | null;
   firstActionDistance: number | null;
+  firstActionMovementIntent: CombatMovementIntent | null;
   relaunchFrame: number | null;
   relaunchSeconds: number | null;
   controlWindowSeconds: number | null;
@@ -1557,6 +1571,9 @@ function analyseControlReturns(
       startsInPressure: 0,
       immediateRelaunches: 0,
       sustainedResets: 0,
+      movementIntents: Object.fromEntries(
+        BALANCE_LAB_POST_CONTROL_MOVEMENT_INTENTS.map((intent) => [intent, 0]),
+      ) as Record<BalanceLabPostControlMovementIntent, number>,
     }]),
   ) as Record<CombatAction, BalanceLabControlReturnActionFlow>;
   let relaunchesWithinOneSecond = 0;
@@ -1608,6 +1625,7 @@ function analyseControlReturns(
     if (firstAcceptedAction?.action) {
       const action = firstAcceptedAction.action;
       const actionFlow = firstAcceptedActions[action];
+      const movementIntent = firstAcceptedAction.movementIntent ?? 'unavailable';
       const actionDelay = Math.max(0, firstAcceptedAction.timeSeconds - controlReturn.timeSeconds);
       const startsInPressure = firstAcceptedAction.distance !== undefined
         ? firstAcceptedAction.distance <= 24
@@ -1620,6 +1638,7 @@ function analyseControlReturns(
       );
 
       actionFlow.starts += 1;
+      actionFlow.movementIntents[movementIntent] += 1;
       returnsWithAcceptedAction += 1;
       firstActionDelays.push(actionDelay);
       if (startsInPressure) {
@@ -1654,6 +1673,7 @@ function analyseControlReturns(
         ? roundMetric(Math.max(0, firstAcceptedAction.timeSeconds - controlReturn.timeSeconds), 2)
         : null,
       firstActionDistance: firstAcceptedAction?.distance ?? null,
+      firstActionMovementIntent: firstAcceptedAction?.movementIntent ?? null,
       relaunchFrame: relaunch?.frame ?? null,
       relaunchSeconds: relaunch?.timeSeconds ?? null,
       controlWindowSeconds: controlWindowSeconds === null
@@ -2045,7 +2065,14 @@ function describePostReturnDecisions(control: BalanceLabControlReturnFlow): stri
   const actionResetDetail = control.firstActionsInPressure > 0
     ? `${control.sustainedResetsAfterFirstAction}/${control.firstActionsInPressure} first pressure actions reset`
     : 'no first action began inside pressure';
-  return `${dominant.action} was the first action after ${dominant.starts}/${control.returnsWithAcceptedAction} acted returns; ${returnResetDetail}; ${actionResetDetail}`;
+  const dominantMovement = BALANCE_LAB_POST_CONTROL_MOVEMENT_INTENTS
+    .map((intent) => ({ intent, starts: dominant.movementIntents[intent] }))
+    .filter(({ starts }) => starts > 0)
+    .sort((first, second) => second.starts - first.starts || first.intent.localeCompare(second.intent))[0];
+  const movementDetail = dominantMovement
+    ? `${dominantMovement.intent} movement accompanied ${dominantMovement.starts}/${dominant.starts}`
+    : 'movement direction was unavailable';
+  return `${dominant.action} was the first action after ${dominant.starts}/${control.returnsWithAcceptedAction} acted returns; ${movementDetail}; ${returnResetDetail}; ${actionResetDetail}`;
 }
 
 function buildPlayerFlow(
@@ -3065,6 +3092,7 @@ function buildBalanceLabLoopStages(
         'commitmentPressFrames',
         'commitmentResetFrames',
         'opponentControlReturnObserveFrames',
+        'repositionWeightScale',
         'launchWeightScale',
         'specialWeightScale',
         'dunkWeightScale',
@@ -3130,6 +3158,7 @@ function buildBalanceLabLoopStages(
         'postControlSteeringFrames',
         'opponentControlReturnObserveFrames',
         'postEventRetreatChanceOffset',
+        'repositionWeightScale',
       ],
     },
     {
@@ -3166,6 +3195,7 @@ function buildBalanceLabLoopStages(
         'postRecoveryDefensiveSpecialChance',
         'postRecoveryThreatParryChance',
         'committedLaunchGuardChance',
+        'repositionWeightScale',
         'launchWeightScale',
         'dunkWeightScale',
         'launchBreakWeightScale',
@@ -4212,6 +4242,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
         'postRecoveryDefensiveSpecialChance',
         'postRecoveryThreatParryChance',
         'committedLaunchGuardChance',
+        'repositionWeightScale',
         'launchBreakWeightScale',
       ],
       relatedCharacterTargets: immediateRelaunchPlayers.flatMap((playerId) => {
@@ -4264,6 +4295,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
         'postRecoveryThreatParryChance',
         'committedLaunchGuardChance',
         'launchWeightScale',
+        'repositionWeightScale',
         'launchBreakWeightScale',
       ],
       relatedCharacterTargets: postControlResetFailurePlayers.flatMap((playerId) => {

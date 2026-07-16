@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
+  AI_DECISION_CANDIDATES,
   AI_DECISION_TRACE_SCHEMA_VERSION,
-  AI_TACTICAL_ACTIONS,
   type AiDecisionTrace,
 } from './ai';
 import {
@@ -10,7 +10,7 @@ import {
 } from './aiDecisionTelemetry';
 
 function createDecision(overrides: Partial<AiDecisionTrace> = {}): AiDecisionTrace {
-  const candidates = Object.fromEntries(AI_TACTICAL_ACTIONS.map((action) => [action, {
+  const candidates = Object.fromEntries(AI_DECISION_CANDIDATES.map((action) => [action, {
     eligible: false,
     weight: 0,
     reason: 'reaction_delay',

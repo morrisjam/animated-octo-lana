@@ -107,6 +107,7 @@ describe('sim AI behaviour framework', () => {
     expect(defaults.postCommitmentDecisionScale).toBe(0);
     expect(defaults.postControlSteeringFrames).toBe(0);
     expect(defaults.opponentControlReturnObserveFrames).toBe(0);
+    expect(defaults.repositionWeightScale).toBe(0);
     expect(resolveAiDifficultyProfile('veteran', defaults)).toEqual(
       AI_DIFFICULTY_PROFILES.veteran,
     );
@@ -128,6 +129,7 @@ describe('sim AI behaviour framework', () => {
       postRecoveryThreatParryChance: 5,
       committedLaunchGuardChance: 5,
       finishPursuitReachScale: 99,
+      repositionWeightScale: 99,
     })).toMatchObject({
       engagementDistanceScale: 3,
       neutralApproachScale: 0,
@@ -146,11 +148,12 @@ describe('sim AI behaviour framework', () => {
       postRecoveryThreatParryChance: 1,
       committedLaunchGuardChance: 1,
       finishPursuitReachScale: 2,
+      repositionWeightScale: 4,
     });
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v6',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -159,7 +162,7 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v7',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -168,7 +171,7 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v8',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -177,13 +180,72 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v9',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       postCommitmentDecisionScale: 0,
+      finishPursuitReachScale: 0.7,
+    });
+    expect(sanitiseAiBehaviorTuning({
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
+    })).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      repositionWeightScale: 0,
       finishPursuitReachScale: 0.7,
     });
     expect(fingerprintAiBehaviorTuning(defaults)).not.toBe(
       fingerprintAiBehaviorTuning({ ...defaults, engagementDistanceScale: 1.1 }),
     );
+  });
+
+  test('can deliberately choose a deterministic neutral reposition without an attack input', () => {
+    const state = createInitialState({ seed: 117 });
+    state.players.P1.pos = { x: -8, y: 0 };
+    state.players.P2.pos = { x: 8, y: 0 };
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      repositionWeightScale: 4,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const controller = {
+      ...createAiController({ seed: 117, profileId: 'veteran', behaviorTuning }),
+      decisionLockFrames: 0,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+    };
+
+    const selected = tickAiController(state, 'P1', controller);
+
+    expect(selected.decision.selectedAction).toBeNull();
+    expect(selected.decision.selectedReason).toBe('weighted_reposition_choice');
+    expect(selected.decision.movementIntent).toBe('tactical_reposition');
+    expect(selected.decision.candidates.reposition).toMatchObject({
+      eligible: true,
+      reason: 'ready',
+    });
+    expect(selected.decision.candidates.reposition.weight).toBeGreaterThan(0);
+    expect(selected.input).toMatchObject({
+      boost: false,
+      superBoost: false,
+      launch: false,
+      special: false,
+      dunk: false,
+      parry: false,
+    });
+    expect(selected.next.tacticalRepositionFramesRemaining).toBeGreaterThan(0);
+
+    const held = tickAiController(state, 'P1', selected.next);
+    expect(held.decision.movementIntent).toBe('tactical_reposition');
+    expect(held.input.boost).toBe(false);
+    expect(held.input.superBoost).toBe(false);
+
+    state.players.P2.launchStartup = framesToSeconds(4);
+    const threatened = tickAiController(state, 'P1', held.next);
+    expect(threatened.decision.movementIntent).not.toBe('tactical_reposition');
+    expect(threatened.next.tacticalRepositionFramesRemaining).toBe(0);
   });
 
   test('starts an offense-only decision read after authored attack recovery', () => {

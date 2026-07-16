@@ -196,6 +196,7 @@ describe('balance lab flow model', () => {
       firstActionSeconds: 4.2,
       firstActionDelaySeconds: 0.2,
       firstActionDistance: 12,
+      firstActionMovementIntent: 'retreat',
       relaunchFrame: 330,
       relaunchSeconds: 5.5,
       controlWindowSeconds: 1.5,
@@ -1243,12 +1244,12 @@ describe('balance lab flow model', () => {
       { schemaVersion: 'gw.combat-events.v3', sequence: 0, frame: 120, timeSeconds: 2, type: 'control_return', actorId: 'P2', outcome: 'recovery' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 1, frame: 150, timeSeconds: 2.5, type: 'launch_hit', actorId: 'P1', targetId: 'P2' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 2, frame: 360, timeSeconds: 6, type: 'control_return', actorId: 'P2', outcome: 'recovery', distance: 26, controlReturnStartDistance: 10 },
-      { schemaVersion: 'gw.combat-events.v3', sequence: 3, frame: 372, timeSeconds: 6.2, type: 'action_start', actorId: 'P2', action: 'special', distance: 10 },
+      { schemaVersion: 'gw.combat-events.v3', sequence: 3, frame: 372, timeSeconds: 6.2, type: 'action_start', actorId: 'P2', action: 'special', distance: 10, movementIntent: 'orbit' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 4, frame: 408, timeSeconds: 6.8, type: 'launch_hit', actorId: 'P1', targetId: 'P2' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 5, frame: 600, timeSeconds: 10, type: 'control_return', actorId: 'P2', action: 'launch_break', outcome: 'recovery' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 6, frame: 654, timeSeconds: 10.9, type: 'launch_hit', actorId: 'P1', targetId: 'P2' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 7, frame: 840, timeSeconds: 14, type: 'control_return', actorId: 'P2', outcome: 'recovery', distance: 12 },
-      { schemaVersion: 'gw.combat-events.v3', sequence: 8, frame: 846, timeSeconds: 14.1, type: 'action_start', actorId: 'P2', action: 'super_boost', distance: 12 },
+      { schemaVersion: 'gw.combat-events.v3', sequence: 8, frame: 846, timeSeconds: 14.1, type: 'action_start', actorId: 'P2', action: 'super_boost', distance: 12, movementIntent: 'retreat' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 9, frame: 852, timeSeconds: 14.2, type: 'distance_band_change', distanceBand: 'mid' },
     );
 
@@ -1284,6 +1285,14 @@ describe('balance lab flow model', () => {
         launch_break: { starts: 0, startsInPressure: 0, immediateRelaunches: 0, sustainedResets: 0 },
       },
     });
+    expect(control.firstAcceptedActions.special.movementIntents).toMatchObject({
+      orbit: 1,
+      unavailable: 0,
+    });
+    expect(control.firstAcceptedActions.super_boost.movementIntents).toMatchObject({
+      retreat: 1,
+      unavailable: 0,
+    });
     expect(control.reviews).toMatchObject([
       {
         playerId: 'P2',
@@ -1301,6 +1310,7 @@ describe('balance lab flow model', () => {
         returnDistance: 10,
         startedInPressure: true,
         firstAcceptedAction: 'special',
+        firstActionMovementIntent: 'orbit',
         firstActionDelaySeconds: 0.2,
         controlWindowSeconds: 0.8,
         sustainedResetAfterReturn: false,
@@ -1318,6 +1328,7 @@ describe('balance lab flow model', () => {
         returnSeconds: 14,
         startedInPressure: true,
         firstAcceptedAction: 'super_boost',
+        firstActionMovementIntent: 'retreat',
         firstActionDelaySeconds: 0.1,
         controlWindowSeconds: null,
         sustainedResetAfterReturn: true,
@@ -1350,16 +1361,16 @@ describe('balance lab flow model', () => {
     summary.players.P1.launchHits = 4;
     summary.combat.events.push(
       { schemaVersion: 'gw.combat-events.v3', sequence: 0, frame: 120, timeSeconds: 2, type: 'control_return', actorId: 'P2', outcome: 'recovery', distance: 10 },
-      { schemaVersion: 'gw.combat-events.v3', sequence: 1, frame: 132, timeSeconds: 2.2, type: 'action_start', actorId: 'P2', action: 'super_boost', distance: 10 },
+      { schemaVersion: 'gw.combat-events.v3', sequence: 1, frame: 132, timeSeconds: 2.2, type: 'action_start', actorId: 'P2', action: 'super_boost', distance: 10, movementIntent: 'retreat' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 2, frame: 204, timeSeconds: 3.4, type: 'launch_hit', actorId: 'P1', targetId: 'P2' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 3, frame: 360, timeSeconds: 6, type: 'control_return', actorId: 'P2', outcome: 'recovery', distance: 12 },
-      { schemaVersion: 'gw.combat-events.v3', sequence: 4, frame: 372, timeSeconds: 6.2, type: 'action_start', actorId: 'P2', action: 'boost', distance: 12 },
+      { schemaVersion: 'gw.combat-events.v3', sequence: 4, frame: 372, timeSeconds: 6.2, type: 'action_start', actorId: 'P2', action: 'boost', distance: 12, movementIntent: 'approach' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 5, frame: 444, timeSeconds: 7.4, type: 'launch_hit', actorId: 'P1', targetId: 'P2' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 6, frame: 600, timeSeconds: 10, type: 'control_return', actorId: 'P2', outcome: 'recovery', distance: 14 },
-      { schemaVersion: 'gw.combat-events.v3', sequence: 7, frame: 612, timeSeconds: 10.2, type: 'action_start', actorId: 'P2', action: 'special', distance: 14 },
+      { schemaVersion: 'gw.combat-events.v3', sequence: 7, frame: 612, timeSeconds: 10.2, type: 'action_start', actorId: 'P2', action: 'special', distance: 14, movementIntent: 'orbit' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 8, frame: 684, timeSeconds: 11.4, type: 'launch_hit', actorId: 'P1', targetId: 'P2' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 9, frame: 840, timeSeconds: 14, type: 'control_return', actorId: 'P2', outcome: 'recovery', distance: 16 },
-      { schemaVersion: 'gw.combat-events.v3', sequence: 10, frame: 852, timeSeconds: 14.2, type: 'action_start', actorId: 'P2', action: 'parry', distance: 16 },
+      { schemaVersion: 'gw.combat-events.v3', sequence: 10, frame: 852, timeSeconds: 14.2, type: 'action_start', actorId: 'P2', action: 'parry', distance: 16, movementIntent: 'idle' },
       { schemaVersion: 'gw.combat-events.v3', sequence: 11, frame: 924, timeSeconds: 15.4, type: 'launch_hit', actorId: 'P1', targetId: 'P2' },
     );
 
@@ -1376,6 +1387,8 @@ describe('balance lab flow model', () => {
       sustainedResetsAfterControlReturn: 0,
       controlReturnResetRatio: 0,
     });
+    expect(model.players.P2.controlReturn.firstAcceptedActions.boost.movementIntents.approach)
+      .toBe(1);
     expect(model.diagnostics.find((entry) => entry.id === 'immediate_relaunch_loop')).toBeUndefined();
     expect(diagnostic).toMatchObject({
       severity: 'critical',
@@ -1386,6 +1399,7 @@ describe('balance lab flow model', () => {
     expect(chase?.status).toBe('blocked');
     expect(chase?.relatedPlayerIds).toEqual(['P2']);
     expect(chase?.detail).toContain('only 0/4 returns created a sustained reset');
+    expect(chase?.detail).toContain('approach movement accompanied 1/1');
     expect(chase?.relatedAiBehavior).toContain('postRecoverySpacingFrames');
   });
 
@@ -2403,6 +2417,7 @@ describe('balance lab drafts', () => {
     delete legacyAiBehavior.postControlSteeringFrames;
     delete legacyAiBehavior.opponentControlReturnObserveFrames;
     delete legacyAiBehavior.postCommitmentDecisionScale;
+    delete legacyAiBehavior.repositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2410,7 +2425,7 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       neutralHoldFrames: 21,
       commitmentObserveFrames: 0,
       commitmentPressFrames: 0,
@@ -2419,6 +2434,7 @@ describe('balance lab drafts', () => {
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
       postCommitmentDecisionScale: 0,
+      repositionWeightScale: 0,
     });
   });
 
@@ -2436,6 +2452,7 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.postControlSteeringFrames;
     delete previousAiBehavior.opponentControlReturnObserveFrames;
     delete previousAiBehavior.postCommitmentDecisionScale;
+    delete previousAiBehavior.repositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2443,11 +2460,12 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
       postCommitmentDecisionScale: 0,
+      repositionWeightScale: 0,
     });
   });
 
@@ -2464,6 +2482,7 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.postControlSteeringFrames;
     delete previousAiBehavior.opponentControlReturnObserveFrames;
     delete previousAiBehavior.postCommitmentDecisionScale;
+    delete previousAiBehavior.repositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2471,11 +2490,12 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
       postCommitmentDecisionScale: 0,
+      repositionWeightScale: 0,
     });
   });
 
@@ -2491,6 +2511,7 @@ describe('balance lab drafts', () => {
     previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v8';
     delete previousAiBehavior.opponentControlReturnObserveFrames;
     delete previousAiBehavior.postCommitmentDecisionScale;
+    delete previousAiBehavior.repositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2498,11 +2519,12 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
       postCommitmentDecisionScale: 0,
+      repositionWeightScale: 0,
     });
   });
 
@@ -2517,6 +2539,7 @@ describe('balance lab drafts', () => {
     const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
     previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v9';
     delete previousAiBehavior.postCommitmentDecisionScale;
+    delete previousAiBehavior.repositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2524,8 +2547,32 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
       postCommitmentDecisionScale: 0,
+      repositionWeightScale: 0,
+    });
+  });
+
+  test('fills tactical repositioning when loading a v3 draft with v10 AI tuning', () => {
+    const draft = createBalanceLabDraft(
+      'Pre-reposition behavior draft',
+      createDefaultTuning(),
+      {},
+      '2026-07-13T12:00:00.000Z',
+      createDefaultAiBehaviorTuning(),
+    );
+    const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
+    previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v10';
+    delete previousAiBehavior.repositionWeightScale;
+
+    const parsed = parseBalanceLabDraft({
+      ...draft,
+      aiBehaviorTuning: previousAiBehavior,
+    });
+
+    expect(parsed?.aiBehaviorTuning).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      repositionWeightScale: 0,
     });
   });
 

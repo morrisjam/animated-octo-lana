@@ -95,6 +95,7 @@ describe('match telemetry tracker', () => {
     state.players.P2.launchActive = 0.1;
     const tracker = createMatchTelemetryTracker(state);
     const input = neutralInput();
+    input.p1.moveX = 1;
     input.p1.parry = true;
     const acceptedActionStarts: SimulationActionStart[] = [];
 
@@ -111,6 +112,7 @@ describe('match telemetry tracker', () => {
       type: 'action_start',
       actorId: 'P1',
       action: 'parry',
+      movementIntent: 'approach',
     }));
   });
 

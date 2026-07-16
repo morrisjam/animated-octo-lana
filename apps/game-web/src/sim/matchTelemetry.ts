@@ -20,8 +20,8 @@ import {
 } from './characterBalance';
 import type { SimulationActionStart, SimulationLaunchClash } from './sim';
 
-export const MATCH_TELEMETRY_SCHEMA_VERSION = 'gw.match-telemetry.v7';
-export const MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION = 'gw.match-telemetry-aggregate.v7';
+export const MATCH_TELEMETRY_SCHEMA_VERSION = 'gw.match-telemetry.v8';
+export const MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION = 'gw.match-telemetry-aggregate.v8';
 export const MATCH_TELEMETRY_CONTACT_PADDING = 0.75;
 export const MATCH_TELEMETRY_SUSTAINED_DECISION_WINDOW_SECONDS = 0.75;
 

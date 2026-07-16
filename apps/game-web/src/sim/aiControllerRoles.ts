@@ -1,8 +1,10 @@
 import {
+  AI_DECISION_CANDIDATES,
   AI_DECISION_TRACE_SCHEMA_VERSION,
   tickAiController,
   type AiActionCandidateTrace,
   type AiControllerState,
+  type AiDecisionCandidate,
   type AiDecisionTrace,
   type AiTickResult,
   type AiTacticalAction,
@@ -135,16 +137,10 @@ function buildScriptedDecision(
   roleCooldownFrames: number,
 ): AiDecisionTrace {
   const roleBlocker = `scripted_${roleId}_role`;
-  const candidates = Object.fromEntries(([
-    'launch',
-    'special',
-    'dunk',
-    'parry',
-    'launch_break',
-  ] as const).map((action) => [
+  const candidates = Object.fromEntries(AI_DECISION_CANDIDATES.map((action) => [
     action,
     scriptedCandidate(action === selectedAction, selectedReason, roleBlocker),
-  ])) as Record<AiTacticalAction, AiActionCandidateTrace>;
+  ])) as Record<AiDecisionCandidate, AiActionCandidateTrace>;
 
   return {
     ...base,
@@ -264,6 +260,8 @@ export function tickAiControllerWithRole(
       neutralHoldFramesRemaining: 0,
       neutralHoldPending: false,
       postRecoveryFramesRemaining: 0,
+      tacticalRepositionOpportunityFramesRemaining: 0,
+      tacticalRepositionFramesRemaining: 0,
       postRecoveryUseSuperBoost: false,
     },
   };

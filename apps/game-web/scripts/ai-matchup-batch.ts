@@ -58,6 +58,7 @@ import {
   BALANCE_LAB_CARRIED_REENTRY_CAUSES,
   BALANCE_LAB_CARRIED_REENTRY_CAUSE_LABELS,
   BALANCE_LAB_CONTROL_RETURN_ACTIONS,
+  BALANCE_LAB_POST_CONTROL_MOVEMENT_INTENTS,
   BALANCE_LAB_LOOP_STAGE_IDS,
   aggregateBalanceLabLoopStages,
   buildBalanceLabFinishOpportunityReviews,
@@ -77,6 +78,7 @@ import {
   type BalanceLabLoopStageAggregate,
   type BalanceLabLoopStageAggregates,
   type BalanceLabLoopStageId,
+  type BalanceLabPostControlMovementIntent,
   type BalanceLabRuleChange,
 } from '../src/sim/balanceLab';
 import type { CombatAction, CombatDistanceTransitionContext } from '../src/sim/combatEventTelemetry';
@@ -211,6 +213,7 @@ interface AiMatchupFlowPlayerSummary {
     startsInPressure: number;
     immediateRelaunches: number;
     sustainedResets: number;
+    movementIntents: Record<BalanceLabPostControlMovementIntent, number>;
   }>;
   clashFirstActions: number;
   clashFirstActionsInPressure: number;
@@ -477,7 +480,7 @@ interface BatchComparison {
 }
 
 interface BatchReport {
-  schemaVersion: 'gw.ai-matchup-batch.v15';
+  schemaVersion: 'gw.ai-matchup-batch.v16';
   generatedAt: string;
   characterRegistry: {
     schemaVersion: string;
@@ -860,12 +863,18 @@ function buildAiMatchupFlowSummary(
           current.startsInPressure += actionFlow.startsInPressure;
           current.immediateRelaunches += actionFlow.immediateRelaunches;
           current.sustainedResets += actionFlow.sustainedResets;
+          for (const intent of BALANCE_LAB_POST_CONTROL_MOVEMENT_INTENTS) {
+            current.movementIntents[intent] += actionFlow.movementIntents[intent];
+          }
           return current;
         }, {
           starts: 0,
           startsInPressure: 0,
           immediateRelaunches: 0,
           sustainedResets: 0,
+          movementIntents: Object.fromEntries(
+            BALANCE_LAB_POST_CONTROL_MOVEMENT_INTENTS.map((intent) => [intent, 0]),
+          ) as Record<BalanceLabPostControlMovementIntent, number>,
         });
         return [action, aggregate];
       }),
@@ -2060,7 +2069,10 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
     throw new Error(`Comparison report "${path}" is not a JSON object.`);
   }
   const report = parsed as Partial<ComparableBatchReport>;
-  const ruleSnapshot = report.schemaVersion === 'gw.ai-matchup-batch.v15'
+  const ruleSnapshot = (
+    report.schemaVersion === 'gw.ai-matchup-batch.v15'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v16'
+  )
     ? parseAiBatchRuleSnapshot(report.ruleSnapshot)
     : null;
   if (
@@ -2078,6 +2090,7 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
       && report.schemaVersion !== 'gw.ai-matchup-batch.v13'
       && report.schemaVersion !== 'gw.ai-matchup-batch.v14'
       && report.schemaVersion !== 'gw.ai-matchup-batch.v15'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v16'
     )
     || typeof report.generatedAt !== 'string'
     || !report.options
@@ -2090,17 +2103,23 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
         || report.schemaVersion === 'gw.ai-matchup-batch.v12'
         || report.schemaVersion === 'gw.ai-matchup-batch.v13'
         || report.schemaVersion === 'gw.ai-matchup-batch.v14'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v15')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v15'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v16')
       && typeof report.aiBaseProfilesFingerprint !== 'string'
     )
     || !Array.isArray(report.summaries)
     || report.summaries.some((summary) => !isComparableMatchSummary(summary))
     || (
       (report.schemaVersion === 'gw.ai-matchup-batch.v14'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v15')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v15'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v16')
       && report.summaries.some((summary) => !hasSharedAgencyTelemetry(summary))
     )
-    || (report.schemaVersion === 'gw.ai-matchup-batch.v15' && !ruleSnapshot)
+    || (
+      (report.schemaVersion === 'gw.ai-matchup-batch.v15'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v16')
+      && !ruleSnapshot
+    )
   ) {
     throw new Error(`Comparison report "${path}" is not a compatible AI matchup batch report.`);
   }
@@ -2489,7 +2508,8 @@ function buildBatchComparison(
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v12'
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v13'
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v14'
-    || baseline.schemaVersion === 'gw.ai-matchup-batch.v15';
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v15'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v16';
   const candidateScenarioFingerprint = controlledScenarioFingerprint(candidate);
   const baselineScenarioFingerprint = controlledScenarioFingerprint(baseline);
   if (candidateScenarioFingerprint !== baselineScenarioFingerprint) {
@@ -3020,7 +3040,7 @@ function emitReviewReplayArtifacts(
           label = `${label} | ${review.playerId} control return`;
           replay.payload.header.reviewFocus.label = label;
           const firstAction = review.firstAcceptedAction
-            ? `${review.firstAcceptedAction} after ${review.firstActionDelaySeconds?.toFixed(2) ?? 'N/A'}s`
+            ? `${review.firstAcceptedAction}${review.firstActionMovementIntent ? ` with ${review.firstActionMovementIntent} movement` : ''} after ${review.firstActionDelaySeconds?.toFixed(2) ?? 'N/A'}s`
             : 'no accepted action';
           const relaunch = review.controlWindowSeconds === null
             ? 'no re-launch recorded'
@@ -3141,7 +3161,12 @@ function formatSummaryMarkdown(report: BatchReport): string {
       if (flow.starts === 0) {
         return [];
       }
-      return [`${action.replace('_', ' ')} ${flow.starts} (<=1s ${flow.immediateRelaunches}; reset ${flow.sustainedResets}/${flow.startsInPressure})`];
+      const movement = BALANCE_LAB_POST_CONTROL_MOVEMENT_INTENTS
+        .flatMap((intent) => flow.movementIntents[intent] > 0
+          ? [`${intent} ${flow.movementIntents[intent]}`]
+          : []);
+      const movementSummary = movement.length > 0 ? `; move ${movement.join('/')}` : '';
+      return [`${action.replace('_', ' ')} ${flow.starts} (<=1s ${flow.immediateRelaunches}; reset ${flow.sustainedResets}/${flow.startsInPressure}${movementSummary})`];
     });
     return actions.length > 0 ? actions.join(', ') : 'N/A (no accepted action after return)';
   };
@@ -3502,7 +3527,7 @@ function formatSummaryMarkdown(report: BatchReport): string {
     '',
     '### Post-Control Decisions',
     '',
-    'This table classifies the first simulation-accepted action after control returns. `Return reset` starts at the actual control-return moment; per-action `reset` starts at the first accepted action. Both require a sustained 0.75s exit from pressure within two seconds. `<=1s` counts immediate counter-launches after that action. It is intended to expose controller choices and their consequences, not class strength.',
+    'This table classifies the first simulation-accepted action after control returns. `Return reset` starts at the actual control-return moment; per-action `reset` starts at the first accepted action. Both require a sustained 0.75s exit from pressure within two seconds. `<=1s` counts immediate counter-launches after that action. `Move` records whether the accepted action was accompanied by approach, orbit, retreat, idle, or uncontrollable input; historical samples without that context remain `unavailable`. It is intended to expose controller choices and their consequences, not class strength.',
     '',
     '| P1 | P2 | Difficulty | P1 accepted returns / total | P1 return reset | P1 first-action delay | P1 first-action outcomes | P2 accepted returns / total | P2 return reset | P2 first-action delay | P2 first-action outcomes |',
     '| --- | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |',
@@ -3841,7 +3866,7 @@ function run(): void {
   })));
 
   const report: BatchReport = {
-    schemaVersion: 'gw.ai-matchup-batch.v15',
+    schemaVersion: 'gw.ai-matchup-batch.v16',
     generatedAt: new Date().toISOString(),
     characterRegistry: {
       schemaVersion: CHARACTER_REGISTRY_SCHEMA_VERSION,

@@ -13,7 +13,10 @@ import { createDefaultTuning } from './tuning';
 describe('Balance Lab candidate presets', () => {
   test('exports a versioned human-review registry with explicit rule evidence', () => {
     expect(BALANCE_CANDIDATE_PRESET_SCHEMA_VERSION).toBe('gw.balance-candidate-preset.v1');
-    expect(BALANCE_CANDIDATE_PRESET_IDS).toEqual(['launch_break_agency_v1']);
+    expect(BALANCE_CANDIDATE_PRESET_IDS).toEqual([
+      'launch_break_agency_v1',
+      'post_control_reposition_v1',
+    ]);
     expect(BALANCE_CANDIDATE_PRESETS.map((preset) => preset.id)).toEqual(BALANCE_CANDIDATE_PRESET_IDS);
     expect(BALANCE_CANDIDATE_PRESETS[0]).toMatchObject({
       status: 'human_review',
@@ -22,6 +25,26 @@ describe('Balance Lab candidate presets', () => {
         { characterId: 'duelist', baselineValue: 28, candidateValue: 10 },
       ],
     });
+  });
+
+  test('stages only the evidence-backed post-control AI choice', () => {
+    const tuning = createDefaultTuning();
+    const aiBehavior = createDefaultAiBehaviorTuning();
+
+    const applied = applyBalanceCandidatePreset(
+      'post_control_reposition_v1',
+      tuning,
+      {},
+      aiBehavior,
+    );
+
+    expect(applied.tuning).toEqual(tuning);
+    expect(applied.characterBalanceOverrides).toEqual({});
+    expect(applied.aiBehaviorTuning).toEqual({
+      ...aiBehavior,
+      repositionWeightScale: 1,
+    });
+    expect(aiBehavior.repositionWeightScale).toBe(0);
   });
 
   test('stages only the two candidate character rules without mutating current drafts', () => {

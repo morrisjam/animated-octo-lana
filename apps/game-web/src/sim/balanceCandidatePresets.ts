@@ -18,6 +18,7 @@ export const BALANCE_CANDIDATE_PRESET_SCHEMA_VERSION = 'gw.balance-candidate-pre
 
 export const BALANCE_CANDIDATE_PRESET_IDS = [
   'launch_break_agency_v1',
+  'post_control_reposition_v1',
 ] as const;
 
 export type BalanceCandidatePresetId = (typeof BALANCE_CANDIDATE_PRESET_IDS)[number];
@@ -74,6 +75,25 @@ export const BALANCE_CANDIDATE_PRESETS: readonly BalanceCandidatePreset[] = [
         baselineValue: 28,
         candidateValue: 10,
         label: 'Duelist launch-break recovery: 28f -> 10f',
+      },
+    ],
+  },
+  {
+    schemaVersion: BALANCE_CANDIDATE_PRESET_SCHEMA_VERSION,
+    id: 'post_control_reposition_v1',
+    label: 'Post-control reposition V1',
+    description: 'Give a fighter one weighted orbit-or-retreat choice after regaining control, without delaying ordinary neutral or suppressing an immediate defensive response.',
+    designerQuestion: 'Does the returning fighter create readable space and a new decision without turning the match passive?',
+    evidence: 'A mirrored Cadet/Veteran 12-set screen reduced Blocked Chase rounds from 16 to 2 and Blocked Commitment rounds from 14 to 4. All 100 candidate rounds reached a finish with no timeouts or drawn sets; human feel review is still required.',
+    status: 'human_review',
+    rules: [
+      {
+        scope: 'ai',
+        characterId: null,
+        path: 'repositionWeightScale',
+        baselineValue: 0,
+        candidateValue: 1,
+        label: 'Post-control reposition weight: 0 -> 1',
       },
     ],
   },

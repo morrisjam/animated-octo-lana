@@ -7,7 +7,7 @@ import type { FrameInput, GameState, PlayerFrameInput, PlayerId, PlayerState } f
 
 export type AiDifficultyId = 'rookie' | 'cadet' | 'veteran' | 'ace';
 
-export const AI_POLICY_REVISION = 'flow-v16';
+export const AI_POLICY_REVISION = 'flow-v17';
 export const AI_RECOVERY_POLICY_IDS = ['legacy', 'spacing', 'evasive'] as const;
 export type AiRecoveryPolicyId = (typeof AI_RECOVERY_POLICY_IDS)[number];
 export const DEFAULT_AI_RECOVERY_POLICY: AiRecoveryPolicyId = 'legacy';
@@ -18,7 +18,7 @@ export const AI_PURSUIT_POLICY_IDS = ['legacy', 'neutral_hold'] as const;
 export type AiPursuitPolicyId = (typeof AI_PURSUIT_POLICY_IDS)[number];
 export const DEFAULT_AI_PURSUIT_POLICY: AiPursuitPolicyId = 'legacy';
 
-export const AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v10';
+export const AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v11';
 
 const LEGACY_FINISH_PURSUIT_REACH_SCALE = 0.25;
 const DEFAULT_FINISH_PURSUIT_REACH_SCALE = 0.7;
@@ -48,6 +48,7 @@ export interface AiBehaviorTuning {
   postRecoveryThreatParryChance: number;
   committedLaunchGuardChance: number;
   finishPursuitReachScale: number;
+  repositionWeightScale: number;
   launchWeightScale: number;
   specialWeightScale: number;
   dunkWeightScale: number;
@@ -80,6 +81,7 @@ const DEFAULT_AI_BEHAVIOR_TUNING: AiBehaviorTuning = {
   postRecoveryThreatParryChance: 0,
   committedLaunchGuardChance: 0,
   finishPursuitReachScale: DEFAULT_FINISH_PURSUIT_REACH_SCALE,
+  repositionWeightScale: 0,
   launchWeightScale: 1,
   specialWeightScale: 1,
   dunkWeightScale: 1,
@@ -199,6 +201,7 @@ export function sanitiseAiBehaviorTuning(value: unknown): AiBehaviorTuning {
       0,
       2,
     ),
+    repositionWeightScale: finiteTuningValue(input.repositionWeightScale, 0, 0, 4),
     launchWeightScale: finiteTuningValue(input.launchWeightScale, 1, 0, 4),
     specialWeightScale: finiteTuningValue(input.specialWeightScale, 1, 0, 4),
     dunkWeightScale: finiteTuningValue(input.dunkWeightScale, 1, 0, 4),
@@ -334,6 +337,8 @@ export interface AiControllerState {
   launchBreakPlanned: boolean;
   postRecoveryFramesRemaining: number;
   postControlSteeringFramesRemaining: number;
+  tacticalRepositionOpportunityFramesRemaining: number;
+  tacticalRepositionFramesRemaining: number;
   postRecoveryMode: 'retreat' | 'orbit';
   postRecoveryUseSuperBoost: boolean;
   postRecoveryDefenseFramesRemaining: number;
@@ -357,12 +362,13 @@ export interface AiControllerState {
   behaviorTuning: AiBehaviorTuning;
 }
 
-export const AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.ai-decision-trace.v3';
+export const AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.ai-decision-trace.v4';
 
 export const AI_MOVEMENT_INTENTS = [
   'uncontrolled',
   'projectile_evade',
   'post_event_spacing',
+  'tactical_reposition',
   'neutral_hold',
   'commitment_observe',
   'commitment_press',
@@ -390,6 +396,12 @@ export const AI_TACTICAL_ACTIONS = [
   'launch_break',
 ] as const;
 export type AiTacticalAction = (typeof AI_TACTICAL_ACTIONS)[number];
+
+export const AI_DECISION_CANDIDATES = [
+  ...AI_TACTICAL_ACTIONS,
+  'reposition',
+] as const;
+export type AiDecisionCandidate = (typeof AI_DECISION_CANDIDATES)[number];
 
 export interface AiActionCandidateTrace {
   eligible: boolean;
@@ -424,7 +436,7 @@ export interface AiDecisionTrace {
     postEventSpacingActive: boolean;
     deliberateError: boolean;
   };
-  candidates: Record<AiTacticalAction, AiActionCandidateTrace>;
+  candidates: Record<AiDecisionCandidate, AiActionCandidateTrace>;
 }
 
 export interface AiTickResult {
@@ -595,6 +607,8 @@ export function createAiController(seedOrOptions?: number | CreateAiControllerOp
     launchBreakPlanned: false,
     postRecoveryFramesRemaining: 0,
     postControlSteeringFramesRemaining: 0,
+    tacticalRepositionOpportunityFramesRemaining: 0,
+    tacticalRepositionFramesRemaining: 0,
     postRecoveryMode: 'orbit',
     postRecoveryUseSuperBoost: false,
     postRecoveryDefenseFramesRemaining: 0,
@@ -663,6 +677,14 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   let postControlSteeringFramesRemaining = Math.max(
     0,
     Math.floor(controller.postControlSteeringFramesRemaining ?? 0) - 1,
+  );
+  let tacticalRepositionOpportunityFramesRemaining = Math.max(
+    0,
+    Math.floor(controller.tacticalRepositionOpportunityFramesRemaining ?? 0) - 1,
+  );
+  let tacticalRepositionFramesRemaining = Math.max(
+    0,
+    Math.floor(controller.tacticalRepositionFramesRemaining ?? 0) - 1,
   );
   let postRecoveryMode = controller.postRecoveryMode ?? 'orbit';
   let postRecoveryUseSuperBoost = controller.postRecoveryUseSuperBoost ?? false;
@@ -861,6 +883,17 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     || opponent.recovering > 0;
   const opponentControlReturnedThisFrame = wasOpponentWithoutControl && !opponentWithoutControl;
   wasOpponentWithoutControl = opponentWithoutControl;
+  if (
+    controlReturnedThisFrame
+    && behaviorTuning.repositionWeightScale > 0
+    && playerHasControl
+    && !state.winner
+  ) {
+    tacticalRepositionOpportunityFramesRemaining = Math.max(
+      18,
+      profile.reactionDelayFrames + 12,
+    );
+  }
   if (state.winner || playerWithoutControl || opponentWithoutControl) {
     postCommitmentDecisionFramesRemaining = 0;
   } else if (
@@ -1146,6 +1179,15 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && opponent.helpless <= 0
     && opponent.recovering <= 0
     && !state.winner;
+  const tacticalRepositionActive = tacticalRepositionFramesRemaining > 0
+    && playerHasNeutralControl
+    && opponentHasNeutralControl
+    && !incomingProjectileClose
+    && !opponentOpen
+    && !state.winner;
+  if (tacticalRepositionFramesRemaining > 0 && !tacticalRepositionActive) {
+    tacticalRepositionFramesRemaining = 0;
+  }
 
   if (maneuverFramesRemaining <= 0) {
     const maneuverRoll = nextAiRoll(rngState);
@@ -1153,6 +1195,21 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     strafeSign = maneuverRoll.roll < 0.5 ? -1 : 1;
     maneuverFramesRemaining = Math.round(18 + (1 - profile.errorRate) * 18 + maneuverRoll.roll * 12);
   }
+
+  const applyTacticalRepositionMovement = (): void => {
+    movementIntent = 'tactical_reposition';
+    const targetDistance = Math.max(28, pressureDistance + 17);
+    const rangeBias = clampAxis((distance - targetDistance) / 10) * 0.52;
+    const centerBias = centerDistance > ARENA_RADIUS * 0.72 ? 0.82 : 0.16;
+    input.moveX = clampAxis(
+      dirX * rangeBias + tangentX * 0.9 + toCenterX * centerBias,
+    );
+    input.moveY = clampAxis(
+      dirY * rangeBias + tangentY * 0.9 + toCenterY * centerBias,
+    );
+    input.boost = false;
+    input.superBoost = false;
+  };
 
   if (incomingProjectileClose) {
     movementIntent = 'projectile_evade';
@@ -1184,6 +1241,8 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     input.moveY = clampAxis(
       dirY * retreatBias + tangentY * orbitBias + toCenterY * centerBias,
     );
+  } else if (tacticalRepositionActive) {
+    applyTacticalRepositionMovement();
   } else if (neutralHoldActive) {
     movementIntent = 'neutral_hold';
     const rangeBias = clampAxis((distance - behaviorTuning.neutralHoldDistance) / 12) * 0.34;
@@ -1439,12 +1498,15 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   let specialReady = false;
   let dunkReady = dunkCommitReady;
   let parryReady = false;
+  let repositionReady = false;
   let launchWeight = 0;
   let specialWeight = 0;
   let dunkWeight = dunkCommitReady
     ? profile.actionWeights.dunk * (0.9 + profile.riskAppetite * 0.45)
     : 0;
   let parryWeight = 0;
+  let repositionWeight = 0;
+  let repositionSelected = false;
   let selectionRoll: number | null = null;
 
   if (
@@ -1474,6 +1536,14 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     dunkReady = dunkCommitReady;
     parryReady = player.parry <= 0
       && (opponentParryableThreatening || incomingProjectileUrgent);
+    const repositionTargetDistance = Math.max(28, pressureDistance + 17);
+    repositionReady = behaviorTuning.repositionWeightScale > 0
+      && tacticalRepositionOpportunityFramesRemaining > 0
+      && opponentHasNeutralControl
+      && !opponentOpen
+      && !incomingProjectileClose
+      && !finishOpportunity
+      && distance <= repositionTargetDistance + 12;
 
     if (parryReady && incomingProjectileUrgent && specialMove.behaviorId !== 'special.block_guard.v1') {
       input.parry = true;
@@ -1536,7 +1606,21 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
           * ((incomingProjectileUrgent || opponentParryableThreatening) ? 1.2 : 0.65)
           * (specialMove.behaviorId === 'special.block_guard.v1' ? 0.7 : 1)
         : 0;
-      const totalWeight = launchWeight + specialWeight + dunkWeight + parryWeight;
+      if (repositionReady) {
+        const crowding = clamp01((repositionTargetDistance - distance) / 18);
+        const closingPressure = clamp01(-separationSpeed / 36);
+        repositionWeight = behaviorTuning.repositionWeightScale
+          * (0.42 + crowding * 0.9 + closingPressure * 0.28)
+          * (1.12 - profile.riskAppetite * 0.28)
+          * (controlReturnedThisFrame ? 1.25 : 1)
+          * (lowFuel ? 1.18 : 1)
+          * (opponentNearDepleted ? 0.45 : 1);
+      }
+      const totalWeight = launchWeight
+        + specialWeight
+        + dunkWeight
+        + parryWeight
+        + repositionWeight;
 
       if (totalWeight > 0) {
         const pickSample = nextAiRoll(rngState);
@@ -1553,13 +1637,30 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
             pick -= specialWeight;
             if (pick < dunkWeight) {
               input.dunk = true;
-            } else if (parryWeight > 0) {
-              input.parry = true;
+            } else {
+              pick -= dunkWeight;
+              if (pick < parryWeight) {
+                input.parry = true;
+              } else if (repositionWeight > 0) {
+                repositionSelected = true;
+              }
             }
           }
         }
-        decisionLockFrames = Math.max(2, Math.round(2 + (1 - profile.riskAppetite) * 4));
-        reactionFramesRemaining = profile.reactionDelayFrames;
+        if (repositionSelected) {
+          const repositionFrames = Math.max(
+            8,
+            Math.round(10 + (1 - profile.riskAppetite) * 12),
+          );
+          tacticalRepositionFramesRemaining = repositionFrames;
+          tacticalRepositionOpportunityFramesRemaining = 0;
+          decisionLockFrames = repositionFrames;
+          reactionFramesRemaining = Math.max(profile.reactionDelayFrames, repositionFrames);
+          applyTacticalRepositionMovement();
+        } else {
+          decisionLockFrames = Math.max(2, Math.round(2 + (1 - profile.riskAppetite) * 4));
+          reactionFramesRemaining = profile.reactionDelayFrames;
+        }
       }
     }
   }
@@ -1610,6 +1711,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     || input.breakLaunch;
   if (requestedTacticalAction) {
     superBoostStartsSinceTacticalAction = 0;
+    tacticalRepositionOpportunityFramesRemaining = 0;
   }
   const startingSuperBoost = input.superBoost && player.superBoost <= 0;
   if (
@@ -1715,6 +1817,17 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
         ? 'out_of_range'
         : 'target_moving_too_fast';
   const parryUnavailableReason = player.parry > 0 ? 'already_active' : 'no_immediate_threat';
+  const repositionUnavailableReason = behaviorTuning.repositionWeightScale <= 0
+    ? 'disabled'
+    : tacticalRepositionOpportunityFramesRemaining <= 0
+      ? 'no_post_control_opportunity'
+    : finishOpportunity
+      ? 'finish_opportunity'
+      : !opponentHasNeutralControl || opponentOpen
+        ? 'opponent_not_neutral'
+        : incomingProjectileClose
+          ? 'projectile_threat'
+          : 'outside_reposition_range';
   const breakEligible = !state.winner
     && player.helpless > 0
     && player.launchBreaks > 0
@@ -1763,6 +1876,8 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
               : specialMove.behaviorId
           : selectedAction === 'launch'
             ? opponentOpen ? 'punish_opening' : 'weighted_pressure_choice'
+            : repositionSelected
+              ? 'weighted_reposition_choice'
             : breakEligible && breakSelectionRoll !== null
               ? 'launch_break_roll_failed'
               : tacticalGateReason
@@ -1834,6 +1949,11 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
         weight: roundTraceNumber(breakWeight),
         reason: breakReason,
       },
+      reposition: tacticalCandidate(
+        repositionReady,
+        repositionWeight,
+        repositionUnavailableReason,
+      ),
     },
   };
 
@@ -1856,6 +1976,8 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       launchBreakPlanned,
       postRecoveryFramesRemaining,
       postControlSteeringFramesRemaining,
+      tacticalRepositionOpportunityFramesRemaining,
+      tacticalRepositionFramesRemaining,
       postRecoveryMode,
       postRecoveryUseSuperBoost,
       postRecoveryDefenseFramesRemaining,

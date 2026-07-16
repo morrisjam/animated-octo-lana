@@ -1,13 +1,15 @@
 import {
   AI_MOVEMENT_INTENTS,
+  AI_DECISION_CANDIDATES,
   AI_TACTICAL_ACTIONS,
+  type AiDecisionCandidate,
   type AiDecisionTrace,
   type AiMovementIntent,
   type AiTacticalAction,
 } from './ai';
 import type { PlayerId, PlayersById } from './types';
 
-export const AI_DECISION_TELEMETRY_SCHEMA_VERSION = 'gw.ai-decision-telemetry.v3';
+export const AI_DECISION_TELEMETRY_SCHEMA_VERSION = 'gw.ai-decision-telemetry.v4';
 
 export interface AiDecisionTelemetryEvent {
   sequence: number;
@@ -20,7 +22,7 @@ export interface AiDecisionPlayerTelemetry {
   observedFrames: number;
   movementIntentFrames: Record<AiMovementIntent, number>;
   selectedActionCounts: Record<AiTacticalAction, number>;
-  blockedCandidateCounts: Record<AiTacticalAction, Record<string, number>>;
+  blockedCandidateCounts: Record<AiDecisionCandidate, Record<string, number>>;
 }
 
 export interface AiDecisionTelemetrySummary {
@@ -42,8 +44,8 @@ function createPlayerTelemetry(): AiDecisionPlayerTelemetry {
     movementIntentFrames: createNumberRecord(AI_MOVEMENT_INTENTS),
     selectedActionCounts: createNumberRecord(AI_TACTICAL_ACTIONS),
     blockedCandidateCounts: Object.fromEntries(
-      AI_TACTICAL_ACTIONS.map((action) => [action, {}]),
-    ) as Record<AiTacticalAction, Record<string, number>>,
+      AI_DECISION_CANDIDATES.map((action) => [action, {}]),
+    ) as Record<AiDecisionCandidate, Record<string, number>>,
   };
 }
 
@@ -53,14 +55,15 @@ function cloneDecisionTrace(trace: AiDecisionTrace): AiDecisionTrace {
     context: { ...trace.context },
     gates: { ...trace.gates },
     candidates: Object.fromEntries(
-      AI_TACTICAL_ACTIONS.map((action) => [action, { ...trace.candidates[action] }]),
-    ) as Record<AiTacticalAction, AiDecisionTrace['candidates'][AiTacticalAction]>,
+      AI_DECISION_CANDIDATES.map((action) => [action, { ...trace.candidates[action] }]),
+    ) as AiDecisionTrace['candidates'],
   };
 }
 
 function decisionEventSignature(trace: AiDecisionTrace): string {
   const navigationIntent = trace.movementIntent === 'projectile_evade'
     || trace.movementIntent === 'post_event_spacing'
+    || trace.movementIntent === 'tactical_reposition'
     || trace.movementIntent === 'neutral_hold'
     || trace.movementIntent === 'commitment_observe'
     || trace.movementIntent === 'commitment_press'
@@ -136,7 +139,7 @@ export class AiDecisionTelemetryTracker {
       if (decision.selectedAction) {
         player.selectedActionCounts[decision.selectedAction] += 1;
       }
-      for (const action of AI_TACTICAL_ACTIONS) {
+      for (const action of AI_DECISION_CANDIDATES) {
         const candidate = decision.candidates[action];
         if (!candidate.eligible) {
           const counts = player.blockedCandidateCounts[action];

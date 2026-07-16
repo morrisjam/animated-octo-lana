@@ -1,6 +1,6 @@
 import { createDefaultTuning, sanitiseTuning } from '../sim/tuning';
 import {
-  AI_TACTICAL_ACTIONS,
+  AI_DECISION_CANDIDATES,
   createDefaultAiBehaviorTuning,
   fingerprintAiBehaviorTuning,
   sanitiseAiBehaviorTuning,
@@ -213,6 +213,7 @@ export const AI_BEHAVIOR_TUNING_FIELDS: readonly AiBehaviorTuningField[] = [
   { key: 'postRecoveryThreatParryChance', section: 'Commitment and defense', label: 'Post-Control Threat Parry Chance', step: 0.05, min: 0, max: 1 },
   { key: 'committedLaunchGuardChance', section: 'Commitment and defense', label: 'Committed Launch Guard Chance', step: 0.05, min: 0, max: 1 },
   { key: 'finishPursuitReachScale', section: 'Pursuit and spacing', label: 'Finish Dunk Pursuit Reach Scale', step: 0.05, min: 0, max: 2 },
+  { key: 'repositionWeightScale', section: 'Pursuit and spacing', label: 'Tactical Reposition Weight', step: 0.05, min: 0, max: 4 },
   { key: 'launchWeightScale', section: 'Commitment and defense', label: 'Launch Commitment Weight', step: 0.05, min: 0, max: 4 },
   { key: 'specialWeightScale', section: 'Commitment and defense', label: 'Special Commitment Weight', step: 0.05, min: 0, max: 4 },
   { key: 'dunkWeightScale', section: 'Commitment and defense', label: 'Dunk Commitment Weight', step: 0.05, min: 0, max: 4 },
@@ -2316,7 +2317,7 @@ export class PauseMenu {
       context.textContent = `Distance ${decision.context.distance.toFixed(1)} | fuel ${(decision.context.fuelRatio * 100).toFixed(0)}% | reaction ${decision.gates.reactionFramesRemaining}f | lock ${decision.gates.decisionLockFrames}f${decision.selectionRoll === null ? '' : ` | roll ${decision.selectionRoll.toFixed(3)}`}`;
       const candidates = document.createElement('div');
       candidates.className = 'balance-ai-candidates';
-      for (const action of AI_TACTICAL_ACTIONS) {
+      for (const action of AI_DECISION_CANDIDATES) {
         const candidate = decision.candidates[action];
         const row = document.createElement('div');
         row.className = candidate.eligible ? 'ready' : 'blocked';

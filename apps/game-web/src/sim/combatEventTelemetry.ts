@@ -17,12 +17,14 @@ import type {
 
 export const LEGACY_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v2';
 export const INTERMEDIATE_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v3';
-export const PREVIOUS_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v4';
-export const COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v5';
+export const HISTORICAL_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v4';
+export const PREVIOUS_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v5';
+export const COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v6';
 
 export type CombatEventSchemaVersion =
   | typeof LEGACY_COMBAT_EVENT_SCHEMA_VERSION
   | typeof INTERMEDIATE_COMBAT_EVENT_SCHEMA_VERSION
+  | typeof HISTORICAL_COMBAT_EVENT_SCHEMA_VERSION
   | typeof PREVIOUS_COMBAT_EVENT_SCHEMA_VERSION
   | typeof COMBAT_EVENT_SCHEMA_VERSION;
 
@@ -85,6 +87,7 @@ export interface CombatTelemetryEvent {
   controlReturnStartDistance?: number;
   distanceBand?: CombatDistanceBand;
   distanceTransition?: CombatDistanceTransitionContext;
+  movementIntent?: CombatMovementIntent;
   actorSpeed?: number;
   targetSpeed?: number;
   separationSpeed?: number;
@@ -461,7 +464,16 @@ export class CombatEventTelemetryTracker {
     if (previous) {
       if (acceptedActionStarts) {
         for (const start of acceptedActionStarts) {
-          this.pushPlayerEvent('action_start', start.playerId, undefined, current, { action: start.action });
+          const actorInput = start.playerId === 'P1' ? frameInput.p1 : frameInput.p2;
+          const opponentId = OPPONENT_BY_ID[start.playerId];
+          this.pushPlayerEvent('action_start', start.playerId, undefined, current, {
+            action: start.action,
+            movementIntent: resolveMovementIntent(
+              actorInput,
+              current.players[start.playerId],
+              current.players[opponentId],
+            ),
+          });
         }
       } else {
         this.recordActionStarts('P1', frameInput.p1, previous.players.P1, current.players.P1, current);
@@ -587,7 +599,14 @@ export class CombatEventTelemetryTracker {
       starts.push('launch_break');
     }
     for (const action of starts) {
-      this.pushPlayerEvent('action_start', playerId, undefined, state, { action });
+      this.pushPlayerEvent('action_start', playerId, undefined, state, {
+        action,
+        movementIntent: resolveMovementIntent(
+          input,
+          current,
+          state.players[OPPONENT_BY_ID[playerId]],
+        ),
+      });
     }
   }
 

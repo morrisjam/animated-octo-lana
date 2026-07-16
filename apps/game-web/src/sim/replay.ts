@@ -1,6 +1,7 @@
 import type { CharacterId } from './characters';
 import {
   AI_CLASH_POLICY_IDS,
+  AI_DECISION_CANDIDATES,
   AI_DECISION_TRACE_SCHEMA_VERSION,
   AI_DIFFICULTY_ORDER,
   AI_MOVEMENT_INTENTS,
@@ -11,6 +12,7 @@ import {
   type AiActionCandidateTrace,
   type AiBehaviorTuning,
   type AiClashPolicyId,
+  type AiDecisionCandidate,
   type AiDecisionTrace,
   type AiDifficultyId,
   type AiMovementIntent,
@@ -55,13 +57,16 @@ import type {
 } from './types';
 
 export const REPLAY_PAYLOAD_VERSION = 1;
-export const REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.replay-ai-decision-trace.v2';
+export const REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.replay-ai-decision-trace.v3';
 export const ONLINE_MATCH_REPLAY_SCHEMA_VERSION = 'gw.online-match-replay.v1';
 export const LOCAL_AI_REPLAY_SCHEMA_VERSION = 'gw.local-ai-replay.v1';
 export const REPLAY_INTEGRITY_SCHEMA_VERSION = 'gw.replay-integrity.v1';
 export const REPLAY_CANONICAL_DIGEST_ALGORITHM = 'SHA-256';
+const PREVIOUS_REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.replay-ai-decision-trace.v2';
 const LEGACY_REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.replay-ai-decision-trace.v1';
+const PREVIOUS_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.ai-decision-trace.v3';
 const LEGACY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.ai-decision-trace.v2';
+const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V10 = 'gw.ai-behavior-tuning.v10';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V9 = 'gw.ai-behavior-tuning.v9';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V8 = 'gw.ai-behavior-tuning.v8';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V7 = 'gw.ai-behavior-tuning.v7';
@@ -294,21 +299,26 @@ const FINISH_PURSUIT_TUNING_KEYS = ['finishPursuitReachScale'] as const;
 const POST_CONTROL_STEERING_TUNING_KEYS = ['postControlSteeringFrames'] as const;
 const OPPONENT_CONTROL_RETURN_TUNING_KEYS = ['opponentControlReturnObserveFrames'] as const;
 const POST_COMMITMENT_DECISION_TUNING_KEYS = ['postCommitmentDecisionScale'] as const;
+const REPOSITION_TUNING_KEYS = ['repositionWeightScale'] as const;
 
 function getLegacyAiBehaviorTuningOmittedKeys(schemaVersion: unknown): readonly string[] | null {
   switch (schemaVersion) {
+    case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V10:
+      return REPOSITION_TUNING_KEYS;
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V9:
-      return POST_COMMITMENT_DECISION_TUNING_KEYS;
+      return [...POST_COMMITMENT_DECISION_TUNING_KEYS, ...REPOSITION_TUNING_KEYS];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V8:
       return [
         ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
         ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+        ...REPOSITION_TUNING_KEYS,
       ];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V7:
       return [
         ...POST_CONTROL_STEERING_TUNING_KEYS,
         ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
         ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+        ...REPOSITION_TUNING_KEYS,
       ];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V6:
       return [
@@ -316,6 +326,7 @@ function getLegacyAiBehaviorTuningOmittedKeys(schemaVersion: unknown): readonly 
         ...POST_CONTROL_STEERING_TUNING_KEYS,
         ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
         ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+        ...REPOSITION_TUNING_KEYS,
       ];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V5:
       return [
@@ -324,6 +335,7 @@ function getLegacyAiBehaviorTuningOmittedKeys(schemaVersion: unknown): readonly 
         ...POST_CONTROL_STEERING_TUNING_KEYS,
         ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
         ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+        ...REPOSITION_TUNING_KEYS,
       ];
     default:
       return null;
@@ -612,7 +624,7 @@ function cloneAiDecisionTrace(decision: AiDecisionTrace): AiDecisionTrace {
     context: { ...decision.context },
     gates: { ...decision.gates },
     candidates: Object.fromEntries(
-      AI_TACTICAL_ACTIONS.map((action) => [action, { ...decision.candidates[action] }]),
+      AI_DECISION_CANDIDATES.map((action) => [action, { ...decision.candidates[action] }]),
     ) as AiDecisionTrace['candidates'],
   };
 }
@@ -662,7 +674,10 @@ function parseAiActionCandidate(value: unknown): AiActionCandidateTrace | null {
   };
 }
 
-const LEGACY_AI_MOVEMENT_INTENTS = AI_MOVEMENT_INTENTS.filter(
+const PREVIOUS_AI_MOVEMENT_INTENTS = AI_MOVEMENT_INTENTS.filter(
+  (intent) => intent !== 'tactical_reposition',
+);
+const LEGACY_AI_MOVEMENT_INTENTS = PREVIOUS_AI_MOVEMENT_INTENTS.filter(
   (intent) => intent !== 'commitment_observe'
     && intent !== 'commitment_press'
     && intent !== 'commitment_reset',
@@ -672,11 +687,14 @@ function parseAiDecisionTrace(
   value: unknown,
   playerId: PlayerId,
   expectedSchemaVersion: typeof AI_DECISION_TRACE_SCHEMA_VERSION
+    | typeof PREVIOUS_AI_DECISION_TRACE_SCHEMA_VERSION
     | typeof LEGACY_AI_DECISION_TRACE_SCHEMA_VERSION,
 ): AiDecisionTrace | null {
   const allowedMovementIntents: readonly string[] = expectedSchemaVersion === LEGACY_AI_DECISION_TRACE_SCHEMA_VERSION
     ? LEGACY_AI_MOVEMENT_INTENTS
-    : AI_MOVEMENT_INTENTS;
+    : expectedSchemaVersion === PREVIOUS_AI_DECISION_TRACE_SCHEMA_VERSION
+      ? PREVIOUS_AI_MOVEMENT_INTENTS
+      : AI_MOVEMENT_INTENTS;
   if (
     !isObjectRecord(value)
     || value.schemaVersion !== expectedSchemaVersion
@@ -737,13 +755,23 @@ function parseAiDecisionTrace(
     return null;
   }
 
-  const candidates = {} as Record<AiTacticalAction, AiActionCandidateTrace>;
-  for (const action of AI_TACTICAL_ACTIONS) {
+  const candidates = {} as Record<AiDecisionCandidate, AiActionCandidateTrace>;
+  const candidateKeys = expectedSchemaVersion === AI_DECISION_TRACE_SCHEMA_VERSION
+    ? AI_DECISION_CANDIDATES
+    : AI_TACTICAL_ACTIONS;
+  for (const action of candidateKeys) {
     const candidate = parseAiActionCandidate(value.candidates[action]);
     if (!candidate) {
       return null;
     }
     candidates[action] = candidate;
+  }
+  if (expectedSchemaVersion !== AI_DECISION_TRACE_SCHEMA_VERSION) {
+    candidates.reposition = {
+      eligible: false,
+      weight: 0,
+      reason: 'unavailable_in_historical_trace',
+    };
   }
 
   return {
@@ -783,18 +811,22 @@ function parseReplayAiDecisionTrace(
 ): ReplayAiDecisionTrace | null {
   const isCurrent = isObjectRecord(value)
     && value.schemaVersion === REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION;
+  const isPrevious = isObjectRecord(value)
+    && value.schemaVersion === PREVIOUS_REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION;
   const isLegacy = isObjectRecord(value)
     && value.schemaVersion === LEGACY_REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION;
   if (
     !isObjectRecord(value)
-    || (!isCurrent && !isLegacy)
+    || (!isCurrent && !isPrevious && !isLegacy)
     || !Array.isArray(value.events)
   ) {
     return null;
   }
   const decisionSchemaVersion = isLegacy
     ? LEGACY_AI_DECISION_TRACE_SCHEMA_VERSION
-    : AI_DECISION_TRACE_SCHEMA_VERSION;
+    : isPrevious
+      ? PREVIOUS_AI_DECISION_TRACE_SCHEMA_VERSION
+      : AI_DECISION_TRACE_SCHEMA_VERSION;
 
   const events: AiDecisionTelemetryEvent[] = [];
   const seenSequences = new Set<number>();

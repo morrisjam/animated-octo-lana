@@ -6,6 +6,7 @@ import {
   type AiClashPolicyId,
   type AiBehaviorTuning,
   type AiDifficultyId,
+  type AiDecisionTrace,
   type AiPursuitPolicyId,
   type AiRecoveryPolicyId,
 } from './ai';
@@ -34,9 +35,22 @@ import {
   type SimulationActionStart,
   type SimulationLaunchClash,
 } from './sim';
-import type { FrameInput, GameRules, GameTuning, PlayerId } from './types';
+import type { FrameInput, GameRules, GameTuning, PlayerId, PlayersById } from './types';
 
 export const AI_ROUND_FIXED_DT = 1 / 60;
+export const AI_ROUND_DECISION_FLOW_SCHEMA_VERSION = 'gw.ai-round-decision-flow.v1';
+
+export interface AiRoundDecisionFlowPlayerSummary {
+  tacticalRepositionOpportunityFrames: number;
+  tacticalRepositionOpportunityWindows: number;
+  tacticalRepositionSelections: number;
+  tacticalRepositionFrames: number;
+}
+
+export interface AiRoundDecisionFlowSummary {
+  schemaVersion: typeof AI_ROUND_DECISION_FLOW_SCHEMA_VERSION;
+  players: PlayersById<AiRoundDecisionFlowPlayerSummary>;
+}
 
 export interface AiRoundSimulationOptions {
   p1: CharacterId;
@@ -61,6 +75,7 @@ export interface AiRoundSimulationResult {
   winner: PlayerId | null;
   framesSimulated: number;
   telemetry: MatchTelemetrySummary;
+  decisionFlow: AiRoundDecisionFlowSummary;
   rules: GameRules;
   tuning: GameTuning;
   characterBalanceOverrides: CharacterBalanceOverrides;
@@ -87,6 +102,38 @@ function clampFrame(value: number, maximum: number): number {
   return Math.max(0, Math.min(maximum, Math.floor(value)));
 }
 
+function createDecisionFlowPlayerSummary(): AiRoundDecisionFlowPlayerSummary {
+  return {
+    tacticalRepositionOpportunityFrames: 0,
+    tacticalRepositionOpportunityWindows: 0,
+    tacticalRepositionSelections: 0,
+    tacticalRepositionFrames: 0,
+  };
+}
+
+function recordDecisionFlow(
+  summary: AiRoundDecisionFlowSummary,
+  previousRepositionEligibility: PlayersById<boolean>,
+  playerId: PlayerId,
+  decision: AiDecisionTrace,
+): void {
+  const player = summary.players[playerId];
+  const repositionEligible = decision.candidates.reposition.eligible;
+  if (repositionEligible) {
+    player.tacticalRepositionOpportunityFrames += 1;
+    if (!previousRepositionEligibility[playerId]) {
+      player.tacticalRepositionOpportunityWindows += 1;
+    }
+  }
+  if (decision.selectedReason === 'weighted_reposition_choice') {
+    player.tacticalRepositionSelections += 1;
+  }
+  if (decision.movementIntent === 'tactical_reposition') {
+    player.tacticalRepositionFrames += 1;
+  }
+  previousRepositionEligibility[playerId] = repositionEligible;
+}
+
 export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimulationResult {
   const setSeed = options.setSeed >>> 0;
   const roundIndex = Math.max(0, Math.floor(options.roundIndex));
@@ -110,6 +157,14 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
   const aiDecisionTelemetry = options.captureReplay
     ? createAiDecisionTelemetryTracker({ maxEvents: Number.MAX_SAFE_INTEGER })
     : undefined;
+  const decisionFlow: AiRoundDecisionFlowSummary = {
+    schemaVersion: AI_ROUND_DECISION_FLOW_SCHEMA_VERSION,
+    players: {
+      P1: createDecisionFlowPlayerSummary(),
+      P2: createDecisionFlowPlayerSummary(),
+    },
+  };
+  const previousRepositionEligibility: PlayersById<boolean> = { P1: false, P2: false };
 
   let p1Controller = createAiController({
     seed: deriveStableAiSeed(setSeed, options.difficulty, options.p1, roundIndex),
@@ -133,6 +188,8 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
     p1Controller = p1AiTick.next;
     const p2AiTick = tickAiController(state, 'P2', p2Controller);
     p2Controller = p2AiTick.next;
+    recordDecisionFlow(decisionFlow, previousRepositionEligibility, 'P1', p1AiTick.decision);
+    recordDecisionFlow(decisionFlow, previousRepositionEligibility, 'P2', p2AiTick.decision);
     const frameInput: FrameInput = {
       p1: { ...p1AiTick.input },
       p2: { ...p2AiTick.input },
@@ -161,6 +218,7 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
     winner: state.winner,
     framesSimulated: telemetrySummary.framesSimulated,
     telemetry: telemetrySummary,
+    decisionFlow,
     rules: { ...state.rules },
     tuning: { ...state.tuning },
     characterBalanceOverrides: state.characterBalanceOverrides,

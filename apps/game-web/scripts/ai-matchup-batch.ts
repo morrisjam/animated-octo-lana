@@ -90,6 +90,7 @@ import {
 import {
   createAiRoundReplay,
   simulateAiRound,
+  type AiRoundDecisionFlowSummary,
 } from '../src/sim/aiRoundSimulation';
 import { findFirstChecksumMismatch, runReplay } from '../src/sim/replay';
 import type { GameTuning } from '../src/sim/types';
@@ -153,6 +154,7 @@ type AiMatchupRoundStopReason = 'round_win' | 'round_timeout';
 
 interface AiMatchupRoundEvidence {
   telemetry: MatchTelemetrySummary;
+  decisionFlow: AiRoundDecisionFlowSummary;
   setSeed: number;
   roundSeed: number;
   gameNumber: number;
@@ -192,6 +194,12 @@ interface AiMatchupFlowPlayerSummary {
   helplessSecondsPerLaunchReceived: number | null;
   launchDefense: BalanceLabLaunchDefenseFlow;
   controlReturns: number;
+  tacticalRepositionOpportunityFrames: number;
+  tacticalRepositionOpportunityWindows: number;
+  tacticalRepositionSelections: number;
+  tacticalRepositionSelectionRatio: number | null;
+  tacticalRepositionSelectionsPerRound: number;
+  tacticalRepositionSecondsPerRound: number;
   naturalControlReturns: number;
   launchBreakControlReturns: number;
   relaunchesAfterControlReturn: number;
@@ -423,6 +431,10 @@ interface BatchComparisonDelta {
   sharedSustainedNeutralWindowsPerRound: number | null;
   sharedP90NeutralEpisodeSeconds: number | null;
   sharedMaximumContactEpisodeSeconds: number | null;
+  p1TacticalRepositionSelectionsPerRound: number | null;
+  p2TacticalRepositionSelectionsPerRound: number | null;
+  p1TacticalRepositionSecondsPerRound: number | null;
+  p2TacticalRepositionSecondsPerRound: number | null;
   pointBlankRatioPoints: number;
   pressureBandRatioPoints: number;
   neutralResetsPerRound: number;
@@ -480,7 +492,7 @@ interface BatchComparison {
 }
 
 interface BatchReport {
-  schemaVersion: 'gw.ai-matchup-batch.v16';
+  schemaVersion: 'gw.ai-matchup-batch.v17';
   generatedAt: string;
   characterRegistry: {
     schemaVersion: string;
@@ -746,6 +758,12 @@ function buildAiMatchupFlowSummary(
     const total = (select: (summary: MatchTelemetrySummary['players']['P1']) => number): number => (
       summaries.reduce((sum, summary) => sum + select(summary.players[playerId]), 0)
     );
+    const decisionTotal = (
+      select: (summary: AiRoundDecisionFlowSummary['players']['P1']) => number,
+    ): number => roundEvidence.reduce(
+      (sum, round) => sum + select(round.decisionFlow.players[playerId]),
+      0,
+    );
     const buildActionAcceptance = (presses: number, starts: number): BalanceLabActionAcceptance => ({
       presses,
       starts,
@@ -806,6 +824,18 @@ function buildAiMatchupFlowSummary(
     const controlReturns = flowModels.reduce(
       (sum, flow) => sum + flow.players[playerId].controlReturn.controlReturns,
       0,
+    );
+    const tacticalRepositionOpportunityFrames = decisionTotal(
+      (player) => player.tacticalRepositionOpportunityFrames,
+    );
+    const tacticalRepositionOpportunityWindows = decisionTotal(
+      (player) => player.tacticalRepositionOpportunityWindows,
+    );
+    const tacticalRepositionSelections = decisionTotal(
+      (player) => player.tacticalRepositionSelections,
+    );
+    const tacticalRepositionFrames = decisionTotal(
+      (player) => player.tacticalRepositionFrames,
     );
     const naturalControlReturns = flowModels.reduce(
       (sum, flow) => sum + flow.players[playerId].controlReturn.naturalControlReturns,
@@ -1072,6 +1102,23 @@ function buildAiMatchupFlowSummary(
         : null,
       launchDefense,
       controlReturns,
+      tacticalRepositionOpportunityFrames,
+      tacticalRepositionOpportunityWindows,
+      tacticalRepositionSelections,
+      tacticalRepositionSelectionRatio: tacticalRepositionOpportunityWindows > 0
+        ? roundMetric(
+          tacticalRepositionSelections / tacticalRepositionOpportunityWindows,
+          3,
+        )
+        : null,
+      tacticalRepositionSelectionsPerRound: roundMetric(
+        tacticalRepositionSelections / Math.max(1, summaries.length),
+        2,
+      ),
+      tacticalRepositionSecondsPerRound: roundMetric(
+        tacticalRepositionFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
       naturalControlReturns,
       launchBreakControlReturns,
       relaunchesAfterControlReturn,
@@ -1872,6 +1919,7 @@ function simulateSet(
     telemetrySummaries.push(telemetrySummary);
     flowEvidence.push({
       telemetry: telemetrySummary,
+      decisionFlow: result.decisionFlow,
       setSeed,
       roundSeed: result.roundSeed,
       gameNumber,
@@ -2072,6 +2120,7 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
   const ruleSnapshot = (
     report.schemaVersion === 'gw.ai-matchup-batch.v15'
     || report.schemaVersion === 'gw.ai-matchup-batch.v16'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v17'
   )
     ? parseAiBatchRuleSnapshot(report.ruleSnapshot)
     : null;
@@ -2091,6 +2140,7 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
       && report.schemaVersion !== 'gw.ai-matchup-batch.v14'
       && report.schemaVersion !== 'gw.ai-matchup-batch.v15'
       && report.schemaVersion !== 'gw.ai-matchup-batch.v16'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v17'
     )
     || typeof report.generatedAt !== 'string'
     || !report.options
@@ -2104,7 +2154,8 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
         || report.schemaVersion === 'gw.ai-matchup-batch.v13'
         || report.schemaVersion === 'gw.ai-matchup-batch.v14'
         || report.schemaVersion === 'gw.ai-matchup-batch.v15'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v16')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v16'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v17')
       && typeof report.aiBaseProfilesFingerprint !== 'string'
     )
     || !Array.isArray(report.summaries)
@@ -2112,12 +2163,14 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
     || (
       (report.schemaVersion === 'gw.ai-matchup-batch.v14'
         || report.schemaVersion === 'gw.ai-matchup-batch.v15'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v16')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v16'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v17')
       && report.summaries.some((summary) => !hasSharedAgencyTelemetry(summary))
     )
     || (
       (report.schemaVersion === 'gw.ai-matchup-batch.v15'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v16')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v16'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v17')
       && !ruleSnapshot
     )
   ) {
@@ -2222,6 +2275,16 @@ function acceptedCombatActionStartsPerMinute(
       / Math.max(1, summary.telemetry.elapsedSeconds),
     2,
   );
+}
+
+function tacticalRepositionMetric(
+  summary: MatchSummary,
+  playerId: 'P1' | 'P2',
+  key: 'tacticalRepositionSelectionsPerRound' | 'tacticalRepositionSecondsPerRound',
+): number | null {
+  const player = summary.flow.players[playerId] as Partial<AiMatchupFlowPlayerSummary>;
+  const value = player[key];
+  return isFiniteMetric(value) ? value : null;
 }
 
 function maximumDominantActionShare(summary: MatchSummary): number {
@@ -2509,7 +2572,8 @@ function buildBatchComparison(
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v13'
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v14'
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v15'
-    || baseline.schemaVersion === 'gw.ai-matchup-batch.v16';
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v16'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v17';
   const candidateScenarioFingerprint = controlledScenarioFingerprint(candidate);
   const baselineScenarioFingerprint = controlledScenarioFingerprint(baseline);
   if (candidateScenarioFingerprint !== baselineScenarioFingerprint) {
@@ -2603,6 +2667,22 @@ function buildBatchComparison(
       sharedMaximumContactEpisodeSeconds: optionalMetricDelta(
         sharedAgencyMetric(summary, 'maximumContactEpisodeSeconds'),
         sharedAgencyMetric(previous, 'maximumContactEpisodeSeconds'),
+      ),
+      p1TacticalRepositionSelectionsPerRound: optionalMetricDelta(
+        tacticalRepositionMetric(summary, 'P1', 'tacticalRepositionSelectionsPerRound'),
+        tacticalRepositionMetric(previous, 'P1', 'tacticalRepositionSelectionsPerRound'),
+      ),
+      p2TacticalRepositionSelectionsPerRound: optionalMetricDelta(
+        tacticalRepositionMetric(summary, 'P2', 'tacticalRepositionSelectionsPerRound'),
+        tacticalRepositionMetric(previous, 'P2', 'tacticalRepositionSelectionsPerRound'),
+      ),
+      p1TacticalRepositionSecondsPerRound: optionalMetricDelta(
+        tacticalRepositionMetric(summary, 'P1', 'tacticalRepositionSecondsPerRound'),
+        tacticalRepositionMetric(previous, 'P1', 'tacticalRepositionSecondsPerRound'),
+      ),
+      p2TacticalRepositionSecondsPerRound: optionalMetricDelta(
+        tacticalRepositionMetric(summary, 'P2', 'tacticalRepositionSecondsPerRound'),
+        tacticalRepositionMetric(previous, 'P2', 'tacticalRepositionSecondsPerRound'),
       ),
       pointBlankRatioPoints: roundMetric(
         (summary.telemetry.spacing.pointBlankRatio - previous.telemetry.spacing.pointBlankRatio) * 100,
@@ -3525,6 +3605,28 @@ function formatSummaryMarkdown(report: BatchReport): string {
 
   lines.push(
     '',
+    '### Tactical Reposition Decisions',
+    '',
+    'An opportunity window begins when the one-shot post-control reposition becomes a valid weighted choice. Selected counts record actual commitments, eligible frames show how long the choice remained available, and active seconds show how much round time it consumed. A zero-weight baseline correctly reports no opportunities. These are mechanism diagnostics, not a score; read them beside control-return resets, exchanges, and finishes.',
+    '',
+    '| P1 | P2 | Difficulty | P1 selected / windows | P1 eligible frames | P1 selections / round | P1 active sec / round | P1 return reset | P2 selected / windows | P2 eligible frames | P2 selections / round | P2 active sec / round | P2 return reset |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const summary of report.summaries) {
+    const p1 = summary.flow.players.P1;
+    const p2 = summary.flow.players.P2;
+    const formatSelection = (player: AiMatchupFlowPlayerSummary): string => (
+      player.tacticalRepositionSelectionRatio === null
+        ? `${player.tacticalRepositionSelections}/${player.tacticalRepositionOpportunityWindows} (N/A)`
+        : `${player.tacticalRepositionSelections}/${player.tacticalRepositionOpportunityWindows} (${(player.tacticalRepositionSelectionRatio * 100).toFixed(1)}%)`
+    );
+    lines.push(
+      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${formatSelection(p1)} | ${p1.tacticalRepositionOpportunityFrames} | ${p1.tacticalRepositionSelectionsPerRound.toFixed(2)} | ${p1.tacticalRepositionSecondsPerRound.toFixed(2)}s | ${p1.sustainedResetsAfterControlReturn}/${p1.controlReturnsInPressure} | ${formatSelection(p2)} | ${p2.tacticalRepositionOpportunityFrames} | ${p2.tacticalRepositionSelectionsPerRound.toFixed(2)} | ${p2.tacticalRepositionSecondsPerRound.toFixed(2)}s | ${p2.sustainedResetsAfterControlReturn}/${p2.controlReturnsInPressure} |`,
+    );
+  }
+
+  lines.push(
+    '',
     '### Post-Control Decisions',
     '',
     'This table classifies the first simulation-accepted action after control returns. `Return reset` starts at the actual control-return moment; per-action `reset` starts at the first accepted action. Both require a sustained 0.75s exit from pressure within two seconds. `<=1s` counts immediate counter-launches after that action. `Move` records whether the accepted action was accompanied by approach, orbit, retreat, idle, or uncontrollable input; historical samples without that context remain `unavailable`. It is intended to expose controller choices and their consequences, not class strength.',
@@ -3707,6 +3809,21 @@ function formatSummaryMarkdown(report: BatchReport): string {
     lines.push('');
 
     lines.push(
+      '### Tactical Reposition Deltas',
+      '',
+      'Each value is candidate minus baseline. It describes how much the candidate mechanism was actually selected and how long it occupied the controller; neither sign is an acceptance score. N/A means the baseline predates deterministic reposition counters.',
+      '',
+      '| P1 | P2 | Difficulty | P1 selections / round | P2 selections / round | P1 active sec / round | P2 active sec / round |',
+      '| --- | --- | --- | ---: | ---: | ---: | ---: |',
+    );
+    for (const delta of report.comparison.deltas) {
+      lines.push(
+        `| \`${delta.pairing.p1}\` | \`${delta.pairing.p2}\` | \`${delta.pairing.difficulty}\` | ${formatSignedOptional(delta.p1TacticalRepositionSelectionsPerRound)} | ${formatSignedOptional(delta.p2TacticalRepositionSelectionsPerRound)} | ${formatSignedOptional(delta.p1TacticalRepositionSecondsPerRound, 's')} | ${formatSignedOptional(delta.p2TacticalRepositionSecondsPerRound, 's')} |`,
+      );
+    }
+    lines.push('');
+
+    lines.push(
       'Every value is candidate minus baseline using identical seeds and AI settings. Negative timeout, physical-contact, point-blank, pressure, brief-exit, unresolved-pressure, helpless, immediate re-launch, no-dunk, repetition, and timing deltas usually indicate a healthier loop; positive reset conversion, post-return reset, resolved-exchange, exchange-reset, neutral-reset, and control-window deltas usually indicate more breathing room. Received-launch frequency, helpless duration per hit, first-action choice, and return-to-relaunch timing must be inspected independently. N/A means either side lacked the required sequence denominator.',
       '',
       '| P1 | P2 | Difficulty | Round sec | Timeout pp | Contact pp | Point blank pp | Pressure pp | Neutral resets / round | Reset conversion pp | Resolved exchange pp | Exchange reset pp | Brief exit pp | Unresolved avg sec | Parry reset pp | Break reset pp | Breaks/round P1 / P2 | Break reaction P1 / P2 sec | Helpless P1 / P2 pp | Launches received / round P1 / P2 | Helpless / hit P1 / P2 sec | Immediate re-launch P1 / P2 pp | Control window P1 / P2 sec | Control-return reset P1 / P2 pp | First-action reset P1 / P2 pp | First action delay P1 / P2 sec | Pressure p90 sec | No dunk pp | Launch/no dunk pp | Dominant action pp | Repeat streak | Launch-to-dunk sec |',
@@ -3866,7 +3983,7 @@ function run(): void {
   })));
 
   const report: BatchReport = {
-    schemaVersion: 'gw.ai-matchup-batch.v16',
+    schemaVersion: 'gw.ai-matchup-batch.v17',
     generatedAt: new Date().toISOString(),
     characterRegistry: {
       schemaVersion: CHARACTER_REGISTRY_SCHEMA_VERSION,

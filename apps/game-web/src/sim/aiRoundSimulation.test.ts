@@ -152,6 +152,47 @@ describe('AI round simulation', () => {
     expect(second.winner).toBe(first.winner);
     expect(second.framesSimulated).toBe(first.framesSimulated);
     expect(second.telemetry).toEqual(first.telemetry);
+    expect(second.decisionFlow).toEqual(first.decisionFlow);
+    expect(first.decisionFlow.players.P1).toEqual({
+      tacticalRepositionOpportunityFrames: 0,
+      tacticalRepositionOpportunityWindows: 0,
+      tacticalRepositionSelections: 0,
+      tacticalRepositionFrames: 0,
+    });
+    expect(first.decisionFlow.players.P2).toEqual(first.decisionFlow.players.P1);
+  });
+
+  test('summarises tactical reposition opportunities and selections without replay capture', () => {
+    const result = simulateAiRound({
+      ...BASE_OPTIONS,
+      setSeed: 61_298_675,
+      roundIndex: 1,
+      maxFrames: 5_400,
+      behaviorTuning: {
+        ...createDefaultAiBehaviorTuning(),
+        errorRateScale: 0,
+        repositionWeightScale: 1,
+      },
+    });
+    const players = Object.values(result.decisionFlow.players);
+    const selections = players.reduce(
+      (total, player) => total + player.tacticalRepositionSelections,
+      0,
+    );
+
+    expect(result.decisionFlow.schemaVersion).toBe('gw.ai-round-decision-flow.v1');
+    expect(selections).toBeGreaterThan(0);
+    for (const player of players) {
+      expect(player.tacticalRepositionSelections).toBeLessThanOrEqual(
+        player.tacticalRepositionOpportunityWindows,
+      );
+      expect(player.tacticalRepositionFrames).toBeGreaterThanOrEqual(
+        player.tacticalRepositionSelections,
+      );
+      expect(player.tacticalRepositionOpportunityFrames).toBeGreaterThanOrEqual(
+        player.tacticalRepositionOpportunityWindows,
+      );
+    }
   });
 
   test('applies custom behavior tuning deterministically without changing the default path', () => {
@@ -246,6 +287,8 @@ describe('AI round simulation', () => {
     }
     expect(reversed.framesSimulated).toBe(direct.framesSimulated);
     expect(reversed.winner).toBe(swapWinner(direct.winner));
+    expect(reversed.decisionFlow.players.P1).toEqual(direct.decisionFlow.players.P2);
+    expect(reversed.decisionFlow.players.P2).toEqual(direct.decisionFlow.players.P1);
   });
 
   test('keeps the full AI-driven simulation state mirrored through combat', () => {

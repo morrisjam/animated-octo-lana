@@ -19,7 +19,15 @@ function makeManifest(): AssetManifest {
         },
       },
     ],
-    sprites: [],
+    sprites: [
+      {
+        id: 'sprite_alpha',
+        src: 'https://assets.example.com/sprite_alpha.png',
+        budget: {
+          estimatedTextureBytes: 2 * 1024 * 1024,
+        },
+      },
+    ],
     textures: [
       {
         id: 'texture_alpha',
@@ -39,7 +47,7 @@ describe('asset budget reports', () => {
     const manifest = makeManifest();
     const usage = buildAssetBudgetUsage(manifest);
 
-    expect(usage.textureBytes).toBe(6 * 1024 * 1024);
+    expect(usage.textureBytes).toBe(8 * 1024 * 1024);
     expect(usage.meshTriangles).toBe(4_000);
     expect(usage.vfxEmitters).toBe(3 + estimatePresetEmitterCount());
   });

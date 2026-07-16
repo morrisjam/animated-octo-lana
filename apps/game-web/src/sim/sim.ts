@@ -1759,6 +1759,9 @@ function getPlayerPresentationState(player: PlayerState): {
   if (player.breakFlash > 0) {
     return { presentationAction: 'break', presentationPhase: 'active' };
   }
+  if (player.endLag > 0) {
+    return { presentationAction: 'recover', presentationPhase: 'recovery' };
+  }
   if (player.superBoost > 0 || player.boostActive) {
     return { presentationAction: 'boost', presentationPhase: 'sustain' };
   }

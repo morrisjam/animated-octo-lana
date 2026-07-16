@@ -58,6 +58,7 @@ interface SpriteVisualRuntime {
 }
 
 const SPRITE_TEXTURE_CACHE = new Map<string, THREE.Texture>();
+const SPRITE_ATLAS_IMAGE_CACHE = new Map<string, Promise<HTMLImageElement>>();
 
 function getPalette(playerId: PlayerId): CharacterPalette {
   if (playerId === 'P1') {
@@ -257,7 +258,37 @@ function configureAtlasTexture(texture: THREE.Texture): THREE.Texture {
   return texture;
 }
 
-function createFallbackAtlasTexture(animationSet: SpriteAnimationSet): THREE.DataTexture {
+function createFallbackAtlasTexture(animationSet: SpriteAnimationSet): THREE.Texture {
+  if (typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas');
+    canvas.width = animationSet.atlasWidthPixels;
+    canvas.height = animationSet.atlasHeightPixels;
+    const context = canvas.getContext('2d');
+    if (context) {
+      context.fillStyle = '#ffffff';
+      for (let row = 0; row < animationSet.rows; row += 1) {
+        for (let column = 0; column < animationSet.columns; column += 1) {
+          const frameX = animationSet.marginPixels
+            + column * (animationSet.frameWidthPixels + animationSet.spacingPixels);
+          const frameY = animationSet.marginPixels
+            + row * (animationSet.frameHeightPixels + animationSet.spacingPixels);
+          context.beginPath();
+          context.ellipse(
+            frameX + animationSet.frameWidthPixels * 0.5,
+            frameY + animationSet.frameHeightPixels * 0.52,
+            animationSet.frameWidthPixels * 0.3,
+            animationSet.frameHeightPixels * 0.42,
+            0,
+            0,
+            Math.PI * 2,
+          );
+          context.fill();
+        }
+      }
+    }
+    return configureAtlasTexture(new THREE.CanvasTexture(canvas));
+  }
+
   const data = new Uint8Array(animationSet.columns * animationSet.rows * 4);
   data.fill(255);
   const texture = new THREE.DataTexture(
@@ -267,24 +298,56 @@ function createFallbackAtlasTexture(animationSet: SpriteAnimationSet): THREE.Dat
     THREE.RGBAFormat,
   );
   texture.needsUpdate = true;
-  return configureAtlasTexture(texture) as THREE.DataTexture;
+  return configureAtlasTexture(texture);
+}
+
+function loadAtlasImage(textureUrl: string): Promise<HTMLImageElement> {
+  const cached = SPRITE_ATLAS_IMAGE_CACHE.get(textureUrl);
+  if (cached) {
+    return cached;
+  }
+  const pending = new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.decoding = 'async';
+    image.crossOrigin = 'anonymous';
+    image.addEventListener('load', () => resolve(image), { once: true });
+    image.addEventListener('error', () => reject(new Error(`Unable to decode sprite atlas ${textureUrl}.`)), { once: true });
+    image.src = textureUrl;
+  });
+  SPRITE_ATLAS_IMAGE_CACHE.set(textureUrl, pending);
+  return pending;
 }
 
 function loadAtlasTexture(animationSet: SpriteAnimationSet): THREE.Texture {
+  const texture = createFallbackAtlasTexture(animationSet);
   if (typeof document === 'undefined' || typeof Image === 'undefined') {
-    return createFallbackAtlasTexture(animationSet);
+    return texture;
   }
-  const texture = new THREE.TextureLoader().load(animationSet.textureUrl);
-  return configureAtlasTexture(texture);
+  void loadAtlasImage(animationSet.textureUrl).then((image) => {
+    texture.image = image;
+    texture.needsUpdate = true;
+    document.documentElement.dataset.characterAssetState = 'ready';
+  }).catch((error) => {
+    document.documentElement.dataset.characterAssetState = 'failed';
+    console.error(`[character-assets] ${animationSet.id} retained visible fallback`, error);
+  });
+  return texture;
 }
 
 function applyAtlasFrame(texture: THREE.Texture, animationSet: SpriteAnimationSet, frame: number): void {
   const column = frame % animationSet.columns;
   const row = Math.floor(frame / animationSet.columns);
-  texture.repeat.set(1 / animationSet.columns, 1 / animationSet.rows);
+  const frameX = animationSet.marginPixels
+    + column * (animationSet.frameWidthPixels + animationSet.spacingPixels);
+  const frameY = animationSet.marginPixels
+    + row * (animationSet.frameHeightPixels + animationSet.spacingPixels);
+  texture.repeat.set(
+    animationSet.frameWidthPixels / animationSet.atlasWidthPixels,
+    animationSet.frameHeightPixels / animationSet.atlasHeightPixels,
+  );
   texture.offset.set(
-    column / animationSet.columns,
-    1 - (row + 1) / animationSet.rows,
+    frameX / animationSet.atlasWidthPixels,
+    1 - (frameY + animationSet.frameHeightPixels) / animationSet.atlasHeightPixels,
   );
 }
 
@@ -345,7 +408,7 @@ function createSpriteNode(
     depthWrite: false,
   }));
   rim.name = 'sprite-rim';
-  rim.center.set(0.5, 0.1);
+  rim.center.set(animationSet.anchorX, animationSet.anchorY);
   rim.position.z = 0.3;
   rim.scale.set(animationSet.worldWidth * 1.12, animationSet.worldHeight * 1.12, 1);
   group.add(rim);
@@ -361,7 +424,7 @@ function createSpriteNode(
     depthWrite: false,
   }));
   body.name = 'sprite-body';
-  body.center.set(0.5, 0.1);
+  body.center.set(animationSet.anchorX, animationSet.anchorY);
   body.position.z = 0.36;
   body.scale.set(animationSet.worldWidth, animationSet.worldHeight, 1);
   group.add(body);
@@ -372,7 +435,7 @@ function createSpriteNode(
     rim,
     contactShadow,
     groundGlow,
-    clipId: 'idle',
+    clipId: animationSet.stateClips['idle.none'] ?? 'idle',
     clipStartedAt: 0,
     phase: playerId === 'P1' ? 0 : 0.13,
   };
@@ -461,7 +524,7 @@ const spriteAdapter: CharacterVisualAdapter = {
     if (!runtime) {
       return;
     }
-    const clipId = resolveSpriteClip(context.own);
+    const clipId = resolveSpriteClip(runtime.animationSet, context.own);
     if (clipId !== runtime.clipId) {
       runtime.clipId = clipId;
       runtime.clipStartedAt = context.gameTime;

@@ -1316,6 +1316,13 @@ describe('state snapshot and restore', () => {
       presentationAction: 'helpless',
       presentationPhase: 'sustain',
     });
+
+    state.players.P1.helpless = 0;
+    state.players.P1.endLag = 0.2;
+    expect(getRenderSnapshot(state).players.P1).toMatchObject({
+      presentationAction: 'recover',
+      presentationPhase: 'recovery',
+    });
   });
 
   test('serialise and deserialise round-trip keeps state checksum', () => {

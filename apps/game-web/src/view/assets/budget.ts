@@ -74,7 +74,10 @@ export function estimatePresetEmitterCount(): number {
 }
 
 export function buildAssetBudgetUsage(manifest: AssetManifest): AssetBudgetUsage {
-  const textureBytes = sumBudget(manifest.textures, estimatedTextureBytes);
+  const textureBytes = sumBudget(
+    [...manifest.sprites, ...manifest.textures],
+    estimatedTextureBytes,
+  );
   const meshTriangles = sumBudget(manifest.models, estimatedTriangles);
   const vfxEmitters = sumBudget(manifest.models, estimatedVfxEmitters) + estimatePresetEmitterCount();
 

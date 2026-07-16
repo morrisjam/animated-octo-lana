@@ -517,6 +517,18 @@ let roundAiControllerRolesFingerprint = fingerprintAiControllerRoles(activeAiCon
 let aiControllerRolesDirty = false;
 const assetBudgetReport = buildAssetBudgetReport(DEFAULT_ASSET_MANIFEST, DEFAULT_ASSET_BUDGET_LIMITS);
 let assetPreloadBytesLoaded = 0;
+interface GameplayAccessGateState {
+  allowed: boolean;
+  message: string | null;
+}
+let assetGameplayGate: GameplayAccessGateState = {
+  allowed: false,
+  message: 'Loading required game assets...',
+};
+let entitlementGameplayGate: GameplayAccessGateState = {
+  allowed: false,
+  message: 'Checking gameplay access...',
+};
 let appPhase: AppPhase = 'home';
 let startupMenuGuardArmed = true;
 let p1RoundWins = 0;
@@ -3059,7 +3071,16 @@ const startMenu = createStartMenu({
     persistSettings();
   },
 });
-startMenu.setEntitlementGate(true, null);
+function applyGameplayAccessGate(): void {
+  const blockingGate = !assetGameplayGate.allowed
+    ? assetGameplayGate
+    : !entitlementGameplayGate.allowed
+      ? entitlementGameplayGate
+      : null;
+  startMenu.setEntitlementGate(blockingGate === null, blockingGate?.message ?? null);
+}
+
+applyGameplayAccessGate();
 applyArcadeHistoryView();
 document.documentElement.dataset.assetPreloadState = 'loading';
 document.documentElement.dataset.assetPreloadBytes = '0';
@@ -3073,8 +3094,15 @@ void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
   assetPreloadBytesLoaded = result.entries.reduce((total, entry) => total + entry.bytes, 0);
   document.documentElement.dataset.assetPreloadBytes = String(assetPreloadBytesLoaded);
   document.documentElement.dataset.assetPreloadState = 'ready';
+  assetGameplayGate = { allowed: true, message: null };
+  applyGameplayAccessGate();
 }).catch((error) => {
   document.documentElement.dataset.assetPreloadState = 'failed';
+  assetGameplayGate = {
+    allowed: false,
+    message: 'Required game assets failed validation. Refresh to retry. [ASSET_PRELOAD_FAILED]',
+  };
+  applyGameplayAccessGate();
   console.error('[assets] preload failed', error);
 });
 
@@ -3460,7 +3488,11 @@ async function bootstrapPlatformProfile(): Promise<void> {
   try {
     await refreshEntitlementGate('startup');
   } catch {
-    startMenu.setEntitlementGate(false, 'Entitlement check failed. Please retry or refresh.');
+    entitlementGameplayGate = {
+      allowed: false,
+      message: 'Entitlement check failed. Please retry or refresh.',
+    };
+    applyGameplayAccessGate();
     return;
   }
 
@@ -3577,13 +3609,25 @@ async function refreshEntitlementGate(stage: 'startup' | 'session'): Promise<voi
   const access = await platform.entitlement.checkAccess({
     stage,
     accountId: sessionAccountId,
+  }).catch((error) => {
+    entitlementGameplayGate = {
+      allowed: false,
+      message: 'Entitlement check failed. Please retry or refresh.',
+    };
+    applyGameplayAccessGate();
+    throw error;
   });
   if (access.allowed) {
-    startMenu.setEntitlementGate(true, null);
+    entitlementGameplayGate = { allowed: true, message: null };
+    applyGameplayAccessGate();
     return;
   }
 
-  startMenu.setEntitlementGate(false, `${access.message} [${access.code}]`);
+  entitlementGameplayGate = {
+    allowed: false,
+    message: `${access.message} [${access.code}]`,
+  };
+  applyGameplayAccessGate();
   if (runtimeConfig.features.debugToolsEnabled) {
     console.warn('[entitlement] access blocked', {
       stage,

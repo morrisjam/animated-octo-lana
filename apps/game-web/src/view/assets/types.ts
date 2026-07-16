@@ -18,6 +18,11 @@ export interface AssetManifestEntryBase {
 
 export interface AssetFileEntry extends AssetManifestEntryBase {
   src: string;
+  contentTypes?: string[];
+  image?: {
+    width: number;
+    height: number;
+  };
 }
 
 export interface AssetShaderEntry extends AssetManifestEntryBase {

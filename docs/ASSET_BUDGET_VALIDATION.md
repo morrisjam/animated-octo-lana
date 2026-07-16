@@ -4,7 +4,7 @@
 Enforce stable visual performance budgets with build-time checks and runtime debug counters.
 
 ## Budget dimensions
-- Texture memory budget (`textureBytes`)
+- Texture memory budget (`textureBytes`), including sprite atlases and standalone textures
 - Mesh complexity budget (`meshTriangles`)
 - VFX emitter budget (`vfxEmitters`)
 
@@ -14,6 +14,7 @@ Enforce stable visual performance budgets with build-time checks and runtime deb
 - Manifest budget hints:
   - `apps/game-web/src/view/assets/types.ts`
   - `apps/game-web/src/view/assets/defaultManifest.ts`
+  - package-adjacent `*.character.presentation.json` files for character atlases and portraits
 - Build-time check script:
   - `apps/game-web/scripts/asset-budget-check.ts`
 

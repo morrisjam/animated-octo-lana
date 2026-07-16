@@ -147,12 +147,15 @@ Store workflow JSONs under:
 
 Use Blender for:
 
+- authored wormhole geometry, camera pitch, arena-lip look development, and lighting tests
 - cleanup of generated 3D meshes
 - retopo and simplification
 - rigging
 - camera setup
 - rendering controlled sprite frames from 3D references
-- baking turntables or effect plates
+- baking turntables, emissive masks, particle flipbooks, or effect plates
+
+Prefer a checked-in headless export script over a manual-only sequence. Pin the Blender version, scene units, camera, frame list, colour management, transparent background, output dimensions, and naming convention; run exports with `blender --background --python <script>`. Treat generated files as candidates until the presentation-manifest MIME, decoded-dimension, frame-bound, anchor, readiness, and memory-budget checks pass. Blender access improves repeatability and visual control, but it never becomes a simulation or rollback dependency.
 
 ### Aseprite or equivalent
 

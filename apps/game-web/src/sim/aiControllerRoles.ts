@@ -262,6 +262,10 @@ export function tickAiControllerWithRole(
       postRecoveryFramesRemaining: 0,
       tacticalRepositionOpportunityFramesRemaining: 0,
       tacticalRepositionFramesRemaining: 0,
+      postControlCounterstepOpportunityFramesRemaining: 0,
+      postControlCounterstepFramesRemaining: 0,
+      postControlCounterstepSeparatedFrames: 0,
+      postControlCounterstepActionRequested: false,
       postRecoveryUseSuperBoost: false,
     },
   };

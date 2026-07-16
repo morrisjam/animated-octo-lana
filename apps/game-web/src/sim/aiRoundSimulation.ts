@@ -38,13 +38,15 @@ import {
 import type { FrameInput, GameRules, GameTuning, PlayerId, PlayersById } from './types';
 
 export const AI_ROUND_FIXED_DT = 1 / 60;
-export const AI_ROUND_DECISION_FLOW_SCHEMA_VERSION = 'gw.ai-round-decision-flow.v1';
+export const AI_ROUND_DECISION_FLOW_SCHEMA_VERSION = 'gw.ai-round-decision-flow.v2';
 
 export interface AiRoundDecisionFlowPlayerSummary {
   tacticalRepositionOpportunityFrames: number;
   tacticalRepositionOpportunityWindows: number;
   tacticalRepositionSelections: number;
   tacticalRepositionFrames: number;
+  postControlCounterstepWindows: number;
+  postControlCounterstepFrames: number;
 }
 
 export interface AiRoundDecisionFlowSummary {
@@ -108,12 +110,15 @@ function createDecisionFlowPlayerSummary(): AiRoundDecisionFlowPlayerSummary {
     tacticalRepositionOpportunityWindows: 0,
     tacticalRepositionSelections: 0,
     tacticalRepositionFrames: 0,
+    postControlCounterstepWindows: 0,
+    postControlCounterstepFrames: 0,
   };
 }
 
 function recordDecisionFlow(
   summary: AiRoundDecisionFlowSummary,
   previousRepositionEligibility: PlayersById<boolean>,
+  previousCounterstepActive: PlayersById<boolean>,
   playerId: PlayerId,
   decision: AiDecisionTrace,
 ): void {
@@ -131,7 +136,15 @@ function recordDecisionFlow(
   if (decision.movementIntent === 'tactical_reposition') {
     player.tacticalRepositionFrames += 1;
   }
+  const counterstepActive = decision.movementIntent === 'post_control_counterstep';
+  if (counterstepActive) {
+    player.postControlCounterstepFrames += 1;
+    if (!previousCounterstepActive[playerId]) {
+      player.postControlCounterstepWindows += 1;
+    }
+  }
   previousRepositionEligibility[playerId] = repositionEligible;
+  previousCounterstepActive[playerId] = counterstepActive;
 }
 
 export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimulationResult {
@@ -165,6 +178,7 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
     },
   };
   const previousRepositionEligibility: PlayersById<boolean> = { P1: false, P2: false };
+  const previousCounterstepActive: PlayersById<boolean> = { P1: false, P2: false };
 
   let p1Controller = createAiController({
     seed: deriveStableAiSeed(setSeed, options.difficulty, options.p1, roundIndex),
@@ -188,8 +202,20 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
     p1Controller = p1AiTick.next;
     const p2AiTick = tickAiController(state, 'P2', p2Controller);
     p2Controller = p2AiTick.next;
-    recordDecisionFlow(decisionFlow, previousRepositionEligibility, 'P1', p1AiTick.decision);
-    recordDecisionFlow(decisionFlow, previousRepositionEligibility, 'P2', p2AiTick.decision);
+    recordDecisionFlow(
+      decisionFlow,
+      previousRepositionEligibility,
+      previousCounterstepActive,
+      'P1',
+      p1AiTick.decision,
+    );
+    recordDecisionFlow(
+      decisionFlow,
+      previousRepositionEligibility,
+      previousCounterstepActive,
+      'P2',
+      p2AiTick.decision,
+    );
     const frameInput: FrameInput = {
       p1: { ...p1AiTick.input },
       p2: { ...p2AiTick.input },

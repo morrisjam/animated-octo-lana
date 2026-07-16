@@ -108,6 +108,7 @@ describe('sim AI behaviour framework', () => {
     expect(defaults.postControlSteeringFrames).toBe(0);
     expect(defaults.opponentControlReturnObserveFrames).toBe(0);
     expect(defaults.repositionWeightScale).toBe(0);
+    expect(defaults.postControlCounterstepScale).toBe(0);
     expect(resolveAiDifficultyProfile('veteran', defaults)).toEqual(
       AI_DIFFICULTY_PROFILES.veteran,
     );
@@ -130,6 +131,7 @@ describe('sim AI behaviour framework', () => {
       committedLaunchGuardChance: 5,
       finishPursuitReachScale: 99,
       repositionWeightScale: 99,
+      postControlCounterstepScale: 99,
     })).toMatchObject({
       engagementDistanceScale: 3,
       neutralApproachScale: 0,
@@ -149,11 +151,12 @@ describe('sim AI behaviour framework', () => {
       committedLaunchGuardChance: 1,
       finishPursuitReachScale: 2,
       repositionWeightScale: 4,
+      postControlCounterstepScale: 1,
     });
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v6',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -162,7 +165,7 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v7',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -171,7 +174,7 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v8',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -180,16 +183,22 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v9',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       postCommitmentDecisionScale: 0,
       finishPursuitReachScale: 0.7,
     });
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v10',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       repositionWeightScale: 0,
       finishPursuitReachScale: 0.7,
+    });
+    expect(sanitiseAiBehaviorTuning({
+      schemaVersion: 'gw.ai-behavior-tuning.v11',
+    })).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      postControlCounterstepScale: 0,
     });
     expect(fingerprintAiBehaviorTuning(defaults)).not.toBe(
       fingerprintAiBehaviorTuning({ ...defaults, engagementDistanceScale: 1.1 }),
@@ -248,6 +257,95 @@ describe('sim AI behaviour framework', () => {
     expect(threatened.next.tacticalRepositionFramesRemaining).toBe(0);
     expect(threatened.next.decisionLockFrames).toBe(0);
     expect(threatened.next.reactionFramesRemaining).toBe(0);
+  });
+
+  test.each([
+    [1, 24],
+    [0.5, 12],
+  ])(
+    'countersteps an inward post-control boost at scale %s without suppressing a launch',
+    (counterstepScale, expectedFrames) => {
+      const state = createInitialState({ seed: 118 });
+      state.players.P1.pos = { x: -4, y: 0 };
+      state.players.P1.vel = { x: 48, y: 0 };
+      state.players.P2.pos = { x: 4, y: 0 };
+      state.players.P2.fuel = 0;
+      const behaviorTuning = {
+        ...createDefaultAiBehaviorTuning(),
+        errorRateScale: 0,
+        postControlCounterstepScale: counterstepScale,
+        launchWeightScale: 4,
+        specialWeightScale: 0,
+        dunkWeightScale: 0,
+        parryWeightScale: 0,
+      };
+      const tick = tickAiController(state, 'P1', {
+        ...createAiController({ seed: 118, profileId: 'veteran', behaviorTuning }),
+        wasHelpless: true,
+        reactionFramesRemaining: 0,
+        maneuverFramesRemaining: 100,
+      });
+
+      expect(tick.input.launch).toBe(true);
+      expect(tick.input.boost).toBe(false);
+      expect(tick.input.superBoost).toBe(false);
+      expect(tick.input.moveX).toBeLessThan(0);
+      expect(tick.decision.movementIntent).toBe('post_control_counterstep');
+      expect(tick.next.postControlCounterstepOpportunityFramesRemaining).toBe(0);
+      expect(tick.next.postControlCounterstepFramesRemaining).toBe(expectedFrames);
+      expect(tick.next.postControlCounterstepActionRequested).toBe(true);
+    },
+  );
+
+  test('counterstep waits for a tactical request before accepting outward separation', () => {
+    const state = createInitialState({ seed: 120 });
+    state.players.P1.pos = { x: -10, y: 0 };
+    state.players.P1.vel = { x: -24, y: 0 };
+    state.players.P2.pos = { x: 10, y: 0 };
+    state.players.P2.fuel = 0;
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlCounterstepScale: 1,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const first = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 120, profileId: 'veteran', behaviorTuning }),
+      wasHelpless: true,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+    });
+    const second = tickAiController(state, 'P1', first.next);
+
+    expect(first.next.postControlCounterstepActionRequested).toBe(false);
+    expect(second.next.postControlCounterstepFramesRemaining).toBeGreaterThan(0);
+    expect(second.next.postControlCounterstepSeparatedFrames).toBe(0);
+    expect(second.decision.movementIntent).toBe('post_control_counterstep');
+  });
+
+  test('does not arm counterstep when control returns into an opponent threat', () => {
+    const state = createInitialState({ seed: 119 });
+    state.players.P1.pos = { x: -4, y: 0 };
+    state.players.P2.pos = { x: 4, y: 0 };
+    state.players.P2.launchStartup = framesToSeconds(4);
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlCounterstepScale: 1,
+    };
+    const tick = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 119, profileId: 'veteran', behaviorTuning }),
+      wasHelpless: true,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+    });
+
+    expect(tick.decision.movementIntent).not.toBe('post_control_counterstep');
+    expect(tick.next.postControlCounterstepOpportunityFramesRemaining).toBe(0);
+    expect(tick.next.postControlCounterstepFramesRemaining).toBe(0);
   });
 
   test('starts an offense-only decision read after authored attack recovery', () => {

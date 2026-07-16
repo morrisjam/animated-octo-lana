@@ -1245,6 +1245,7 @@ function movement(
 
   if (player.recovering > 0 || player.stunned > 0 || player.helpless > 0 || state.winner) {
     finishCommittedBoost(player, true);
+    finishSuperBoost(state, player);
     return;
   }
 
@@ -1300,11 +1301,6 @@ function movement(
     }
   } else if (player.superBoost > 0) {
     finishSuperBoost(state, player);
-  }
-
-  if (player.stunned > 0 && player.superBoost > 0) {
-    finishSuperBoost(state, player);
-    return;
   }
 
   const moveInputLengthSq = playerInput.moveX * playerInput.moveX + playerInput.moveY * playerInput.moveY;

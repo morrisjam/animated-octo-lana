@@ -554,6 +554,44 @@ describe('super boost commit tracking', () => {
     expect(commitState.players.P1.fuel).toBeGreaterThan(noCommitState.players.P1.fuel);
     expect(commitState.players.P1.fuel - noCommitState.players.P1.fuel).toBeGreaterThan(expectedPenaltyGap * 0.6);
   });
+
+  test.each(['stunned', 'helpless', 'recovering'] as const)(
+    'ends active super boost and settles its cost when the fighter becomes %s',
+    (controlLoss) => {
+      const state = createInitialState();
+      const startSuper = neutralInput();
+      startSuper.p1.superBoost = true;
+      startSuper.p1.moveX = 1;
+      step(state, startSuper, FIXED_DT);
+      const fuelBeforeControlLoss = state.players.P1.fuel;
+
+      state.players.P1[controlLoss] = 1;
+      step(state, neutralInput(), FIXED_DT);
+
+      expect(state.players.P1.superBoost).toBe(0);
+      expect(state.players.P1.fuel).toBeLessThan(fuelBeforeControlLoss);
+    },
+  );
+
+  test('ends active super boost and settles its cost when the round ends', () => {
+    const state = createInitialState();
+    const startSuper = neutralInput();
+    startSuper.p1.superBoost = true;
+    startSuper.p1.moveX = 1;
+    step(state, startSuper, FIXED_DT);
+    const fuelBeforeRoundEnd = state.players.P1.fuel;
+
+    state.players.P1.pos = { x: 0, y: 0 };
+    state.players.P2.pos = { x: 0, y: 0 };
+    state.players.P1.dunkActive = 1;
+    state.players.P1.didCommitAttackDuringSuperBoost = true;
+    state.players.P2.fuel = 0;
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(state.winner).toBe('P1');
+    expect(state.players.P1.superBoost).toBe(0);
+    expect(state.players.P1.fuel).toBeLessThan(fuelBeforeRoundEnd);
+  });
 });
 
 describe('launch recovery and spacing', () => {

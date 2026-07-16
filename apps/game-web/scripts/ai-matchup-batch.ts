@@ -200,6 +200,9 @@ interface AiMatchupFlowPlayerSummary {
   tacticalRepositionSelectionRatio: number | null;
   tacticalRepositionSelectionsPerRound: number;
   tacticalRepositionSecondsPerRound: number;
+  postControlCounterstepWindows: number;
+  postControlCounterstepWindowsPerRound: number;
+  postControlCounterstepSecondsPerRound: number;
   naturalControlReturns: number;
   launchBreakControlReturns: number;
   relaunchesAfterControlReturn: number;
@@ -837,6 +840,12 @@ function buildAiMatchupFlowSummary(
     const tacticalRepositionFrames = decisionTotal(
       (player) => player.tacticalRepositionFrames,
     );
+    const postControlCounterstepWindows = decisionTotal(
+      (player) => player.postControlCounterstepWindows ?? 0,
+    );
+    const postControlCounterstepFrames = decisionTotal(
+      (player) => player.postControlCounterstepFrames ?? 0,
+    );
     const naturalControlReturns = flowModels.reduce(
       (sum, flow) => sum + flow.players[playerId].controlReturn.naturalControlReturns,
       0,
@@ -1117,6 +1126,15 @@ function buildAiMatchupFlowSummary(
       ),
       tacticalRepositionSecondsPerRound: roundMetric(
         tacticalRepositionFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlCounterstepWindows,
+      postControlCounterstepWindowsPerRound: roundMetric(
+        postControlCounterstepWindows / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlCounterstepSecondsPerRound: roundMetric(
+        postControlCounterstepFrames * FIXED_DT / Math.max(1, summaries.length),
         2,
       ),
       naturalControlReturns,
@@ -3605,12 +3623,12 @@ function formatSummaryMarkdown(report: BatchReport): string {
 
   lines.push(
     '',
-    '### Tactical Reposition Decisions',
+    '### Post-Control AI Decisions',
     '',
-    'An opportunity window begins when the one-shot post-control reposition becomes a valid weighted choice. Selected counts record actual commitments, eligible frames show how long the choice remained available, and active seconds show how much round time it consumed. A zero-weight baseline correctly reports no opportunities. These are mechanism diagnostics, not a score; read them beside control-return resets, exchanges, and finishes.',
+    'Reposition columns record the one-shot weighted choice after control returns. Counterstep columns record the separate zero-default movement interception that cancels inward locomotion without suppressing launch, parry, or Guard. A neutral baseline correctly reports no exposure. These are mechanism diagnostics, not a score; read them beside first-action direction, control-return resets, exchanges, and finishes.',
     '',
-    '| P1 | P2 | Difficulty | P1 selected / windows | P1 eligible frames | P1 selections / round | P1 active sec / round | P1 return reset | P2 selected / windows | P2 eligible frames | P2 selections / round | P2 active sec / round | P2 return reset |',
-    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    '| P1 | P2 | Difficulty | P1 reposition selected / windows | P1 reposition eligible frames | P1 reposition / round | P1 reposition sec / round | P1 countersteps / round | P1 counterstep sec / round | P1 return reset | P2 reposition selected / windows | P2 reposition eligible frames | P2 reposition / round | P2 reposition sec / round | P2 countersteps / round | P2 counterstep sec / round | P2 return reset |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
   );
   for (const summary of report.summaries) {
     const p1 = summary.flow.players.P1;
@@ -3621,7 +3639,7 @@ function formatSummaryMarkdown(report: BatchReport): string {
         : `${player.tacticalRepositionSelections}/${player.tacticalRepositionOpportunityWindows} (${(player.tacticalRepositionSelectionRatio * 100).toFixed(1)}%)`
     );
     lines.push(
-      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${formatSelection(p1)} | ${p1.tacticalRepositionOpportunityFrames} | ${p1.tacticalRepositionSelectionsPerRound.toFixed(2)} | ${p1.tacticalRepositionSecondsPerRound.toFixed(2)}s | ${p1.sustainedResetsAfterControlReturn}/${p1.controlReturnsInPressure} | ${formatSelection(p2)} | ${p2.tacticalRepositionOpportunityFrames} | ${p2.tacticalRepositionSelectionsPerRound.toFixed(2)} | ${p2.tacticalRepositionSecondsPerRound.toFixed(2)}s | ${p2.sustainedResetsAfterControlReturn}/${p2.controlReturnsInPressure} |`,
+      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${formatSelection(p1)} | ${p1.tacticalRepositionOpportunityFrames} | ${p1.tacticalRepositionSelectionsPerRound.toFixed(2)} | ${p1.tacticalRepositionSecondsPerRound.toFixed(2)}s | ${p1.postControlCounterstepWindowsPerRound.toFixed(2)} | ${p1.postControlCounterstepSecondsPerRound.toFixed(2)}s | ${p1.sustainedResetsAfterControlReturn}/${p1.controlReturnsInPressure} | ${formatSelection(p2)} | ${p2.tacticalRepositionOpportunityFrames} | ${p2.tacticalRepositionSelectionsPerRound.toFixed(2)} | ${p2.tacticalRepositionSecondsPerRound.toFixed(2)}s | ${p2.postControlCounterstepWindowsPerRound.toFixed(2)} | ${p2.postControlCounterstepSecondsPerRound.toFixed(2)}s | ${p2.sustainedResetsAfterControlReturn}/${p2.controlReturnsInPressure} |`,
     );
   }
 

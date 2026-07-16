@@ -2418,6 +2418,7 @@ describe('balance lab drafts', () => {
     delete legacyAiBehavior.opponentControlReturnObserveFrames;
     delete legacyAiBehavior.postCommitmentDecisionScale;
     delete legacyAiBehavior.repositionWeightScale;
+    delete legacyAiBehavior.postControlCounterstepScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2425,7 +2426,7 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       neutralHoldFrames: 21,
       commitmentObserveFrames: 0,
       commitmentPressFrames: 0,
@@ -2435,6 +2436,7 @@ describe('balance lab drafts', () => {
       finishPursuitReachScale: 0.25,
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
+      postControlCounterstepScale: 0,
     });
   });
 
@@ -2453,6 +2455,7 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.opponentControlReturnObserveFrames;
     delete previousAiBehavior.postCommitmentDecisionScale;
     delete previousAiBehavior.repositionWeightScale;
+    delete previousAiBehavior.postControlCounterstepScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2460,12 +2463,13 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
+      postControlCounterstepScale: 0,
     });
   });
 
@@ -2483,6 +2487,7 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.opponentControlReturnObserveFrames;
     delete previousAiBehavior.postCommitmentDecisionScale;
     delete previousAiBehavior.repositionWeightScale;
+    delete previousAiBehavior.postControlCounterstepScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2490,12 +2495,13 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
+      postControlCounterstepScale: 0,
     });
   });
 
@@ -2512,6 +2518,7 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.opponentControlReturnObserveFrames;
     delete previousAiBehavior.postCommitmentDecisionScale;
     delete previousAiBehavior.repositionWeightScale;
+    delete previousAiBehavior.postControlCounterstepScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2519,12 +2526,13 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
+      postControlCounterstepScale: 0,
     });
   });
 
@@ -2540,6 +2548,7 @@ describe('balance lab drafts', () => {
     previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v9';
     delete previousAiBehavior.postCommitmentDecisionScale;
     delete previousAiBehavior.repositionWeightScale;
+    delete previousAiBehavior.postControlCounterstepScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2547,9 +2556,10 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
+      postControlCounterstepScale: 0,
     });
   });
 
@@ -2564,6 +2574,7 @@ describe('balance lab drafts', () => {
     const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
     previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v10';
     delete previousAiBehavior.repositionWeightScale;
+    delete previousAiBehavior.postControlCounterstepScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2571,8 +2582,32 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v11',
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
       repositionWeightScale: 0,
+      postControlCounterstepScale: 0,
+    });
+  });
+
+  test('fills counterstep tuning when loading a v3 draft with v11 AI tuning', () => {
+    const draft = createBalanceLabDraft(
+      'Pre-counterstep behavior draft',
+      createDefaultTuning(),
+      {},
+      '2026-07-13T12:00:00.000Z',
+      createDefaultAiBehaviorTuning(),
+    );
+    const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
+    previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v11';
+    delete previousAiBehavior.postControlCounterstepScale;
+
+    const parsed = parseBalanceLabDraft({
+      ...draft,
+      aiBehaviorTuning: previousAiBehavior,
+    });
+
+    expect(parsed?.aiBehaviorTuning).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      postControlCounterstepScale: 0,
     });
   });
 

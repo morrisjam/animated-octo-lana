@@ -158,6 +158,8 @@ describe('AI round simulation', () => {
       tacticalRepositionOpportunityWindows: 0,
       tacticalRepositionSelections: 0,
       tacticalRepositionFrames: 0,
+      postControlCounterstepWindows: 0,
+      postControlCounterstepFrames: 0,
     });
     expect(first.decisionFlow.players.P2).toEqual(first.decisionFlow.players.P1);
   });
@@ -180,7 +182,7 @@ describe('AI round simulation', () => {
       0,
     );
 
-    expect(result.decisionFlow.schemaVersion).toBe('gw.ai-round-decision-flow.v1');
+    expect(result.decisionFlow.schemaVersion).toBe('gw.ai-round-decision-flow.v2');
     expect(selections).toBeGreaterThan(0);
     for (const player of players) {
       expect(player.tacticalRepositionSelections).toBeLessThanOrEqual(
@@ -191,6 +193,25 @@ describe('AI round simulation', () => {
       );
       expect(player.tacticalRepositionOpportunityFrames).toBeGreaterThanOrEqual(
         player.tacticalRepositionOpportunityWindows,
+      );
+    }
+  });
+
+  test('summarises post-control counterstep exposure without replay capture', () => {
+    const result = simulateAiRound({
+      ...BASE_OPTIONS,
+      maxFrames: 5_400,
+      behaviorTuning: {
+        ...createDefaultAiBehaviorTuning(),
+        postControlCounterstepScale: 1,
+      },
+    });
+    const players = Object.values(result.decisionFlow.players);
+
+    expect(players.some((player) => player.postControlCounterstepWindows > 0)).toBe(true);
+    for (const player of players) {
+      expect(player.postControlCounterstepFrames).toBeGreaterThanOrEqual(
+        player.postControlCounterstepWindows,
       );
     }
   });

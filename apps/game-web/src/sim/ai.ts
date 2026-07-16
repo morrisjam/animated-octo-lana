@@ -7,7 +7,7 @@ import type { FrameInput, GameState, PlayerFrameInput, PlayerId, PlayerState } f
 
 export type AiDifficultyId = 'rookie' | 'cadet' | 'veteran' | 'ace';
 
-export const AI_POLICY_REVISION = 'flow-v18';
+export const AI_POLICY_REVISION = 'flow-v19';
 export const AI_RECOVERY_POLICY_IDS = ['legacy', 'spacing', 'evasive'] as const;
 export type AiRecoveryPolicyId = (typeof AI_RECOVERY_POLICY_IDS)[number];
 export const DEFAULT_AI_RECOVERY_POLICY: AiRecoveryPolicyId = 'legacy';
@@ -18,10 +18,12 @@ export const AI_PURSUIT_POLICY_IDS = ['legacy', 'neutral_hold'] as const;
 export type AiPursuitPolicyId = (typeof AI_PURSUIT_POLICY_IDS)[number];
 export const DEFAULT_AI_PURSUIT_POLICY: AiPursuitPolicyId = 'legacy';
 
-export const AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v11';
+export const AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v12';
 
 const LEGACY_FINISH_PURSUIT_REACH_SCALE = 0.25;
 const DEFAULT_FINISH_PURSUIT_REACH_SCALE = 0.7;
+const POST_CONTROL_COUNTERSTEP_OPPORTUNITY_FRAMES = 60;
+const POST_CONTROL_COUNTERSTEP_ACTIVE_FRAMES = 24;
 
 export interface AiBehaviorTuning {
   schemaVersion: typeof AI_BEHAVIOR_TUNING_SCHEMA_VERSION;
@@ -41,6 +43,7 @@ export interface AiBehaviorTuning {
   postClashSpacingFrames: number;
   postRecoverySpacingFrames: number;
   postControlSteeringFrames: number;
+  postControlCounterstepScale: number;
   postEventRetreatChanceOffset: number;
   postRecoverySuperBoostChance: number;
   postRecoveryDefenseFrames: number;
@@ -74,6 +77,7 @@ const DEFAULT_AI_BEHAVIOR_TUNING: AiBehaviorTuning = {
   postClashSpacingFrames: 0,
   postRecoverySpacingFrames: 0,
   postControlSteeringFrames: 0,
+  postControlCounterstepScale: 0,
   postEventRetreatChanceOffset: 0,
   postRecoverySuperBoostChance: 0,
   postRecoveryDefenseFrames: 0,
@@ -158,6 +162,12 @@ export function sanitiseAiBehaviorTuning(value: unknown): AiBehaviorTuning {
     ),
     postControlSteeringFrames: Math.round(
       finiteTuningValue(input.postControlSteeringFrames, 0, 0, 120),
+    ),
+    postControlCounterstepScale: finiteTuningValue(
+      input.postControlCounterstepScale,
+      0,
+      0,
+      1,
     ),
     postEventRetreatChanceOffset: finiteTuningValue(
       input.postEventRetreatChanceOffset,
@@ -337,6 +347,10 @@ export interface AiControllerState {
   launchBreakPlanned: boolean;
   postRecoveryFramesRemaining: number;
   postControlSteeringFramesRemaining: number;
+  postControlCounterstepOpportunityFramesRemaining: number;
+  postControlCounterstepFramesRemaining: number;
+  postControlCounterstepSeparatedFrames: number;
+  postControlCounterstepActionRequested: boolean;
   tacticalRepositionOpportunityFramesRemaining: number;
   tacticalRepositionFramesRemaining: number;
   postRecoveryMode: 'retreat' | 'orbit';
@@ -368,6 +382,7 @@ export const AI_MOVEMENT_INTENTS = [
   'uncontrolled',
   'projectile_evade',
   'post_event_spacing',
+  'post_control_counterstep',
   'tactical_reposition',
   'neutral_hold',
   'commitment_observe',
@@ -607,6 +622,10 @@ export function createAiController(seedOrOptions?: number | CreateAiControllerOp
     launchBreakPlanned: false,
     postRecoveryFramesRemaining: 0,
     postControlSteeringFramesRemaining: 0,
+    postControlCounterstepOpportunityFramesRemaining: 0,
+    postControlCounterstepFramesRemaining: 0,
+    postControlCounterstepSeparatedFrames: 0,
+    postControlCounterstepActionRequested: false,
     tacticalRepositionOpportunityFramesRemaining: 0,
     tacticalRepositionFramesRemaining: 0,
     postRecoveryMode: 'orbit',
@@ -678,6 +697,24 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     0,
     Math.floor(controller.postControlSteeringFramesRemaining ?? 0) - 1,
   );
+  let postControlCounterstepOpportunityFramesRemaining = Math.max(
+    0,
+    Math.floor(controller.postControlCounterstepOpportunityFramesRemaining ?? 0) - 1,
+  );
+  let postControlCounterstepFramesRemaining = Math.max(
+    0,
+    Math.floor(controller.postControlCounterstepFramesRemaining ?? 0) - 1,
+  );
+  let postControlCounterstepSeparatedFrames = Math.max(
+    0,
+    Math.floor(controller.postControlCounterstepSeparatedFrames ?? 0),
+  );
+  let postControlCounterstepActionRequested = controller.postControlCounterstepActionRequested
+    ?? false;
+  if (postControlCounterstepFramesRemaining <= 0) {
+    postControlCounterstepSeparatedFrames = 0;
+    postControlCounterstepActionRequested = false;
+  }
   let tacticalRepositionOpportunityFramesRemaining = Math.max(
     0,
     Math.floor(controller.tacticalRepositionOpportunityFramesRemaining ?? 0) - 1,
@@ -921,6 +958,59 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   const committedFinishThreat = lowFuelDanger
     && (opponent.dunkStartup > 0 || opponent.dunkActive > 0)
     && distance < opponentMoves.dunk.hitRange + 4.5;
+  if (
+    controlReturnedThisFrame
+    && behaviorTuning.postControlCounterstepScale > 0
+    && playerHasControl
+    && opponentHasNeutralControl
+    && !opponentOpen
+    && !incomingProjectileClose
+    && !finishOpportunity
+    && !boundaryRisk
+    && distance <= 36
+    && !state.winner
+  ) {
+    postControlCounterstepOpportunityFramesRemaining = Math.max(
+      1,
+      Math.round(
+        POST_CONTROL_COUNTERSTEP_OPPORTUNITY_FRAMES
+        * behaviorTuning.postControlCounterstepScale,
+      ),
+    );
+  }
+  const postControlCounterstepCancelled = !playerHasControl
+    || !opponentHasNeutralControl
+    || opponentOpen
+    || incomingProjectileClose
+    || finishOpportunity
+    || boundaryRisk
+    || Boolean(state.winner);
+  if (
+    postControlCounterstepCancelled
+    && (
+      postControlCounterstepOpportunityFramesRemaining > 0
+      || postControlCounterstepFramesRemaining > 0
+    )
+  ) {
+    postControlCounterstepOpportunityFramesRemaining = 0;
+    postControlCounterstepFramesRemaining = 0;
+    postControlCounterstepSeparatedFrames = 0;
+    postControlCounterstepActionRequested = false;
+  } else if (postControlCounterstepFramesRemaining > 0) {
+    postControlCounterstepSeparatedFrames = postControlCounterstepActionRequested
+      && separationSpeed >= 0
+      ? postControlCounterstepSeparatedFrames + 1
+      : 0;
+    if (postControlCounterstepSeparatedFrames >= 2) {
+      postControlCounterstepFramesRemaining = 0;
+      postControlCounterstepSeparatedFrames = 0;
+      postControlCounterstepActionRequested = false;
+    }
+  }
+  const postControlCounterstepActive = postControlCounterstepFramesRemaining > 0
+    && !postControlCounterstepCancelled;
+  const postControlCounterstepDecisionWindow = postControlCounterstepActive
+    || postControlCounterstepOpportunityFramesRemaining > 0;
   const projectileLane = specialMove.behaviorId === 'special.projectile.v1'
     && distance > 10
     && distance < specialMove.size.range * 0.82;
@@ -1532,7 +1622,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       && opponent.parry <= 0
       && !incomingProjectileUrgent
       && !postRecoveryDefenseActive;
-    const movementDashSuppressed = postControlSteeringActive
+    const movementDashSuppressed = (postControlSteeringActive || postControlCounterstepDecisionWindow)
       && specialMove.behaviorId === 'special.movement_dash.v1';
     specialReady = player.cool.special <= 0
       && player.fuel >= specialFuelCost
@@ -1692,6 +1782,47 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     }
   }
 
+  const requestedCounterstepAction = input.launch
+    || input.special
+    || input.dunk
+    || input.parry;
+  const inwardMovementInput = input.moveX * dirX + input.moveY * dirY;
+  const counterstepAttempted = postControlCounterstepOpportunityFramesRemaining > 0
+    && (
+      input.boost
+      || input.superBoost
+      || requestedCounterstepAction
+      || inwardMovementInput > 0.05
+    );
+  if (counterstepAttempted) {
+    postControlCounterstepOpportunityFramesRemaining = 0;
+    postControlCounterstepFramesRemaining = Math.max(
+      1,
+      Math.round(
+        POST_CONTROL_COUNTERSTEP_ACTIVE_FRAMES
+        * behaviorTuning.postControlCounterstepScale,
+      ),
+    );
+    postControlCounterstepSeparatedFrames = 0;
+    postControlCounterstepActionRequested = requestedCounterstepAction;
+  } else if (postControlCounterstepFramesRemaining > 0 && requestedCounterstepAction) {
+    postControlCounterstepActionRequested = true;
+  }
+  if (postControlCounterstepFramesRemaining > 0 && !postControlCounterstepCancelled) {
+    movementIntent = 'post_control_counterstep';
+    const scale = behaviorTuning.postControlCounterstepScale;
+    const currentInwardInput = input.moveX * dirX + input.moveY * dirY;
+    const inwardVelocity = Math.max(0, player.vel.x * dirX + player.vel.y * dirY);
+    const velocityCorrection = clamp01(
+      inwardVelocity / Math.max(1, state.tuning.boostHoldSpeed * playerStats.boostSpeedMultiplier),
+    ) * 0.7 * scale;
+    const inputCorrection = Math.max(0, currentInwardInput) * (1 + scale);
+    input.moveX = clampAxis(input.moveX - dirX * (inputCorrection + velocityCorrection));
+    input.moveY = clampAxis(input.moveY - dirY * (inputCorrection + velocityCorrection));
+    input.boost = false;
+    input.superBoost = false;
+  }
+
   const superBoostStartCost = playerMoves.superBoost.startFuelCost
     * state.tuning.superBoostFuelMultiplier
     * playerStats.superFuelMultiplier;
@@ -1782,7 +1913,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && !postRecoveryDefenseActive;
   const intrinsicSpecialReady = player.cool.special <= 0
     && player.fuel >= specialFuelCost
-    && !(postControlSteeringActive && specialMove.behaviorId === 'special.movement_dash.v1');
+    && !(
+      (postControlSteeringActive || postControlCounterstepDecisionWindow)
+      && specialMove.behaviorId === 'special.movement_dash.v1'
+    );
   const intrinsicParryReady = player.parry <= 0
     && (opponentParryableThreatening || incomingProjectileUrgent);
   const roundTraceNumber = (value: number): number => Math.round(value * 1_000) / 1_000;
@@ -1810,8 +1944,11 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     ? 'cooldown'
     : player.fuel < specialFuelCost
       ? 'insufficient_fuel'
-      : postControlSteeringActive && specialMove.behaviorId === 'special.movement_dash.v1'
-        ? 'post_control_dash_suppressed'
+      : (postControlSteeringActive || postControlCounterstepDecisionWindow)
+        && specialMove.behaviorId === 'special.movement_dash.v1'
+        ? postControlCounterstepDecisionWindow
+          ? 'post_control_counterstep_dash_suppressed'
+          : 'post_control_dash_suppressed'
       : 'unsupported_context';
   const dunkUnavailableReason = player.cool.dunk > 0
     ? 'cooldown'
@@ -1918,6 +2055,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       neutralHoldActive,
       postEventSpacingActive: postRecoveryDecisionActive
         || postControlSteeringActive
+        || (
+          postControlCounterstepFramesRemaining > 0
+          && !postControlCounterstepCancelled
+        )
         || opponentControlReturnObserveActive,
       deliberateError: shouldMakeMistake,
     },
@@ -1980,6 +2121,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       launchBreakPlanned,
       postRecoveryFramesRemaining,
       postControlSteeringFramesRemaining,
+      postControlCounterstepOpportunityFramesRemaining,
+      postControlCounterstepFramesRemaining,
+      postControlCounterstepSeparatedFrames,
+      postControlCounterstepActionRequested,
       tacticalRepositionOpportunityFramesRemaining,
       tacticalRepositionFramesRemaining,
       postRecoveryMode,

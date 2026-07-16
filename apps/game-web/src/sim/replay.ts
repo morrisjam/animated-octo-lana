@@ -66,6 +66,7 @@ const PREVIOUS_REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.replay-ai-decision-
 const LEGACY_REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.replay-ai-decision-trace.v1';
 const PREVIOUS_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.ai-decision-trace.v3';
 const LEGACY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.ai-decision-trace.v2';
+const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V11 = 'gw.ai-behavior-tuning.v11';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V10 = 'gw.ai-behavior-tuning.v10';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V9 = 'gw.ai-behavior-tuning.v9';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V8 = 'gw.ai-behavior-tuning.v8';
@@ -300,18 +301,26 @@ const POST_CONTROL_STEERING_TUNING_KEYS = ['postControlSteeringFrames'] as const
 const OPPONENT_CONTROL_RETURN_TUNING_KEYS = ['opponentControlReturnObserveFrames'] as const;
 const POST_COMMITMENT_DECISION_TUNING_KEYS = ['postCommitmentDecisionScale'] as const;
 const REPOSITION_TUNING_KEYS = ['repositionWeightScale'] as const;
+const COUNTERSTEP_TUNING_KEYS = ['postControlCounterstepScale'] as const;
 
 function getLegacyAiBehaviorTuningOmittedKeys(schemaVersion: unknown): readonly string[] | null {
   switch (schemaVersion) {
+    case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V11:
+      return COUNTERSTEP_TUNING_KEYS;
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V10:
-      return REPOSITION_TUNING_KEYS;
+      return [...REPOSITION_TUNING_KEYS, ...COUNTERSTEP_TUNING_KEYS];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V9:
-      return [...POST_COMMITMENT_DECISION_TUNING_KEYS, ...REPOSITION_TUNING_KEYS];
+      return [
+        ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+        ...REPOSITION_TUNING_KEYS,
+        ...COUNTERSTEP_TUNING_KEYS,
+      ];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V8:
       return [
         ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
         ...POST_COMMITMENT_DECISION_TUNING_KEYS,
         ...REPOSITION_TUNING_KEYS,
+        ...COUNTERSTEP_TUNING_KEYS,
       ];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V7:
       return [
@@ -319,6 +328,7 @@ function getLegacyAiBehaviorTuningOmittedKeys(schemaVersion: unknown): readonly 
         ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
         ...POST_COMMITMENT_DECISION_TUNING_KEYS,
         ...REPOSITION_TUNING_KEYS,
+        ...COUNTERSTEP_TUNING_KEYS,
       ];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V6:
       return [
@@ -327,6 +337,7 @@ function getLegacyAiBehaviorTuningOmittedKeys(schemaVersion: unknown): readonly 
         ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
         ...POST_COMMITMENT_DECISION_TUNING_KEYS,
         ...REPOSITION_TUNING_KEYS,
+        ...COUNTERSTEP_TUNING_KEYS,
       ];
     case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V5:
       return [
@@ -336,6 +347,7 @@ function getLegacyAiBehaviorTuningOmittedKeys(schemaVersion: unknown): readonly 
         ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
         ...POST_COMMITMENT_DECISION_TUNING_KEYS,
         ...REPOSITION_TUNING_KEYS,
+        ...COUNTERSTEP_TUNING_KEYS,
       ];
     default:
       return null;

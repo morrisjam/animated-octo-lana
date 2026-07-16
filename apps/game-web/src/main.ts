@@ -1663,6 +1663,12 @@ function isTerminalOnlineTransportError(error: unknown): error is OnlineRequestE
   return error.status === 401 || error.status === 403 || error.status === 404 || error.status === 409;
 }
 
+function isRetryableOnlineRequestError(error: unknown): boolean {
+  return !(error instanceof OnlineRequestError)
+    || error.status === 429
+    || error.status >= 500;
+}
+
 function closeOnlineTransport(context: OnlineMatchContext): void {
   if (context.transportClosed) {
     return;
@@ -2198,9 +2204,7 @@ async function persistOnlineMatchReplay(context: OnlineMatchContext): Promise<vo
         break;
       } catch (error) {
         lastError = error;
-        const retryable = !(error instanceof OnlineRequestError)
-          || error.status === 429
-          || error.status >= 500;
+        const retryable = isRetryableOnlineRequestError(error);
         if (!retryable || attempt === maxAttempts) {
           throw error;
         }
@@ -4284,16 +4288,26 @@ function clearOnlineSessionHeartbeat(): void {
 async function requestOnlineSessionReconnect(
   target: OnlineSessionLifecycleTarget,
 ): Promise<MatchSessionView> {
-  return await requestOnlineJson<MatchSessionView>(
-    'POST',
-    '/matchmaking/sessions/reconnect',
-    target.localAccountId,
-    {
-      sessionId: target.sessionId,
-      sessionToken: target.sessionToken,
-      reconnectAttemptId: createReconnectAttemptId(),
-    },
-  );
+  const timeoutMs = Math.max(1_000, Math.min(5_000, target.intervalMs));
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => {
+    controller.abort(new Error(`Session reconnect timed out after ${timeoutMs}ms.`));
+  }, timeoutMs);
+  try {
+    return await requestOnlineJson<MatchSessionView>(
+      'POST',
+      '/matchmaking/sessions/reconnect',
+      target.localAccountId,
+      {
+        sessionId: target.sessionId,
+        sessionToken: target.sessionToken,
+        reconnectAttemptId: createReconnectAttemptId(),
+      },
+      { signal: controller.signal },
+    );
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 function handleOnlineSessionHeartbeatError(
@@ -4482,6 +4496,10 @@ const onlineSessionLifecycle = new OnlineSessionLifecycleController({
     error instanceof OnlineRequestError
     && error.code === 'participant_disconnected'
   ),
+  reconnectMaxAttempts: 3,
+  reconnectRetryDelayMs: 500,
+  isRetryableReconnectError: isRetryableOnlineRequestError,
+  waitForReconnectRetry: waitForMilliseconds,
   onEvent: handleOnlineSessionLifecycleEvent,
   onError: handleOnlineSessionLifecycleError,
 });

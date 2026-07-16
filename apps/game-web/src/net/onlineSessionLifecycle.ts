@@ -146,6 +146,10 @@ export interface OnlineSessionLifecycleControllerOptions {
   disconnect(target: OnlineSessionLifecycleTarget, source: OnlineSessionSuspendSource): Promise<void>;
   reconnect(target: OnlineSessionLifecycleTarget, source: OnlineSessionResumeSource): Promise<void>;
   isDisconnectedError(error: unknown): boolean;
+  reconnectMaxAttempts?: number;
+  reconnectRetryDelayMs?: number;
+  isRetryableReconnectError?(error: unknown): boolean;
+  waitForReconnectRetry?(milliseconds: number): Promise<void>;
   onEvent?(event: OnlineSessionLifecycleEvent): void;
   onError?(error: OnlineSessionLifecycleError): void;
   createHeartbeatLoop?(options: SessionHeartbeatLoopOptions): HeartbeatLoopLike;
@@ -153,6 +157,12 @@ export interface OnlineSessionLifecycleControllerOptions {
 
 export class OnlineSessionLifecycleController {
   private readonly options: OnlineSessionLifecycleControllerOptions;
+
+  private readonly reconnectMaxAttempts: number;
+
+  private readonly reconnectRetryDelayMs: number;
+
+  private readonly waitForReconnectRetry: (milliseconds: number) => Promise<void>;
 
   private target: OnlineSessionLifecycleTarget | null = null;
 
@@ -169,7 +179,21 @@ export class OnlineSessionLifecycleController {
   private transition = Promise.resolve();
 
   public constructor(options: OnlineSessionLifecycleControllerOptions) {
+    const reconnectMaxAttempts = options.reconnectMaxAttempts ?? 1;
+    if (!Number.isSafeInteger(reconnectMaxAttempts) || reconnectMaxAttempts < 1) {
+      throw new Error('reconnectMaxAttempts must be a positive safe integer.');
+    }
+    const reconnectRetryDelayMs = options.reconnectRetryDelayMs ?? 0;
+    if (!Number.isSafeInteger(reconnectRetryDelayMs) || reconnectRetryDelayMs < 0) {
+      throw new Error('reconnectRetryDelayMs must be a non-negative safe integer.');
+    }
     this.options = options;
+    this.reconnectMaxAttempts = reconnectMaxAttempts;
+    this.reconnectRetryDelayMs = reconnectRetryDelayMs;
+    this.waitForReconnectRetry = options.waitForReconnectRetry
+      ?? ((milliseconds) => new Promise((resolve) => {
+        globalThis.setTimeout(resolve, milliseconds);
+      }));
   }
 
   public start(target: OnlineSessionLifecycleTarget): void {
@@ -336,17 +360,33 @@ export class OnlineSessionLifecycleController {
     this.phase = 'resuming';
     if (this.disconnectConfirmed) {
       this.options.onEvent?.({ type: 'reconnecting', source, target });
-      try {
-        await this.options.reconnect(target, source);
-      } catch (error) {
-        if (this.isCurrent(generation, target)) {
-          this.options.onError?.({ phase: 'reconnect', source, target, error });
-        }
-        if (this.isCurrent(generation, target)) {
+      for (let attempt = 1; attempt <= this.reconnectMaxAttempts; attempt += 1) {
+        try {
+          await this.options.reconnect(target, source);
+          break;
+        } catch (error) {
+          if (!this.isCurrent(generation, target)) {
+            return;
+          }
+          const retryable = !this.desiredSuspended
+            && attempt < this.reconnectMaxAttempts
+            && (this.options.isRetryableReconnectError?.(error) ?? false);
+          if (retryable) {
+            await this.waitForReconnectRetry(this.reconnectRetryDelayMs * attempt);
+            if (!this.isCurrent(generation, target)) {
+              return;
+            }
+            if (!this.desiredSuspended) {
+              continue;
+            }
+          }
+          if (!this.desiredSuspended) {
+            this.options.onError?.({ phase: 'reconnect', source, target, error });
+          }
           this.phase = 'suspended';
           this.heartbeatLoop?.stop();
+          return;
         }
-        return;
       }
     }
     if (!this.isCurrent(generation, target)) {

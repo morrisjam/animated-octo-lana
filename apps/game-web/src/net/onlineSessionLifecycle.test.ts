@@ -152,6 +152,125 @@ describe('OnlineSessionLifecycleController', () => {
     });
   });
 
+  test('retries a transient reconnect failure while the page remains visible', async () => {
+    const transientFailure = new Error('temporary reconnect outage');
+    const events: OnlineSessionLifecycleEvent[] = [];
+    const errors: unknown[] = [];
+    const retryDelays: number[] = [];
+    let reconnectCalls = 0;
+    const controller = new OnlineSessionLifecycleController({
+      heartbeat: async () => undefined,
+      disconnect: async () => undefined,
+      reconnect: async () => {
+        reconnectCalls += 1;
+        if (reconnectCalls === 1) {
+          throw transientFailure;
+        }
+      },
+      isDisconnectedError: () => false,
+      reconnectMaxAttempts: 3,
+      reconnectRetryDelayMs: 250,
+      isRetryableReconnectError: (error) => error === transientFailure,
+      waitForReconnectRetry: async (milliseconds) => { retryDelays.push(milliseconds); },
+      onEvent: (event) => events.push(event),
+      onError: (error) => errors.push(error),
+      createHeartbeatLoop: (options) => new FakeHeartbeatLoop(options),
+    });
+    controller.start(createTarget());
+
+    await controller.suspend('visibility_hidden');
+    await controller.resume('visibility_visible');
+
+    expect(reconnectCalls).toBe(2);
+    expect(retryDelays).toEqual([250]);
+    expect(errors).toEqual([]);
+    expect(events.map((event) => event.type)).toEqual([
+      'suspended',
+      'reconnecting',
+      'resumed',
+    ]);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'active',
+      disconnectConfirmed: false,
+      heartbeatRunning: true,
+    });
+  });
+
+  test('abandons a reconnect retry after a replacement session starts', async () => {
+    const transientFailure = new Error('temporary reconnect outage');
+    const retryGate = deferred();
+    const reconnectSessions: string[] = [];
+    const controller = new OnlineSessionLifecycleController({
+      heartbeat: async () => undefined,
+      disconnect: async () => undefined,
+      reconnect: async (target) => {
+        reconnectSessions.push(target.sessionId);
+        throw transientFailure;
+      },
+      isDisconnectedError: () => false,
+      reconnectMaxAttempts: 3,
+      reconnectRetryDelayMs: 250,
+      isRetryableReconnectError: (error) => error === transientFailure,
+      waitForReconnectRetry: async () => retryGate.promise,
+      createHeartbeatLoop: (options) => new FakeHeartbeatLoop(options),
+    });
+    controller.start(createTarget('session-old'));
+    await controller.suspend('visibility_hidden');
+    const staleResume = controller.resume('visibility_visible');
+    await flushAsync();
+
+    controller.start(createTarget('session-new'));
+    retryGate.resolve();
+    await staleResume;
+
+    expect(reconnectSessions).toEqual(['session-old']);
+    expect(controller.getSnapshot()).toMatchObject({
+      sessionId: 'session-new',
+      phase: 'active',
+      heartbeatRunning: true,
+    });
+  });
+
+  test('reports one terminal error after transient reconnect retries are exhausted', async () => {
+    const transientFailure = new Error('reconnect service unavailable');
+    const errors: Array<{ phase: string; error: unknown }> = [];
+    const retryDelays: number[] = [];
+    let reconnectCalls = 0;
+    const controller = new OnlineSessionLifecycleController({
+      heartbeat: async () => undefined,
+      disconnect: async () => undefined,
+      reconnect: async () => {
+        reconnectCalls += 1;
+        throw transientFailure;
+      },
+      isDisconnectedError: () => false,
+      reconnectMaxAttempts: 3,
+      reconnectRetryDelayMs: 200,
+      isRetryableReconnectError: (error) => error === transientFailure,
+      waitForReconnectRetry: async (milliseconds) => { retryDelays.push(milliseconds); },
+      onError: (error) => errors.push(error),
+      createHeartbeatLoop: (options) => new FakeHeartbeatLoop(options),
+    });
+    controller.start(createTarget());
+
+    await controller.suspend('visibility_hidden');
+    await controller.resume('visibility_visible');
+
+    expect(reconnectCalls).toBe(3);
+    expect(retryDelays).toEqual([200, 400]);
+    expect(errors).toEqual([{
+      phase: 'reconnect',
+      source: 'visibility_visible',
+      target: expect.any(Object),
+      error: transientFailure,
+    }]);
+    expect(controller.getSnapshot()).toMatchObject({
+      phase: 'suspended',
+      disconnectConfirmed: true,
+      heartbeatRunning: false,
+    });
+  });
+
   test('lets a queued pagehide retry a failed visibility disconnect', async () => {
     let disconnectCalls = 0;
     const errors: Array<{ phase: string; error: unknown }> = [];
@@ -256,11 +375,20 @@ describe('OnlineSessionLifecycleController', () => {
     const failure = new Error('reconnect unavailable');
     const events: OnlineSessionLifecycleEvent[] = [];
     const errors: Array<{ phase: string; error: unknown }> = [];
+    let reconnectCalls = 0;
+    let retryWaits = 0;
     const controller = new OnlineSessionLifecycleController({
       heartbeat: async () => undefined,
       disconnect: async () => undefined,
-      reconnect: async () => { throw failure; },
+      reconnect: async () => {
+        reconnectCalls += 1;
+        throw failure;
+      },
       isDisconnectedError: () => false,
+      reconnectMaxAttempts: 3,
+      reconnectRetryDelayMs: 250,
+      isRetryableReconnectError: () => false,
+      waitForReconnectRetry: async () => { retryWaits += 1; },
       onEvent: (event) => events.push(event),
       onError: (error) => errors.push(error),
       createHeartbeatLoop: (options) => new FakeHeartbeatLoop(options),
@@ -270,6 +398,8 @@ describe('OnlineSessionLifecycleController', () => {
     await controller.resume('visibility_visible');
 
     expect(events.map((event) => event.type)).toEqual(['suspended', 'reconnecting']);
+    expect(reconnectCalls).toBe(1);
+    expect(retryWaits).toBe(0);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({ phase: 'reconnect', error: failure });
     expect(controller.getSnapshot()).toMatchObject({

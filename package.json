@@ -41,6 +41,7 @@
     "theme:validate": "npm run theme:validate --workspace @gravity-well/game-web",
     "theme:contrast-check": "npm run theme:contrast-check --workspace @gravity-well/game-web",
     "stage:validate": "npm run stage:validate --workspace @gravity-well/game-web",
+    "stage:model-validate": "npm run stage:model-validate --workspace @gravity-well/game-web",
     "balance:patch-notes": "npm run balance:patch-notes --workspace @gravity-well/game-web",
     "character:qa": "npm run character:qa --workspace @gravity-well/game-web",
     "verify": "npm run verify --workspace @gravity-well/game-web",

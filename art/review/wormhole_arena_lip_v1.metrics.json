@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "gw.blender-stage-source-metrics.v1",
+  "assetId": "wormhole_arena_lip_v1",
+  "blenderVersion": "2.92.0",
+  "sourceScript": "art/source/blender/wormhole_arena_lip_v1.py",
+  "sourceBlend": "art/source/blender/wormhole_arena_lip_v1.blend",
+  "runtimeGlb": "apps/game-web/public/assets/stages/wormhole/wormhole-arena-lip-v1.glb",
+  "reviewPreview": "art/review/wormhole_arena_lip_v1.png",
+  "coordinateContract": {
+    "blenderPlane": "XZ",
+    "blenderDepth": "+Y",
+    "runtimePlane": "XY",
+    "runtimeDepth": "-Z",
+    "arenaRadius": 72
+  },
+  "metrics": {
+    "objects": 6,
+    "materials": 2,
+    "sourceVertices": 888,
+    "sourceTriangles": 1752,
+    "vertices": 1528,
+    "triangles": 1752,
+    "glbBytes": 52088,
+    "glbSha256": "5259fc51768a1ff5e1782c8cd0781496a591ede11dfd58727d91fa24c7f8aabc"
+  },
+  "budgets": {
+    "vertices": 7000,
+    "triangles": 6000,
+    "glbBytes": 196608
+  }
+}

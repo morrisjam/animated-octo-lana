@@ -5,6 +5,17 @@ import type { AssetManifest } from './types';
 export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
   models: [
     {
+      id: 'wormhole_arena_lip_v1',
+      src: '/assets/stages/wormhole/wormhole-arena-lip-v1.glb',
+      contentTypes: ['model/gltf-binary'],
+      readiness: 'prototype',
+      budget: {
+        estimatedBytes: 56 * 1024,
+        estimatedTriangles: 1_800,
+        estimatedVertices: 1_600,
+      },
+    },
+    {
       id: 'fighter_placeholder_model',
       src: 'data:application/octet-stream;base64,AA==',
       budget: {

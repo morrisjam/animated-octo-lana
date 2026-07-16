@@ -216,6 +216,7 @@ import {
 import { buildAssetBudgetReport, DEFAULT_ASSET_BUDGET_LIMITS } from './view/assets/budget';
 import { DEFAULT_ASSET_MANIFEST } from './view/assets/defaultManifest';
 import { preloadAssetManifest } from './view/assets/loader';
+import { loadStageModelAssets } from './view/stageModelRuntime';
 import type { OnlineDiagnosticsUpdate, OnlineDevSectionId } from './view/onlineDevMenu';
 import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay';
 import {
@@ -374,6 +375,7 @@ const voiceCalloutSystem = createVoiceCalloutSystem({
   },
 });
 const sceneContext = createScene(canvas, {
+  stageModelEntries: DEFAULT_ASSET_MANIFEST.models,
   onCombatAudioCue: (event, cue) => {
     audioSystem.emit({
       type: toCombatAudioEventType(event.type),
@@ -3088,20 +3090,27 @@ applyGameplayAccessGate();
 applyArcadeHistoryView();
 document.documentElement.dataset.assetPreloadState = 'loading';
 document.documentElement.dataset.assetPreloadBytes = '0';
+document.documentElement.dataset.stageModelState = 'loading';
+document.documentElement.dataset.stageModelLoadedIds = '';
 void preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
   onProgress: (progress) => {
     if (runtimeConfig.features.debugToolsEnabled && progress.loaded === progress.total) {
       console.info(`[assets] preloaded ${progress.loaded}/${progress.total} manifest entries`);
     }
   },
-}).then((result) => {
+}).then(async (result) => {
+  const stageModelResult = await loadStageModelAssets(sceneContext.stageBackgroundModel);
+  selectedStageAtmosphereId = applyStageAtmospherePreset(sceneContext, selectedStageAtmosphereId);
   assetPreloadBytesLoaded = result.entries.reduce((total, entry) => total + entry.bytes, 0);
   document.documentElement.dataset.assetPreloadBytes = String(assetPreloadBytesLoaded);
+  document.documentElement.dataset.stageModelState = 'ready';
+  document.documentElement.dataset.stageModelLoadedIds = stageModelResult.loadedIds.join(',');
   document.documentElement.dataset.assetPreloadState = 'ready';
   assetGameplayGate = { allowed: true, message: null };
   applyGameplayAccessGate();
 }).catch((error) => {
   document.documentElement.dataset.assetPreloadState = 'failed';
+  document.documentElement.dataset.stageModelState = 'failed';
   assetGameplayGate = {
     allowed: false,
     message: 'Required game assets failed validation. Refresh to retry. [ASSET_PRELOAD_FAILED]',

@@ -14,6 +14,7 @@ describe('stage atmosphere registry', () => {
     expect(STAGE_ATMOSPHERE_IDS.includes('ion_storm_v1')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_depths_v1')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_depths_v2')).toBe(true);
+    expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_rim_v3')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes(ONLINE_ALPHA_STAGE_ATMOSPHERE_ID)).toBe(true);
     expect(resolveStageAtmosphere(undefined).id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
     expect(resolveStageAtmosphere('').id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
@@ -59,14 +60,17 @@ describe('stage atmosphere registry', () => {
     }
   });
 
-  test('keeps prior wormhole presets compatible while the alpha preset strengthens the arena lip', () => {
+  test('keeps prior wormhole presets as rollback options while the alpha preset uses the authored lip', () => {
     expect(resolveStageAtmosphere('wormhole_depths_v1').tokens.arenaMouthOpacity).toBe(0);
-    const previousPreset = resolveStageAtmosphere('wormhole_depths_v2');
+    const previousPreset = resolveStageAtmosphere('wormhole_rim_v3');
     const alphaPreset = resolveStageAtmosphere(ONLINE_ALPHA_STAGE_ATMOSPHERE_ID);
-    expect(alphaPreset.id).toBe('wormhole_rim_v3');
+    expect(alphaPreset.id).toBe('wormhole_authored_v4');
+    expect(previousPreset.tokens.backgroundModelId).toBeNull();
+    expect(alphaPreset.tokens.backgroundModelId).toBe('wormhole_arena_lip_v1');
+    expect(alphaPreset.tokens.backgroundModelOpacity).toBeGreaterThan(0);
     expect(alphaPreset.tokens.arenaMouthOpacity).toBeGreaterThan(0);
-    expect(alphaPreset.tokens.cameraPitchDegrees).toBeGreaterThan(previousPreset.tokens.cameraPitchDegrees);
-    expect(alphaPreset.tokens.arenaRimOpacity).toBeGreaterThan(previousPreset.tokens.arenaRimOpacity);
+    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(previousPreset.tokens.cameraPitchDegrees);
+    expect(alphaPreset.tokens.arenaRimOpacity).toBeLessThan(previousPreset.tokens.arenaRimOpacity);
     expect(alphaPreset.tokens.arenaMouthOpacity).toBeLessThan(previousPreset.tokens.arenaMouthOpacity);
     expect(alphaPreset.tokens.backgroundEffectId).toBe('wormhole_v1');
     expect(alphaPreset.tokens.backgroundEffectCoreOpacity).toBeLessThan(

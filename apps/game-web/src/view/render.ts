@@ -21,6 +21,7 @@ import {
   resolveWormholeLayerDepth,
   resolveWormholeParticleDepth,
 } from './stagePresentation';
+import { disposeStageModelRuntime } from './stageModelRuntime';
 
 const LIVE_PROJECTILE_IDS = new Set<number>();
 
@@ -439,9 +440,7 @@ export function cleanupRender(context: SceneContext): void {
   context.stageBackgroundImage.geometry.dispose();
   (context.stageBackgroundImage.material as THREE.Material).dispose();
 
-  context.scene.remove(context.stageBackgroundModel);
-  context.stageBackgroundModel.geometry.dispose();
-  (context.stageBackgroundModel.material as THREE.Material).dispose();
+  disposeStageModelRuntime(context.stageBackgroundModel);
 
   context.scene.remove(context.wormholeBackdrop.group);
   context.wormholeBackdrop.core.geometry.dispose();

@@ -157,6 +157,8 @@ Use Blender for:
 
 Prefer a checked-in headless export script over a manual-only sequence. Pin the Blender version, scene units, camera, frame list, colour management, transparent background, output dimensions, and naming convention; run exports with `blender --background --python <script>`. Treat generated files as candidates until the presentation-manifest MIME, decoded-dimension, frame-bound, anchor, readiness, and memory-budget checks pass. Blender access improves repeatability and visual control, but it never becomes a simulation or rollback dependency.
 
+The first implemented Blender lane is `art/source/blender/wormhole_arena_lip_v1.py`. It deterministically writes a review `.blend`, PNG, metrics JSON, and embedded runtime GLB. The game uses a constrained static GLB parser rather than shipping Blender or a general-purpose model loader; `stage:model-validate` verifies the runtime file against its generated metrics and manifest ceilings before every production build.
+
 ### Aseprite or equivalent
 
 Use Aseprite for:
@@ -463,6 +465,10 @@ This does not need to live in the shipped content folder, but it must live somew
   - `apps/game-web/src/view/vfx`
 - asset manifest loading:
   - `apps/game-web/src/view/assets`
+- authored runtime models:
+  - `apps/game-web/public/assets/stages`
+- reproducible Blender sources:
+  - `art/source/blender`
 
 ### Runtime readiness labels
 
@@ -478,6 +484,8 @@ Character-package QA requires every presentation asset, HUD portrait, and kit-re
 
 - budget checks:
   - `apps/game-web/scripts/asset-budget-check.ts`
+- authored stage-model integrity:
+  - `apps/game-web/scripts/stage-model-validate.ts`
 - docs:
   - `docs/ASSET_BUDGET_VALIDATION.md`
   - `docs/ASSET_MANIFEST_LOADER.md`

@@ -32,6 +32,7 @@ Status: complete (`S5.1` through `S5.4` complete)
 - Pure direction-resolution tests cover inward, outward, lateral, repeated, and match-over transitions.
 
 ## Follow-on visual work
-- Keep the versioned in-engine wormhole presentations as rollback references while prototyping an authored Blender stage source.
-- Export only web-appropriate meshes, baked flow/emissive textures, and VFX sprite sheets; retain the existing local production visual smoke as the integration gate.
+- The first authored Blender stage source is delivered as the `wormhole_authored_v4` prototype while V1-V3 remain selectable rollback references.
+- Its embedded GLB, constrained static runtime, source-hash validator, strict manifest budget, and production visual-smoke visibility assertions are implemented.
+- Continue exporting only web-appropriate meshes, baked flow/emissive textures, and VFX sprite sheets; retain the existing local production visual smoke as the integration gate.
 - Treat Blender as a reproducible source-asset workshop, not a replacement game runtime, and keep content work independent from simulation and network correctness.

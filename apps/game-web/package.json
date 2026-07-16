@@ -9,6 +9,7 @@
     "theme:validate": "tsx scripts/menu-theme-validate.ts",
     "theme:contrast-check": "tsx scripts/menu-theme-contrast-check.ts",
     "stage:validate": "tsx scripts/stage-atmosphere-validate.ts",
+    "stage:model-validate": "tsx scripts/stage-model-validate.ts",
     "balance:patch-notes": "tsx scripts/balance-patch-notes.ts",
     "character:new": "tsx scripts/character-package-new.ts",
     "character:validate": "tsx scripts/character-package-validate.ts",
@@ -23,8 +24,8 @@
     "asset:budget-check": "tsx scripts/asset-budget-check.ts",
     "bundle:budget": "tsx scripts/production-bundle-budget.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "build": "npm run typecheck && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run asset:budget-check && npm run matchup:smoke && vite build && tsx scripts/production-bundle-budget.ts --profile production",
-    "build:steam": "npm run typecheck && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run asset:budget-check && npm run matchup:smoke && vite build --mode steam && tsx scripts/production-bundle-budget.ts --profile steam",
+    "build": "npm run typecheck && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run stage:model-validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run asset:budget-check && npm run matchup:smoke && vite build && tsx scripts/production-bundle-budget.ts --profile production",
+    "build:steam": "npm run typecheck && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run stage:model-validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run asset:budget-check && npm run matchup:smoke && vite build --mode steam && tsx scripts/production-bundle-budget.ts --profile steam",
     "package:steam": "tsx scripts/steam-package.ts --dist dist --out-dir steam-artifact",
     "smoke:steam": "tsx scripts/steam-smoke.ts --packaged-dir steam-artifact",
     "preview": "vite preview",
@@ -38,7 +39,7 @@
     "soak:webrtc-browser": "tsx scripts/webrtc-browser-smoke.ts --soak",
     "smoke:visual-alpha": "tsx scripts/visual-alpha-smoke.ts",
     "matchup:smoke": "tsx scripts/matchup-regression-smoke.ts",
-    "verify": "npm run test && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run replay:check && npm run replay:size-check && npm run matchup:smoke && npm run build"
+    "verify": "npm run test && npm run balance:validate && npm run theme:validate && npm run theme:contrast-check && npm run stage:validate && npm run stage:model-validate && npm run balance:patch-notes && npm run character:validate && npm run character:qa && npm run character:report && npm run replay:check && npm run replay:size-check && npm run matchup:smoke && npm run build"
   },
   "dependencies": {
     "three": "0.161.0"

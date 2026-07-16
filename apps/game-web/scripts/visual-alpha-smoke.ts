@@ -42,7 +42,9 @@ const LOOPBACK_HOST = '127.0.0.1';
 const VIEWPORT = { width: 1280, height: 720 } as const;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const RANDOM_SEED = 0x4757_2026;
-const REPORT_SCHEMA_VERSION = 'gw.visual-alpha-smoke.v9';
+const REPORT_SCHEMA_VERSION = 'gw.visual-alpha-smoke.v10';
+const EXPECTED_ALPHA_STAGE_ID = 'wormhole_authored_v4';
+const EXPECTED_STAGE_MODEL_ID = 'wormhole_arena_lip_v1';
 const ALPHA_ACTION_MARKER_FRAMES = [24, 40, 56, 76, 95, 120, 140, 160, 161, 179] as const;
 const REQUIRED_ALPHA_ACTION_STARTS = [
   { frame: 40, playerId: 'P1', action: 'special' },
@@ -113,6 +115,11 @@ interface AssetPreloadReadinessSummary {
   context: 'diagnostics_guard' | 'home' | 'balance_return';
   state: 'ready';
   bytesLoaded: number;
+  stageModelState: 'ready';
+  stageModelLoadedIds: string[];
+  selectedStageId: typeof EXPECTED_ALPHA_STAGE_ID;
+  requestedStageModelId: typeof EXPECTED_STAGE_MODEL_ID;
+  visibleStageModelId: typeof EXPECTED_STAGE_MODEL_ID;
 }
 
 interface LoopbackApiStubSummary {
@@ -434,6 +441,14 @@ async function waitForAssetPreload(
   const result = await page.evaluate(() => ({
     state: document.documentElement.dataset.assetPreloadState ?? 'missing',
     bytesLoaded: Number(document.documentElement.dataset.assetPreloadBytes ?? Number.NaN),
+    stageModelState: document.documentElement.dataset.stageModelState ?? 'missing',
+    stageModelLoadedIds: (document.documentElement.dataset.stageModelLoadedIds ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean),
+    selectedStageId: document.querySelector<HTMLCanvasElement>('canvas#game')?.dataset.stageAtmosphereId ?? 'missing',
+    requestedStageModelId: document.querySelector<HTMLCanvasElement>('canvas#game')?.dataset.stageModelId ?? 'missing',
+    visibleStageModelId: document.querySelector<HTMLCanvasElement>('canvas#game')?.dataset.stageModelVisibleId ?? 'missing',
   }));
   if (result.state !== 'ready') {
     throw new Error(`Asset preload reached ${result.state} before ${context}.`);
@@ -441,10 +456,33 @@ async function waitForAssetPreload(
   if (!Number.isSafeInteger(result.bytesLoaded) || result.bytesLoaded <= 0) {
     throw new Error(`Asset preload reported invalid byte evidence before ${context}: ${result.bytesLoaded}.`);
   }
+  if (result.stageModelState !== 'ready') {
+    throw new Error(`Stage model runtime reached ${result.stageModelState} before ${context}.`);
+  }
+  if (!result.stageModelLoadedIds.includes(EXPECTED_STAGE_MODEL_ID)) {
+    throw new Error(`Stage model runtime did not load ${EXPECTED_STAGE_MODEL_ID} before ${context}.`);
+  }
+  if (result.selectedStageId !== EXPECTED_ALPHA_STAGE_ID) {
+    throw new Error(`Selected stage ${result.selectedStageId} does not match ${EXPECTED_ALPHA_STAGE_ID} before ${context}.`);
+  }
+  if (
+    result.requestedStageModelId !== EXPECTED_STAGE_MODEL_ID
+    || result.visibleStageModelId !== EXPECTED_STAGE_MODEL_ID
+  ) {
+    throw new Error(
+      `Authored stage model was not visible before ${context}: `
+        + `requested=${result.requestedStageModelId}, visible=${result.visibleStageModelId}.`,
+    );
+  }
   return {
     context,
     state: 'ready',
     bytesLoaded: result.bytesLoaded,
+    stageModelState: 'ready',
+    stageModelLoadedIds: result.stageModelLoadedIds,
+    selectedStageId: EXPECTED_ALPHA_STAGE_ID,
+    requestedStageModelId: EXPECTED_STAGE_MODEL_ID,
+    visibleStageModelId: EXPECTED_STAGE_MODEL_ID,
   };
 }
 

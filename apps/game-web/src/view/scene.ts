@@ -16,6 +16,12 @@ import {
   createArenaGuideSegmentPoints,
   MAX_STAGE_CAMERA_PITCH_DEGREES,
 } from './stagePresentation';
+import type { AssetFileEntry } from './assets/types';
+import {
+  applyStageModelSelection,
+  createStageModelRuntime,
+  type StageModelRuntime,
+} from './stageModelRuntime';
 
 const MAX_RENDER_PIXEL_RATIO = 1.25;
 
@@ -64,13 +70,14 @@ export interface SceneContext {
   arenaBoundary: THREE.LineLoop;
   stars: THREE.Points;
   stageBackgroundImage: THREE.Mesh;
-  stageBackgroundModel: THREE.Mesh;
+  stageBackgroundModel: StageModelRuntime;
   wormholeBackdrop: WormholeBackdrop;
   stageAtmosphereId: string;
 }
 
 export interface SceneOptions {
   onCombatAudioCue?: (event: CombatVfxEvent, cue: VfxSoundCuePreset) => void;
+  stageModelEntries?: AssetFileEntry[];
 }
 
 function getClampedPixelRatio(): number {
@@ -406,24 +413,6 @@ function addStageBackgroundImage(scene: THREE.Scene): THREE.Mesh {
   return mesh;
 }
 
-function addStageBackgroundModel(scene: THREE.Scene): THREE.Mesh {
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(64, 40, 20),
-    new THREE.MeshStandardMaterial({
-      color: '#9fb7ff',
-      transparent: true,
-      opacity: 0.5,
-      roughness: 0.75,
-      metalness: 0.05,
-    }),
-  );
-  mesh.position.set(0, -6, -116);
-  mesh.visible = false;
-  mesh.userData.modelId = null;
-  scene.add(mesh);
-  return mesh;
-}
-
 function createWormholeRing(index: number): THREE.Mesh {
   const material = new THREE.MeshBasicMaterial({
     color: index % 2 === 0 ? '#63d8ff' : '#af5cff',
@@ -642,7 +631,7 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
   } = addArena(scene);
   const stars = addStars(scene);
   const stageBackgroundImage = addStageBackgroundImage(scene);
-  const stageBackgroundModel = addStageBackgroundModel(scene);
+  const stageBackgroundModel = createStageModelRuntime(scene, options?.stageModelEntries ?? []);
   const wormholeBackdrop = addWormholeBackdrop(scene);
   const { playerVisuals, playerMeshes } = createPlayerVisuals(scene);
   const playerIndicators = createPlayerIndicators(scene);
@@ -709,6 +698,8 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   const tokens = preset.tokens;
 
   context.stageAtmosphereId = preset.id;
+  context.renderer.domElement.dataset.stageAtmosphereId = preset.id;
+  context.renderer.domElement.dataset.stageModelId = tokens.backgroundModelId ?? '';
   context.scene.background = new THREE.Color(tokens.sceneBackgroundColor);
   context.scene.fog = new THREE.Fog(tokens.fogColor, tokens.fogNear, tokens.fogFar);
 
@@ -797,11 +788,15 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   context.stageBackgroundImage.visible = Boolean(tokens.backgroundImageTextureId);
   context.stageBackgroundImage.userData.textureId = tokens.backgroundImageTextureId ?? null;
 
-  const modelMaterial = context.stageBackgroundModel.material as THREE.MeshStandardMaterial;
-  modelMaterial.color.set(tokens.backgroundModelTint);
-  modelMaterial.opacity = clampOpacity(tokens.backgroundModelOpacity);
-  context.stageBackgroundModel.visible = Boolean(tokens.backgroundModelId);
-  context.stageBackgroundModel.userData.modelId = tokens.backgroundModelId ?? null;
+  applyStageModelSelection(
+    context.stageBackgroundModel,
+    tokens.backgroundModelId,
+    tokens.backgroundModelTint,
+    tokens.backgroundModelOpacity,
+  );
+  context.renderer.domElement.dataset.stageModelVisibleId = typeof context.stageBackgroundModel.root.userData.visibleModelId === 'string'
+    ? context.stageBackgroundModel.root.userData.visibleModelId
+    : '';
 
   const wormholeVisible = tokens.backgroundEffectId === 'wormhole_v1';
   context.wormholeBackdrop.group.visible = wormholeVisible;

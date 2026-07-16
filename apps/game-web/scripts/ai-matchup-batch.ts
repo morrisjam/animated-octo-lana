@@ -1638,13 +1638,27 @@ function getPositionalArgs(argv: string[]): string[] {
 
 function parseDifficultyIds(raw: string | null): AiDifficultyId[] {
   if (!raw || raw.toLowerCase() === 'all') {
-    return [...AI_DIFFICULTY_ORDER];
+    const difficultyIds = [...AI_DIFFICULTY_ORDER];
+    if (difficultyIds.length === 0) {
+      throw new Error('No AI difficulty profiles are registered for the batch matrix.');
+    }
+    return difficultyIds;
   }
-  const parsed = raw
+  const requestedIds = raw
     .split(',')
-    .map((value) => value.trim())
-    .filter((value): value is AiDifficultyId => AI_DIFFICULTY_ORDER.includes(value as AiDifficultyId));
-  return parsed.length > 0 ? [...new Set(parsed)] : ['cadet'];
+    .map((value) => value.trim());
+  if (requestedIds.some((value) => value.length === 0)) {
+    throw new Error('--difficulty must select at least one AI difficulty id.');
+  }
+  const unknownIds = requestedIds.filter(
+    (value) => !AI_DIFFICULTY_ORDER.includes(value as AiDifficultyId),
+  );
+  if (unknownIds.length > 0) {
+    throw new Error(
+      `Unknown --difficulty id(s): ${unknownIds.map((value) => `"${value}"`).join(', ')}. Use ${AI_DIFFICULTY_ORDER.join(', ')}, or all.`,
+    );
+  }
+  return [...new Set(requestedIds as AiDifficultyId[])];
 }
 
 function parseRecoveryPolicyId(raw: string | null): AiRecoveryPolicyId {
@@ -1687,14 +1701,19 @@ function parseCharacterIds(raw: string | null): CharacterId[] {
   if (!raw || raw.toLowerCase() === 'all') {
     return [...CHARACTER_IDS];
   }
-  const ids = raw
+  const requestedIds = raw
     .split(',')
-    .map((value) => value.trim())
-    .filter((value): value is CharacterId => isCharacterId(value));
-  if (ids.length === 0) {
-    throw new Error(`No registered character ids found in --characters ${raw}.`);
+    .map((value) => value.trim());
+  if (requestedIds.some((value) => value.length === 0)) {
+    throw new Error('--characters must select at least one registered character id.');
   }
-  return [...new Set(ids)];
+  const unknownIds = requestedIds.filter((value) => !isCharacterId(value));
+  if (unknownIds.length > 0) {
+    throw new Error(
+      `Unknown --characters id(s): ${unknownIds.map((value) => `"${value}"`).join(', ')}. Use ${CHARACTER_IDS.join(', ')}, or all.`,
+    );
+  }
+  return [...new Set(requestedIds as CharacterId[])];
 }
 
 function buildPairings(
@@ -1702,8 +1721,21 @@ function buildPairings(
   p2Raw: string | null,
   characterIds: readonly CharacterId[],
 ): Array<{ p1: CharacterId; p2: CharacterId }> {
-  if (p1Raw && p2Raw && isCharacterId(p1Raw) && isCharacterId(p2Raw)) {
+  for (const [flag, characterId] of [['--p1', p1Raw], ['--p2', p2Raw]] as const) {
+    if (characterId && !isCharacterId(characterId)) {
+      throw new Error(
+        `Unknown ${flag} character id "${characterId}". Use ${CHARACTER_IDS.join(', ')}.`,
+      );
+    }
+  }
+  if ((p1Raw && !p2Raw) || (!p1Raw && p2Raw)) {
+    throw new Error('--p1 and --p2 must be provided together.');
+  }
+  if (p1Raw && p2Raw) {
     return [{ p1: p1Raw, p2: p2Raw }];
+  }
+  if (characterIds.length === 0) {
+    throw new Error('No registered characters are available for the AI batch roster.');
   }
 
   const pairings: Array<{ p1: CharacterId; p2: CharacterId }> = [];
@@ -1714,6 +1746,11 @@ function buildPairings(
       }
       pairings.push({ p1, p2 });
     }
+  }
+  if (pairings.length === 0) {
+    throw new Error(
+      'AI batch selection generated zero directed pairings. Select at least two characters with --characters, or provide both --p1 and --p2.',
+    );
   }
   return pairings;
 }

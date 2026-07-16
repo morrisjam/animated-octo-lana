@@ -18,6 +18,17 @@ import {
   type PresentationFrameTimingStatistics,
 } from '../src/build/presentationFrameTiming';
 import {
+  LOCAL_RANKED_ROOT_SMOKE_BUILD_SCHEMA_VERSION,
+  parseLocalRankedRootSmokeBuildAttestation,
+} from '../src/build/localRankedRootSmokeBuild';
+import {
+  createVisualAlphaLoopbackApiStub,
+  resolveVisualAlphaLoopbackApiStubConfig,
+  VISUAL_ALPHA_STUB_ACCOUNT_ID,
+  type VisualAlphaLoopbackApiStubConfig,
+  type VisualAlphaLoopbackApiStubRequestRecord,
+} from '../src/build/visualAlphaLoopbackApiStub';
+import {
   traceReplayActionStarts,
   validateReplayPayload,
   type ReplayActionStartTrace,
@@ -31,7 +42,7 @@ const LOOPBACK_HOST = '127.0.0.1';
 const VIEWPORT = { width: 1280, height: 720 } as const;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const RANDOM_SEED = 0x4757_2026;
-const REPORT_SCHEMA_VERSION = 'gw.visual-alpha-smoke.v8';
+const REPORT_SCHEMA_VERSION = 'gw.visual-alpha-smoke.v9';
 const ALPHA_ACTION_MARKER_FRAMES = [24, 40, 56, 76, 95, 120, 140, 160, 161, 179] as const;
 const REQUIRED_ALPHA_ACTION_STARTS = [
   { frame: 40, playerId: 'P1', action: 'special' },
@@ -48,6 +59,7 @@ const artifactRoot = path.resolve(appRoot, 'build-artifacts/visual-alpha-smoke')
 const reportPath = path.resolve(artifactRoot, 'report.json');
 const smokeFixturePath = path.resolve(replayRoot, 'smoke.replay.json');
 const alphaFixturePath = path.resolve(replayRoot, 'alpha-visual.replay.json');
+const localRankedRootSmokeBuildPath = path.resolve(distRoot, 'local-ranked-root-smoke-build.json');
 
 interface FixtureSummary {
   fileName: string;
@@ -95,6 +107,14 @@ interface DiagnosticsQueryGuardSummary {
   overlayElements: number;
   launcherElements: number;
   blocked: boolean;
+}
+
+interface LoopbackApiStubSummary {
+  attestationSchemaVersion: typeof LOCAL_RANKED_ROOT_SMOKE_BUILD_SCHEMA_VERSION;
+  buildId: string;
+  apiBaseUrl: string;
+  accountId: typeof VISUAL_ALPHA_STUB_ACCOUNT_ID;
+  requests: VisualAlphaLoopbackApiStubRequestRecord[];
 }
 
 interface LocalRoundReviewSummary {
@@ -148,6 +168,7 @@ interface VisualSmokeReport {
   presentationFrameTiming: PresentationFrameTimingSummary | null;
   alphaActionCoverage: ReplayActionCoverageSummary | null;
   diagnosticsQueryGuard: DiagnosticsQueryGuardSummary | null;
+  loopbackApiStub: LoopbackApiStubSummary | null;
   localRoundReview: LocalRoundReviewSummary | null;
   balanceSparring: BalanceSparringSummary | null;
   screenshots: ScreenshotSummary[];
@@ -203,6 +224,23 @@ function parseTimeout(): number {
     throw new Error('VISUAL_ALPHA_SMOKE_TIMEOUT_MS must be between 1000 and 120000.');
   }
   return Math.floor(timeout);
+}
+
+async function readLoopbackApiStubConfig(): Promise<VisualAlphaLoopbackApiStubConfig | null> {
+  if (!existsSync(localRankedRootSmokeBuildPath)) {
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(localRankedRootSmokeBuildPath, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Local ranked-root smoke build attestation is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return resolveVisualAlphaLoopbackApiStubConfig(
+    parseLocalRankedRootSmokeBuildAttestation(raw),
+  );
 }
 
 function localBrowserCandidates(): string[] {
@@ -1035,15 +1073,43 @@ async function verifyReplayReentryReview(
 }
 
 function assertNoBrowserFailures(report: VisualSmokeReport): void {
+  const stubFailures = (report.loopbackApiStub?.requests ?? [])
+    .filter((request) => request.status >= 400)
+    .map((request) => (
+      `loopback API stub: ${request.method} ${request.endpoint} returned HTTP ${request.status}`
+    ));
   const consoleErrors = report.consoleMessages.filter((message) => message.startsWith('[error]'));
   const failures = [
     ...report.pageErrors.map((message) => `pageerror: ${message}`),
     ...consoleErrors,
     ...report.failedSameOriginRequests.map((message) => `request: ${message}`),
     ...report.blockedExternalRequests.map((message) => `blocked external request: ${message}`),
+    ...stubFailures,
   ];
   if (failures.length > 0) {
     throw new Error(failures.join('\n'));
+  }
+}
+
+function assertLoopbackApiStubCoverage(report: VisualSmokeReport): void {
+  if (!report.loopbackApiStub) {
+    return;
+  }
+  const requiredRequests = [
+    { method: 'POST', endpoint: '/accounts' },
+    { method: 'GET', endpoint: '/profile' },
+  ] as const;
+  const missing = requiredRequests.filter((required) => !report.loopbackApiStub?.requests.some((request) => (
+    request.method === required.method
+    && request.endpoint === required.endpoint
+    && request.status < 400
+  )));
+  if (missing.length > 0) {
+    throw new Error(
+      `Online-enabled production build omitted expected loopback bootstrap requests: ${missing
+        .map((request) => `${request.method} ${request.endpoint}`)
+        .join(', ')}.`,
+    );
   }
 }
 
@@ -1063,6 +1129,7 @@ async function run(): Promise<void> {
     presentationFrameTiming: null,
     alphaActionCoverage: null,
     diagnosticsQueryGuard: null,
+    loopbackApiStub: null,
     localRoundReview: null,
     balanceSparring: null,
     screenshots: [],
@@ -1097,6 +1164,7 @@ async function run(): Promise<void> {
       throw new Error(`Source alpha visual fixture is missing at ${alphaFixturePath}.`);
     }
     report.alphaActionCoverage = await verifyAlphaActionCoverage(alphaFixturePath);
+    const loopbackApiStubConfig = await readLoopbackApiStubConfig();
 
     const browserExecutable = resolveBrowserExecutable();
     report.browserExecutable = browserExecutable;
@@ -1147,6 +1215,18 @@ async function run(): Promise<void> {
     }, RANDOM_SEED);
 
     const allowedOrigin = new URL(origin).origin;
+    const loopbackApiStub = loopbackApiStubConfig
+      ? createVisualAlphaLoopbackApiStub(loopbackApiStubConfig, allowedOrigin)
+      : null;
+    if (loopbackApiStubConfig && loopbackApiStub) {
+      report.loopbackApiStub = {
+        attestationSchemaVersion: LOCAL_RANKED_ROOT_SMOKE_BUILD_SCHEMA_VERSION,
+        buildId: loopbackApiStubConfig.buildId,
+        apiBaseUrl: loopbackApiStubConfig.apiBaseUrl,
+        accountId: VISUAL_ALPHA_STUB_ACCOUNT_ID,
+        requests: loopbackApiStub.requests,
+      };
+    }
     await page.route('**/*', async (route) => {
       const requestUrl = route.request().url();
       let parsed: URL;
@@ -1158,6 +1238,16 @@ async function run(): Promise<void> {
         return;
       }
       if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin !== allowedOrigin) {
+        const stubResponse = loopbackApiStub?.resolve({
+          method: route.request().method(),
+          url: requestUrl,
+          headers: route.request().headers(),
+          body: route.request().postData(),
+        });
+        if (stubResponse) {
+          await route.fulfill(stubResponse);
+          return;
+        }
         report.blockedExternalRequests.push(requestUrl);
         await route.abort('blockedbyclient');
         return;
@@ -1284,6 +1374,7 @@ async function run(): Promise<void> {
     report.balanceSparring = await verifyBalanceSparring(page, report.screenshots, timeoutMs);
 
     await page.waitForLoadState('networkidle', { timeout: timeoutMs });
+    assertLoopbackApiStubCoverage(report);
     assertNoBrowserFailures(report);
     report.ok = true;
     await writeReport(report);

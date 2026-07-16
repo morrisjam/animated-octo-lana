@@ -166,6 +166,8 @@ jobs:
           PORT: "8787"
           NODE_ENV: test
           AUTH_SESSION_SECRET: ci-auth-session-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+          AUTH_RATE_LIMIT_SECRET: ci-auth-rate-limit-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+          AUTH_RATE_LIMIT_GUEST_SOURCE_MAX_ATTEMPTS: "40"
           MATCHMAKING_ACCESS_MODE: open
           MATCHMAKING_RECONNECT_GRACE_SECONDS: "20"
           MATCHMAKING_SNAPSHOT_INTERVAL_MS: "60000"

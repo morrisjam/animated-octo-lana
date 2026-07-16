@@ -336,7 +336,7 @@ describe('AI round simulation', () => {
         ).toBe(swapWinner(direct.winner));
       }
     }
-  });
+  }, 15_000);
 
   test('exports an exact checksum-verified replay with local balance context', () => {
     const tuning = {

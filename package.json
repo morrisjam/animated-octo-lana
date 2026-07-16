@@ -33,6 +33,7 @@
     "ai:alpha-flow-review": "npm run ai:alpha-flow-review --workspace @gravity-well/game-web",
     "ai:balance-gate": "npm run ai:balance-gate --workspace @gravity-well/game-web",
     "ai:alpha-readiness": "npm run ai:alpha-readiness --workspace @gravity-well/game-web",
+    "ai:alpha-readiness:report": "npm run ai:alpha-readiness:report --workspace @gravity-well/game-web",
     "alpha:local-gate": "npm run typecheck && npm run api:migrations:compat && npm run api:test && npm run verify && npm run alpha:visual-smoke && npm run rollback:soak && npm run ai:balance-gate && npm run ai:alpha-readiness",
     "character:new": "npm run character:new --workspace @gravity-well/game-web --",
     "balance:validate": "npm run balance:validate --workspace @gravity-well/game-web",

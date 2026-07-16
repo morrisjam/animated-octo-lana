@@ -336,8 +336,7 @@ jobs:
         run: npm run ai:balance-gate
 
       - name: Online alpha gameplay-flow report (enforced by Safe Rollout)
-        continue-on-error: true
-        run: npm run ai:alpha-readiness
+        run: npm run ai:alpha-readiness:report
 
       - name: Archive verification and balance evidence
         if: always()

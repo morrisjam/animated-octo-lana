@@ -19,6 +19,7 @@
     "ai:alpha-flow-review": "tsx scripts/ai-matchup-batch.ts --games 12 --max-round-seconds 90 --difficulty cadet,veteran --characters vanguard,duelist --thresholds content/balance/online-alpha-ai-thresholds.json --report-name local-flow-review --emit-review-replays",
     "ai:balance-gate": "tsx scripts/ai-matchup-batch.ts --games 12 --max-round-seconds 90 --difficulty veteran --characters vanguard,duelist --thresholds content/balance/ai-regression-thresholds.json --report-name ai-balance-regression-report",
     "ai:alpha-readiness": "tsx scripts/ai-matchup-batch.ts --games 12 --max-round-seconds 90 --difficulty cadet,veteran --characters vanguard,duelist --thresholds content/balance/online-alpha-ai-thresholds.json --report-name online-alpha-balance-readiness-report",
+    "ai:alpha-readiness:report": "npm run ai:alpha-readiness -- --advisory-gate",
     "asset:budget-check": "tsx scripts/asset-budget-check.ts",
     "bundle:budget": "tsx scripts/production-bundle-budget.ts",
     "typecheck": "tsc -p tsconfig.json",

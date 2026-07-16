@@ -110,6 +110,7 @@ interface CliOptions {
   reportName: string;
   outputDir: string;
   emitReviewReplays: boolean;
+  advisoryGate: boolean;
 }
 
 interface BatchBalanceRules {
@@ -1597,6 +1598,7 @@ const VALUE_CLI_FLAGS = new Set([
 const BOOLEAN_CLI_FLAGS = new Set([
   '--emit-review-replays',
   '--allow-multi-rule-comparison',
+  '--advisory-gate',
 ]);
 
 function assertKnownCliFlags(argv: string[]): void {
@@ -1751,6 +1753,7 @@ function parseArgs(argv: string[]): CliOptions {
     parseStringArg(argv, '--output-dir') ?? 'build-artifacts',
   );
   const emitReviewReplays = argv.includes('--emit-review-replays');
+  const advisoryGate = argv.includes('--advisory-gate');
 
   return {
     gamesPerPairing,
@@ -1770,6 +1773,7 @@ function parseArgs(argv: string[]): CliOptions {
     reportName,
     outputDir,
     emitReviewReplays,
+    advisoryGate,
   };
 }
 
@@ -3976,8 +3980,12 @@ function run(): void {
     for (const issue of gate.issues) {
       console.error(`[ai-batch] ${issue}`);
     }
-    if (!gate.pass) {
+    if (!gate.pass && !cli.advisoryGate) {
       process.exitCode = 1;
+    } else if (!gate.pass) {
+      console.warn(
+        '[ai-batch] advisory gate remains closed; exact-SHA Safe Rollout still enforces this report.',
+      );
     }
   }
 }

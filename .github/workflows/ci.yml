@@ -121,10 +121,14 @@ jobs:
 
       - name: Start local TURN relay for browser smokes
         run: |
-          docker run --detach --rm --name gravity-well-ci-coturn --network host \
+          docker run --detach --rm --name gravity-well-ci-coturn \
+            --publish 3478:3478/tcp \
+            --publish 3478:3478/udp \
+            --publish 49160-49179:49160-49179/udp \
             coturn/coturn:4.6.3 \
             -n \
             --log-file=stdout \
+            --verbose \
             --fingerprint \
             --use-auth-secret \
             --static-auth-secret=ci-local-coturn-shared-secret-0123456789abcdef \

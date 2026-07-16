@@ -205,6 +205,7 @@ export const AI_BEHAVIOR_TUNING_FIELDS: readonly AiBehaviorTuningField[] = [
   { key: 'postEventRetreatChanceOffset', section: 'Pursuit and spacing', label: 'Post-Event Retreat Chance Offset', step: 0.05, min: -1, max: 1 },
   { key: 'postRecoverySuperBoostChance', section: 'Pursuit and spacing', label: 'Recovery Escape Super Boost Chance', step: 0.05, min: 0, max: 1 },
   { key: 'reactionDelayScale', section: 'Commitment and defense', label: 'Reaction Delay Scale', step: 0.05, min: 0.25, max: 4 },
+  { key: 'postCommitmentDecisionScale', section: 'Commitment and defense', label: 'Post-Commitment Read Scale', step: 0.1, min: 0, max: 4 },
   { key: 'errorRateScale', section: 'Commitment and defense', label: 'Error Rate Scale', step: 0.05, min: 0, max: 4 },
   { key: 'riskAppetiteOffset', section: 'Commitment and defense', label: 'Risk Appetite Offset', step: 0.05, min: -0.8, max: 0.8 },
   { key: 'postRecoveryDefenseFrames', section: 'Commitment and defense', label: 'Post-Control Disadvantage Defense Frames', step: 1, min: 0, max: 120 },

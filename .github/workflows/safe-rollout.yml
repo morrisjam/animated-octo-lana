@@ -244,6 +244,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Enforce online alpha gameplay-flow gate for exact release
+        run: npm run ai:alpha-readiness
+
       - name: Prove rollback API against release schema locally
         env:
           ROLLBACK_COMPAT_CANDIDATE_SHA: ${{ inputs.release_sha }}

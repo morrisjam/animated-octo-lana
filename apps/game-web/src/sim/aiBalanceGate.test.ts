@@ -27,6 +27,8 @@ const thresholds: AiBalanceThresholds = {
   minimumLoopStageReachedRounds: 12,
   maximumCommitmentIssueRatio: 1,
   maximumChaseIssueRatio: 1,
+  maximumCommitmentBlockedRatio: 1,
+  maximumChaseBlockedRatio: 1,
   minimumNeutralResetsPerRound: 0,
   minimumResetConversionRatio: 0,
   minimumAverageNeutralWindowSeconds: 0,
@@ -439,6 +441,56 @@ describe('AI balance gate', () => {
     ]));
   });
 
+  test('rejects blocked Commitment and Chase ratios once reached-round evidence qualifies', () => {
+    const summary = createSummary('vanguard', 'duelist', 1, 0);
+    summary.flow.loopStages.commitment = {
+      rounds: 12,
+      waitingRounds: 0,
+      observedRounds: 10,
+      watchRounds: 0,
+      blockedRounds: 2,
+      waitingRatio: 0,
+      issueRatio: 0.1667,
+    };
+    summary.flow.loopStages.chase = {
+      rounds: 12,
+      waitingRounds: 0,
+      observedRounds: 8,
+      watchRounds: 0,
+      blockedRounds: 4,
+      waitingRatio: 0,
+      issueRatio: 0.3333,
+    };
+
+    const result = evaluateBalanceGate([summary], {
+      ...thresholds,
+      maximumCommitmentBlockedRatio: 0.12,
+      maximumChaseBlockedRatio: 0.25,
+    });
+
+    expect(result.pass).toBe(false);
+    expect(result.observed.pairings[0]?.loopStageBlocked).toEqual({
+      commitment: {
+        numerator: 2,
+        denominator: 12,
+        ratio: 0.1667,
+        minimumDenominator: 12,
+        qualified: true,
+      },
+      chase: {
+        numerator: 4,
+        denominator: 12,
+        ratio: 0.3333,
+        minimumDenominator: 12,
+        qualified: true,
+      },
+    });
+    expect(result.issues).toEqual(expect.arrayContaining([
+      'veteran/vanguard-vs-duelist blocked Commitment round ratio 0.167 (2/12; qualified minimum 12) exceeds 0.12.',
+      'veteran/vanguard-vs-duelist blocked Chase round ratio 0.333 (4/12; qualified minimum 12) exceeds 0.25.',
+    ]));
+  });
+
   test('reports sparse loop-stage issues without failing before the evidence minimum', () => {
     const summary = createSummary('vanguard', 'duelist', 1, 0);
     summary.flow.loopStages.chase = {
@@ -454,6 +506,7 @@ describe('AI balance gate', () => {
     const result = evaluateBalanceGate([summary], {
       ...thresholds,
       maximumChaseIssueRatio: 0.25,
+      maximumChaseBlockedRatio: 0.1,
     });
 
     expect(result.pass).toBe(true);
@@ -461,6 +514,13 @@ describe('AI balance gate', () => {
       numerator: 6,
       denominator: 6,
       ratio: 1,
+      minimumDenominator: 12,
+      qualified: false,
+    });
+    expect(result.observed.pairings[0]?.loopStageBlocked.chase).toEqual({
+      numerator: 1,
+      denominator: 6,
+      ratio: 0.1667,
       minimumDenominator: 12,
       qualified: false,
     });

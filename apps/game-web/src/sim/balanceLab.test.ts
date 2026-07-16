@@ -2402,6 +2402,7 @@ describe('balance lab drafts', () => {
     delete legacyAiBehavior.finishPursuitReachScale;
     delete legacyAiBehavior.postControlSteeringFrames;
     delete legacyAiBehavior.opponentControlReturnObserveFrames;
+    delete legacyAiBehavior.postCommitmentDecisionScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2409,7 +2410,7 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
       neutralHoldFrames: 21,
       commitmentObserveFrames: 0,
       commitmentPressFrames: 0,
@@ -2417,6 +2418,7 @@ describe('balance lab drafts', () => {
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
+      postCommitmentDecisionScale: 0,
     });
   });
 
@@ -2433,6 +2435,7 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.finishPursuitReachScale;
     delete previousAiBehavior.postControlSteeringFrames;
     delete previousAiBehavior.opponentControlReturnObserveFrames;
+    delete previousAiBehavior.postCommitmentDecisionScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2440,10 +2443,11 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
+      postCommitmentDecisionScale: 0,
     });
   });
 
@@ -2459,6 +2463,7 @@ describe('balance lab drafts', () => {
     previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v7';
     delete previousAiBehavior.postControlSteeringFrames;
     delete previousAiBehavior.opponentControlReturnObserveFrames;
+    delete previousAiBehavior.postCommitmentDecisionScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2466,10 +2471,11 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
+      postCommitmentDecisionScale: 0,
     });
   });
 
@@ -2484,6 +2490,7 @@ describe('balance lab drafts', () => {
     const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
     previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v8';
     delete previousAiBehavior.opponentControlReturnObserveFrames;
+    delete previousAiBehavior.postCommitmentDecisionScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2491,10 +2498,34 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
+      postCommitmentDecisionScale: 0,
+    });
+  });
+
+  test('fills post-commitment decision pacing when loading a v3 draft with v9 AI tuning', () => {
+    const draft = createBalanceLabDraft(
+      'Pre-post-commitment-pacing behavior draft',
+      createDefaultTuning(),
+      {},
+      '2026-07-13T12:00:00.000Z',
+      createDefaultAiBehaviorTuning(),
+    );
+    const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
+    previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v9';
+    delete previousAiBehavior.postCommitmentDecisionScale;
+
+    const parsed = parseBalanceLabDraft({
+      ...draft,
+      aiBehaviorTuning: previousAiBehavior,
+    });
+
+    expect(parsed?.aiBehaviorTuning).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      postCommitmentDecisionScale: 0,
     });
   });
 

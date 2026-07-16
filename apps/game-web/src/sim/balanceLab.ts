@@ -3057,6 +3057,7 @@ function buildBalanceLabLoopStages(
       relatedGlobalTuning: commitmentSaturation ? [] : ['startupClashGraceSeconds'],
       relatedAiBehavior: [
         'reactionDelayScale',
+        'postCommitmentDecisionScale',
         'riskAppetiteOffset',
         'commitmentObserveFrames',
         'commitmentPressFrames',
@@ -3090,6 +3091,7 @@ function buildBalanceLabLoopStages(
       relatedCharacterControls: ['launch', 'special', 'parry'],
       relatedAiBehavior: [
         'reactionDelayScale',
+        'postCommitmentDecisionScale',
         'commitmentPressFrames',
         'commitmentResetFrames',
         'postClashSpacingFrames',
@@ -3656,6 +3658,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       detail: `Both fighters could steer for ${sharedAgency.controlSeconds.toFixed(1)}s, with ${Math.round(sharedAgency.controlPressureRatio * 100)}% of that time in pressure and ${Math.round(sharedAgency.controlContactRatio * 100)}% in physical contact. They were simultaneously free to start a fresh commitment for only ${Math.round(sharedAgency.actionReadyShareOfControlFrames * 100)}% of shared control while ${totalTacticalActionStarts} accepted tactical starts kept at least one fighter committed. Review cadence and decision policy before changing collision physics.`,
       relatedAiBehavior: [
         'reactionDelayScale',
+        'postCommitmentDecisionScale',
         'commitmentObserveFrames',
         'commitmentPressFrames',
         'commitmentResetFrames',
@@ -3783,6 +3786,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       ],
       relatedAiBehavior: [
         'reactionDelayScale',
+        'postCommitmentDecisionScale',
         'postClashSpacingFrames',
         'postEventRetreatChanceOffset',
       ],

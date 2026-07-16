@@ -1,6 +1,6 @@
 {
-  "schemaVersion": "gw.ai-balance-thresholds.v8",
-  "id": "online-alpha-flow-v8",
+  "schemaVersion": "gw.ai-balance-thresholds.v9",
+  "id": "online-alpha-flow-v9",
   "minimumGamesPerPairing": 12,
   "minimumCompletedSetRatio": 0.67,
   "minimumRoundResolutionRatio": 0.75,
@@ -15,6 +15,8 @@
   "minimumLoopStageReachedRounds": 12,
   "maximumCommitmentIssueRatio": 0.5,
   "maximumChaseIssueRatio": 0.5,
+  "maximumCommitmentBlockedRatio": 0.1,
+  "maximumChaseBlockedRatio": 0.1,
   "minimumNeutralResetsPerRound": 2,
   "minimumResetConversionRatio": 0.2,
   "minimumAverageNeutralWindowSeconds": 0.75,

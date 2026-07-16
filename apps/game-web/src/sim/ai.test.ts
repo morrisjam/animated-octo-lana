@@ -104,6 +104,7 @@ describe('sim AI behaviour framework', () => {
     const defaults = createDefaultAiBehaviorTuning();
 
     expect(defaults.finishPursuitReachScale).toBe(0.7);
+    expect(defaults.postCommitmentDecisionScale).toBe(0);
     expect(defaults.postControlSteeringFrames).toBe(0);
     expect(defaults.opponentControlReturnObserveFrames).toBe(0);
     expect(resolveAiDifficultyProfile('veteran', defaults)).toEqual(
@@ -114,6 +115,7 @@ describe('sim AI behaviour framework', () => {
       neutralApproachScale: -4,
       neutralBoostDistanceOffset: 99,
       reactionDelayScale: Number.NaN,
+      postCommitmentDecisionScale: 99,
       neutralHoldFrames: 12.6,
       commitmentObserveFrames: 999,
       commitmentPressFrames: 999,
@@ -131,6 +133,7 @@ describe('sim AI behaviour framework', () => {
       neutralApproachScale: 0,
       neutralBoostDistanceOffset: 60,
       reactionDelayScale: 1,
+      postCommitmentDecisionScale: 4,
       neutralHoldFrames: 13,
       commitmentObserveFrames: 120,
       commitmentPressFrames: 180,
@@ -147,7 +150,8 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v6',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
@@ -155,7 +159,8 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v7',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
@@ -163,14 +168,69 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v8',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
+      finishPursuitReachScale: 0.7,
+    });
+    expect(sanitiseAiBehaviorTuning({
+      schemaVersion: 'gw.ai-behavior-tuning.v9',
+    })).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      postCommitmentDecisionScale: 0,
       finishPursuitReachScale: 0.7,
     });
     expect(fingerprintAiBehaviorTuning(defaults)).not.toBe(
       fingerprintAiBehaviorTuning({ ...defaults, engagementDistanceScale: 1.1 }),
     );
+  });
+
+  test('starts an offense-only decision read after authored attack recovery', () => {
+    const state = createInitialState({ seed: 79 });
+    state.players.P1.pos = { x: -5, y: 0 };
+    state.players.P2.pos = { x: 5, y: 0 };
+    state.players.P1.endLag = framesToSeconds(30);
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postCommitmentDecisionScale: 1,
+    };
+    const controller = {
+      ...createAiController({ seed: 79, profileId: 'veteran', behaviorTuning }),
+      decisionLockFrames: 0,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasStrikeCommitted: true,
+    };
+
+    const armedTick = tickAiController(state, 'P1', controller);
+
+    expect(armedTick.next.postCommitmentDecisionFramesRemaining).toBe(
+      AI_DIFFICULTY_PROFILES.veteran.reactionDelayFrames,
+    );
+    expect(armedTick.next.reactionFramesRemaining).toBe(0);
+    expect(armedTick.decision.selectedReason).toBe('end_lag');
+
+    const recoveryTick = tickAiController(state, 'P1', armedTick.next);
+    expect(recoveryTick.next.postCommitmentDecisionFramesRemaining).toBe(
+      AI_DIFFICULTY_PROFILES.veteran.reactionDelayFrames,
+    );
+
+    state.players.P1.endLag = 0;
+    const readTick = tickAiController(state, 'P1', armedTick.next);
+    expect(readTick.input.launch).toBe(false);
+    expect(readTick.input.special).toBe(false);
+    expect(readTick.input.dunk).toBe(false);
+    expect(Math.hypot(readTick.input.moveX, readTick.input.moveY)).toBeGreaterThan(0);
+    expect(readTick.next.postCommitmentDecisionFramesRemaining).toBe(
+      AI_DIFFICULTY_PROFILES.veteran.reactionDelayFrames - 1,
+    );
+    expect(readTick.decision.selectedReason).toBe('post_commitment_read');
+
+    state.players.P2.helpless = 0.5;
+    const finishTick = tickAiController(state, 'P1', armedTick.next);
+    expect(finishTick.next.postCommitmentDecisionFramesRemaining).toBe(0);
   });
 
   test('separately controls neutral inward drive and auto-lock boost range', () => {

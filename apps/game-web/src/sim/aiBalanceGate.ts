@@ -3,7 +3,7 @@ import type { BalanceLabLoopStageAggregates } from './balanceLab';
 import type { CharacterId } from './characters';
 import type { MatchTelemetryAggregateSummary } from './matchTelemetry';
 
-export const AI_BALANCE_THRESHOLD_SCHEMA_VERSION = 'gw.ai-balance-thresholds.v8';
+export const AI_BALANCE_THRESHOLD_SCHEMA_VERSION = 'gw.ai-balance-thresholds.v9';
 
 export interface AiBalanceThresholds {
   schemaVersion: typeof AI_BALANCE_THRESHOLD_SCHEMA_VERSION;
@@ -22,6 +22,8 @@ export interface AiBalanceThresholds {
   minimumLoopStageReachedRounds: number;
   maximumCommitmentIssueRatio: number;
   maximumChaseIssueRatio: number;
+  maximumCommitmentBlockedRatio: number;
+  maximumChaseBlockedRatio: number;
   minimumNeutralResetsPerRound: number;
   minimumResetConversionRatio: number;
   minimumAverageNeutralWindowSeconds: number;
@@ -163,6 +165,10 @@ export interface AiBalancePairingObservation {
   pressureBandRatio: number;
   p90PressureSequenceSeconds: number;
   loopStageIssues: {
+    commitment: AiBalanceQualifiedRatioObservation;
+    chase: AiBalanceQualifiedRatioObservation;
+  };
+  loopStageBlocked: {
     commitment: AiBalanceQualifiedRatioObservation;
     chase: AiBalanceQualifiedRatioObservation;
   };
@@ -313,15 +319,33 @@ export function evaluateBalanceGate(
       ),
       players: recurrencePlayers,
     };
-    const loopStageIssues = Object.fromEntries((['commitment', 'chase'] as const).map((stageId) => {
+    const loopStageRatios = Object.fromEntries((['commitment', 'chase'] as const).map((stageId) => {
       const stage = summary.flow.loopStages[stageId];
       const reachedRounds = stage.blockedRounds + stage.watchRounds + stage.observedRounds;
-      return [stageId, qualifiedRatio(
-        stage.blockedRounds + stage.watchRounds,
-        reachedRounds,
-        thresholds.minimumLoopStageReachedRounds,
-      )];
-    })) as AiBalancePairingObservation['loopStageIssues'];
+      return [stageId, {
+        issues: qualifiedRatio(
+          stage.blockedRounds + stage.watchRounds,
+          reachedRounds,
+          thresholds.minimumLoopStageReachedRounds,
+        ),
+        blocked: qualifiedRatio(
+          stage.blockedRounds,
+          reachedRounds,
+          thresholds.minimumLoopStageReachedRounds,
+        ),
+      }];
+    })) as Record<'commitment' | 'chase', {
+      issues: AiBalanceQualifiedRatioObservation;
+      blocked: AiBalanceQualifiedRatioObservation;
+    }>;
+    const loopStageIssues: AiBalancePairingObservation['loopStageIssues'] = {
+      commitment: loopStageRatios.commitment.issues,
+      chase: loopStageRatios.chase.issues,
+    };
+    const loopStageBlocked: AiBalancePairingObservation['loopStageBlocked'] = {
+      commitment: loopStageRatios.commitment.blocked,
+      chase: loopStageRatios.chase.blocked,
+    };
     const observation: AiBalancePairingObservation = {
       pairing: label,
       games: summary.games,
@@ -337,6 +361,7 @@ export function evaluateBalanceGate(
       pressureBandRatio: roundMetric(telemetry.spacing.pressureBandRatio),
       p90PressureSequenceSeconds: roundMetric(summary.flow.p90LongestPressureSequenceSeconds),
       loopStageIssues,
+      loopStageBlocked,
       neutralResetsPerRound: roundMetric(summary.flow.neutralResetsPerRound),
       resetAttempts: summary.flow.resetOutcomes.all.attempts,
       resetConversionRatio: summary.flow.resetOutcomes.all.attempts > 0
@@ -446,6 +471,20 @@ export function evaluateBalanceGate(
       'flagged Chase round ratio',
       observation.loopStageIssues.chase,
       thresholds.maximumChaseIssueRatio,
+    );
+    addQualifiedMaximumIssue(
+      issues,
+      label,
+      'blocked Commitment round ratio',
+      observation.loopStageBlocked.commitment,
+      thresholds.maximumCommitmentBlockedRatio,
+    );
+    addQualifiedMaximumIssue(
+      issues,
+      label,
+      'blocked Chase round ratio',
+      observation.loopStageBlocked.chase,
+      thresholds.maximumChaseBlockedRatio,
     );
     if (observation.neutralResetsPerRound < thresholds.minimumNeutralResetsPerRound) {
       issues.push(

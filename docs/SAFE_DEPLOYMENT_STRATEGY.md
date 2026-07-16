@@ -13,6 +13,7 @@ Status: active
    - Input target: `canary`
    - Inputs: exact release SHA and a different known-good rollback SHA
    - Both SHAs must be reachable from `master` and have successful CI for each exact SHA.
+   - The exact checked-out release must pass `npm run ai:alpha-readiness` after dependency installation and before any provider health, drain, or deploy action. Normal CI's archived advisory alpha report cannot satisfy this release gate.
    - Before any drain or deploy call, the API and public web attestation must prove that `rollback_sha` is the currently deployed, healthy baseline. This also proves that the rollback release supports the current readiness contract.
 2. Pre-deploy drain gate:
    - Authenticates with `SLO_ADMIN_KEY`.

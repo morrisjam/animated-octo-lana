@@ -209,6 +209,7 @@ describe('replay runner', () => {
       finishPursuitReachScale: _finishPursuitReachScale,
       postControlSteeringFrames: _postControlSteeringFrames,
       opponentControlReturnObserveFrames: _opponentControlReturnObserveFrames,
+      postCommitmentDecisionScale: _postCommitmentDecisionScale,
       ...legacyBehaviorTuning
     } = provenance.behaviorTuning;
 
@@ -231,13 +232,14 @@ describe('replay runner', () => {
       throw new Error(parsed.error.message);
     }
     expect(parsed.payload.header.localAi?.behaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
       commitmentObserveFrames: 0,
       commitmentPressFrames: 0,
       commitmentResetFrames: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
+      postCommitmentDecisionScale: 0,
       neutralHoldFrames: 18,
     });
   });
@@ -249,6 +251,7 @@ describe('replay runner', () => {
       finishPursuitReachScale: _finishPursuitReachScale,
       postControlSteeringFrames: _postControlSteeringFrames,
       opponentControlReturnObserveFrames: _opponentControlReturnObserveFrames,
+      postCommitmentDecisionScale: _postCommitmentDecisionScale,
       ...previousBehaviorTuning
     } = provenance.behaviorTuning;
 
@@ -271,10 +274,11 @@ describe('replay runner', () => {
       throw new Error(parsed.error.message);
     }
     expect(parsed.payload.header.localAi?.behaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
+      postCommitmentDecisionScale: 0,
     });
   });
 
@@ -284,6 +288,7 @@ describe('replay runner', () => {
     const {
       postControlSteeringFrames: _postControlSteeringFrames,
       opponentControlReturnObserveFrames: _opponentControlReturnObserveFrames,
+      postCommitmentDecisionScale: _postCommitmentDecisionScale,
       ...previousBehaviorTuning
     } = provenance.behaviorTuning;
 
@@ -306,10 +311,11 @@ describe('replay runner', () => {
       throw new Error(parsed.error.message);
     }
     expect(parsed.payload.header.localAi?.behaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
+      postCommitmentDecisionScale: 0,
     });
   });
 
@@ -318,6 +324,7 @@ describe('replay runner', () => {
     const provenance = createLocalAiProvenance();
     const {
       opponentControlReturnObserveFrames: _opponentControlReturnObserveFrames,
+      postCommitmentDecisionScale: _postCommitmentDecisionScale,
       ...previousBehaviorTuning
     } = provenance.behaviorTuning;
 
@@ -340,10 +347,43 @@ describe('replay runner', () => {
       throw new Error(parsed.error.message);
     }
     expect(parsed.payload.header.localAi?.behaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v9',
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
+      postCommitmentDecisionScale: 0,
+    });
+  });
+
+  test('migrates v9 local AI behavior tuning without post-commitment decision pacing', () => {
+    const replay = createReplayPayload();
+    const provenance = createLocalAiProvenance();
+    const {
+      postCommitmentDecisionScale: _postCommitmentDecisionScale,
+      ...previousBehaviorTuning
+    } = provenance.behaviorTuning;
+
+    const parsed = validateReplayPayload({
+      ...replay,
+      header: {
+        ...replay.header,
+        localAi: {
+          ...provenance,
+          behaviorTuning: {
+            ...previousBehaviorTuning,
+            schemaVersion: 'gw.ai-behavior-tuning.v9',
+          },
+        },
+      },
+    });
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok === false) {
+      throw new Error(parsed.error.message);
+    }
+    expect(parsed.payload.header.localAi?.behaviorTuning).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v10',
+      postCommitmentDecisionScale: 0,
     });
   });
 

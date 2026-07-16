@@ -18,7 +18,7 @@ export const AI_PURSUIT_POLICY_IDS = ['legacy', 'neutral_hold'] as const;
 export type AiPursuitPolicyId = (typeof AI_PURSUIT_POLICY_IDS)[number];
 export const DEFAULT_AI_PURSUIT_POLICY: AiPursuitPolicyId = 'legacy';
 
-export const AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v9';
+export const AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v10';
 
 const LEGACY_FINISH_PURSUIT_REACH_SCALE = 0.25;
 const DEFAULT_FINISH_PURSUIT_REACH_SCALE = 0.7;
@@ -29,6 +29,7 @@ export interface AiBehaviorTuning {
   neutralApproachScale: number;
   neutralBoostDistanceOffset: number;
   reactionDelayScale: number;
+  postCommitmentDecisionScale: number;
   errorRateScale: number;
   riskAppetiteOffset: number;
   neutralHoldFrames: number;
@@ -60,6 +61,7 @@ const DEFAULT_AI_BEHAVIOR_TUNING: AiBehaviorTuning = {
   neutralApproachScale: 1,
   neutralBoostDistanceOffset: 0,
   reactionDelayScale: 1,
+  postCommitmentDecisionScale: 0,
   errorRateScale: 1,
   riskAppetiteOffset: 0,
   neutralHoldFrames: 0,
@@ -124,6 +126,12 @@ export function sanitiseAiBehaviorTuning(value: unknown): AiBehaviorTuning {
       60,
     ),
     reactionDelayScale: finiteTuningValue(input.reactionDelayScale, 1, 0.25, 4),
+    postCommitmentDecisionScale: finiteTuningValue(
+      input.postCommitmentDecisionScale,
+      0,
+      0,
+      4,
+    ),
     errorRateScale: finiteTuningValue(input.errorRateScale, 1, 0, 4),
     riskAppetiteOffset: finiteTuningValue(input.riskAppetiteOffset, 0, -0.8, 0.8),
     neutralHoldFrames: Math.round(finiteTuningValue(input.neutralHoldFrames, 0, 0, 240)),
@@ -315,6 +323,7 @@ export interface AiControllerState {
   recoveryRngState: number;
   decisionLockFrames: number;
   reactionFramesRemaining: number;
+  postCommitmentDecisionFramesRemaining: number;
   profileId: AiDifficultyId;
   maneuverFramesRemaining: number;
   strafeSign: -1 | 1;
@@ -575,6 +584,7 @@ export function createAiController(seedOrOptions?: number | CreateAiControllerOp
     recoveryRngState: sanitiseSeed((rngState ^ 0x9e3779b9) >>> 0),
     decisionLockFrames: 0,
     reactionFramesRemaining: profile.reactionDelayFrames,
+    postCommitmentDecisionFramesRemaining: 0,
     profileId: profile.id,
     maneuverFramesRemaining: 0,
     strafeSign: 1,
@@ -629,6 +639,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   const pursuitPolicyId = controller.pursuitPolicyId ?? DEFAULT_AI_PURSUIT_POLICY;
   let decisionLockFrames = Math.max(0, controller.decisionLockFrames - 1);
   let reactionFramesRemaining = Math.max(0, controller.reactionFramesRemaining - 1);
+  let postCommitmentDecisionFramesRemaining = Math.max(
+    0,
+    Math.floor(controller.postCommitmentDecisionFramesRemaining ?? 0),
+  );
   let maneuverFramesRemaining = Math.max(0, controller.maneuverFramesRemaining - 1);
   let strafeSign = controller.strafeSign;
   let superBoostRecommitFrames = Math.max(0, (controller.superBoostRecommitFrames ?? 0) - 1);
@@ -847,6 +861,23 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     || opponent.recovering > 0;
   const opponentControlReturnedThisFrame = wasOpponentWithoutControl && !opponentWithoutControl;
   wasOpponentWithoutControl = opponentWithoutControl;
+  if (state.winner || playerWithoutControl || opponentWithoutControl) {
+    postCommitmentDecisionFramesRemaining = 0;
+  } else if (
+    ownStrikeEndedThisFrame
+    && behaviorTuning.postCommitmentDecisionScale > 0
+    && opponentHasNeutralControl
+  ) {
+    postCommitmentDecisionFramesRemaining = Math.max(
+      postCommitmentDecisionFramesRemaining,
+      Math.round(profile.reactionDelayFrames * behaviorTuning.postCommitmentDecisionScale),
+    );
+  }
+  const postCommitmentDecisionActive = postCommitmentDecisionFramesRemaining > 0
+    && canChooseTacticalAction;
+  if (postCommitmentDecisionActive) {
+    postCommitmentDecisionFramesRemaining -= 1;
+  }
   const radialSpeed = centerDistance > 0.001
     ? (player.vel.x * player.pos.x + player.vel.y * player.pos.y) / centerDistance
     : 0;
@@ -1424,6 +1455,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && decisionLockFrames <= 0
     && reactionFramesRemaining <= 0
     && canChooseTacticalAction
+    && !postCommitmentDecisionActive
     && !postRecoveryDecisionActive
     && !neutralHoldActive
     && !commitmentOffenseSuppressed
@@ -1615,6 +1647,8 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
             ? 'deliberate_error'
             : decisionLockAtDecision > 0
               ? 'decision_lock'
+              : postCommitmentDecisionActive
+                ? 'post_commitment_read'
               : reactionFramesAtDecision > 0
                 ? 'reaction_delay'
                 : commitmentOffenseSuppressed
@@ -1811,6 +1845,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       recoveryRngState,
       decisionLockFrames,
       reactionFramesRemaining,
+      postCommitmentDecisionFramesRemaining,
       profileId: profile.id,
       maneuverFramesRemaining,
       strafeSign,

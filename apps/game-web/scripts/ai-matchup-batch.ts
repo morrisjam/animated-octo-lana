@@ -1883,6 +1883,8 @@ function readBalanceThresholds(path: string): AiBalanceThresholds {
     'minimumLoopStageReachedRounds',
     'maximumCommitmentIssueRatio',
     'maximumChaseIssueRatio',
+    'maximumCommitmentBlockedRatio',
+    'maximumChaseBlockedRatio',
     'minimumNeutralResetsPerRound',
     'minimumResetConversionRatio',
     'minimumAverageNeutralWindowSeconds',
@@ -3872,12 +3874,24 @@ function run(): void {
   mkdirSync(outputDir, { recursive: true });
   const failedLoopStageIds = thresholds && gate
     ? (['commitment', 'chase'] as const).filter((stageId) => {
-      const maximum = stageId === 'commitment'
+      const maximumIssueRatio = stageId === 'commitment'
         ? thresholds.maximumCommitmentIssueRatio
         : thresholds.maximumChaseIssueRatio;
+      const maximumBlockedRatio = stageId === 'commitment'
+        ? thresholds.maximumCommitmentBlockedRatio
+        : thresholds.maximumChaseBlockedRatio;
       return gate.observed.pairings.some((pairing) => {
-        const observation = pairing.loopStageIssues[stageId];
-        return observation.qualified && observation.ratio !== null && observation.ratio > maximum;
+        const issueObservation = pairing.loopStageIssues[stageId];
+        const blockedObservation = pairing.loopStageBlocked[stageId];
+        return (
+          issueObservation.qualified
+          && issueObservation.ratio !== null
+          && issueObservation.ratio > maximumIssueRatio
+        ) || (
+          blockedObservation.qualified
+          && blockedObservation.ratio !== null
+          && blockedObservation.ratio > maximumBlockedRatio
+        );
       });
     })
     : [];

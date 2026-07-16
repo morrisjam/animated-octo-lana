@@ -62,10 +62,11 @@ export const REPLAY_INTEGRITY_SCHEMA_VERSION = 'gw.replay-integrity.v1';
 export const REPLAY_CANONICAL_DIGEST_ALGORITHM = 'SHA-256';
 const LEGACY_REPLAY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.replay-ai-decision-trace.v1';
 const LEGACY_AI_DECISION_TRACE_SCHEMA_VERSION = 'gw.ai-decision-trace.v2';
-const PREVIOUS_AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v8';
-const PRIOR_AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v7';
-const LEGACY_AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v6';
-const EARLY_LEGACY_AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v5';
+const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V9 = 'gw.ai-behavior-tuning.v9';
+const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V8 = 'gw.ai-behavior-tuning.v8';
+const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V7 = 'gw.ai-behavior-tuning.v7';
+const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V6 = 'gw.ai-behavior-tuning.v6';
+const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V5 = 'gw.ai-behavior-tuning.v5';
 const DEFAULT_FIXED_DT = 1 / 60;
 
 export interface ReplayHeader {
@@ -291,6 +292,42 @@ const COMMITMENT_TUNING_KEYS = [
 const FINISH_PURSUIT_TUNING_KEYS = ['finishPursuitReachScale'] as const;
 const POST_CONTROL_STEERING_TUNING_KEYS = ['postControlSteeringFrames'] as const;
 const OPPONENT_CONTROL_RETURN_TUNING_KEYS = ['opponentControlReturnObserveFrames'] as const;
+const POST_COMMITMENT_DECISION_TUNING_KEYS = ['postCommitmentDecisionScale'] as const;
+
+function getLegacyAiBehaviorTuningOmittedKeys(schemaVersion: unknown): readonly string[] | null {
+  switch (schemaVersion) {
+    case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V9:
+      return POST_COMMITMENT_DECISION_TUNING_KEYS;
+    case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V8:
+      return [
+        ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
+        ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+      ];
+    case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V7:
+      return [
+        ...POST_CONTROL_STEERING_TUNING_KEYS,
+        ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
+        ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+      ];
+    case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V6:
+      return [
+        ...FINISH_PURSUIT_TUNING_KEYS,
+        ...POST_CONTROL_STEERING_TUNING_KEYS,
+        ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
+        ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+      ];
+    case AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V5:
+      return [
+        ...COMMITMENT_TUNING_KEYS,
+        ...FINISH_PURSUIT_TUNING_KEYS,
+        ...POST_CONTROL_STEERING_TUNING_KEYS,
+        ...OPPONENT_CONTROL_RETURN_TUNING_KEYS,
+        ...POST_COMMITMENT_DECISION_TUNING_KEYS,
+      ];
+    default:
+      return null;
+  }
+}
 
 function parseReplayAiBehaviorTuning(value: unknown): AiBehaviorTuning | null {
   if (!isObjectRecord(value)) {
@@ -299,50 +336,15 @@ function parseReplayAiBehaviorTuning(value: unknown): AiBehaviorTuning | null {
   const behaviorTuning = sanitiseAiBehaviorTuning(value);
   const currentKeys = Object.keys(behaviorTuning);
   const isCurrent = value.schemaVersion === behaviorTuning.schemaVersion;
-  const isPrevious = value.schemaVersion === PREVIOUS_AI_BEHAVIOR_TUNING_SCHEMA_VERSION;
-  const isPrior = value.schemaVersion === PRIOR_AI_BEHAVIOR_TUNING_SCHEMA_VERSION;
-  const isLegacy = value.schemaVersion === LEGACY_AI_BEHAVIOR_TUNING_SCHEMA_VERSION;
-  const isEarlyLegacy = value.schemaVersion === EARLY_LEGACY_AI_BEHAVIOR_TUNING_SCHEMA_VERSION;
-  const expectedKeys = isEarlyLegacy
-    ? currentKeys.filter((key) => (
-      !COMMITMENT_TUNING_KEYS.includes(key as (typeof COMMITMENT_TUNING_KEYS)[number])
-      && !FINISH_PURSUIT_TUNING_KEYS.includes(
-        key as (typeof FINISH_PURSUIT_TUNING_KEYS)[number]
-      )
-      && !POST_CONTROL_STEERING_TUNING_KEYS.includes(
-        key as (typeof POST_CONTROL_STEERING_TUNING_KEYS)[number]
-      )
-      && !OPPONENT_CONTROL_RETURN_TUNING_KEYS.includes(
-        key as (typeof OPPONENT_CONTROL_RETURN_TUNING_KEYS)[number]
-      )
-    ))
-    : isLegacy
-      ? currentKeys.filter((key) => (
-        !FINISH_PURSUIT_TUNING_KEYS.includes(
-          key as (typeof FINISH_PURSUIT_TUNING_KEYS)[number]
-        )
-        && !POST_CONTROL_STEERING_TUNING_KEYS.includes(
-          key as (typeof POST_CONTROL_STEERING_TUNING_KEYS)[number]
-        )
-        && !OPPONENT_CONTROL_RETURN_TUNING_KEYS.includes(
-          key as (typeof OPPONENT_CONTROL_RETURN_TUNING_KEYS)[number]
-        )
-      ))
-      : isPrior
-        ? currentKeys.filter((key) => !POST_CONTROL_STEERING_TUNING_KEYS.includes(
-          key as (typeof POST_CONTROL_STEERING_TUNING_KEYS)[number]
-        ) && !OPPONENT_CONTROL_RETURN_TUNING_KEYS.includes(
-          key as (typeof OPPONENT_CONTROL_RETURN_TUNING_KEYS)[number]
-        ))
-        : isPrevious
-          ? currentKeys.filter((key) => !OPPONENT_CONTROL_RETURN_TUNING_KEYS.includes(
-            key as (typeof OPPONENT_CONTROL_RETURN_TUNING_KEYS)[number]
-          ))
-          : currentKeys;
-  if (
-    (!isCurrent && !isPrevious && !isPrior && !isLegacy && !isEarlyLegacy)
-    || !hasExactKeys(value, expectedKeys)
-  ) {
+  let expectedKeys = currentKeys;
+  if (!isCurrent) {
+    const omittedKeys = getLegacyAiBehaviorTuningOmittedKeys(value.schemaVersion);
+    if (omittedKeys === null) {
+      return null;
+    }
+    expectedKeys = currentKeys.filter((key) => !omittedKeys.includes(key));
+  }
+  if (!hasExactKeys(value, expectedKeys)) {
     return null;
   }
   for (const key of expectedKeys) {

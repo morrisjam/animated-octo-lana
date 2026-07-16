@@ -5,6 +5,7 @@ import {
   createDefaultAiBehaviorTuning,
   type AiDecisionTrace,
 } from './ai';
+import { computeStateChecksum } from './checksum';
 import type { ReplayLocalAiProvenance, ReplayPayload } from './replay';
 import {
   estimateReplayPayloadBytes,
@@ -15,6 +16,10 @@ import {
   traceReplayActionStarts,
   validateReplayPayload,
 } from './replay';
+import { createInitialState, step } from './sim';
+import { createDefaultTuning, fingerprintGameTuning } from './tuning';
+
+const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
 
 function createDecision(overrides: Partial<AiDecisionTrace> = {}): AiDecisionTrace {
   const candidates = Object.fromEntries(AI_TACTICAL_ACTIONS.map((action) => [action, {
@@ -94,6 +99,88 @@ function createLocalAiProvenance(): ReplayLocalAiProvenance {
   };
 }
 
+function createCanonicalPlayerInput(moveX: number) {
+  return {
+    moveX,
+    moveY: 0,
+    boost: false,
+    superBoost: false,
+    special: false,
+    launch: false,
+    dunk: false,
+    parry: false,
+    breakLaunch: false,
+  };
+}
+
+function createCanonicalOnlineReplay(tuningShape: 'legacy' | 'current') {
+  const seed = 20260716;
+  const fixedDt = 1 / 60;
+  const loadout = { P1: 'vanguard', P2: 'duelist' } as const;
+  const rules = { allowDunkWin: true } as const;
+  const tuning = createDefaultTuning();
+  const balanceTuning: Record<string, number> = { ...tuning };
+  if (tuningShape === 'legacy') {
+    delete balanceTuning[ZERO_NEUTRAL_TUNING_KEY];
+  }
+  const frame = {
+    p1: createCanonicalPlayerInput(0.25),
+    p2: createCanonicalPlayerInput(-0.25),
+  };
+  const state = createInitialState({
+    seed,
+    loadout,
+    rules,
+    characterBalanceOverrides: {},
+  });
+  state.tuning = { ...tuning };
+  const initialChecksum = computeStateChecksum(state);
+  step(state, frame, fixedDt);
+  const finalChecksum = computeStateChecksum(state);
+
+  return {
+    header: {
+      payloadVersion: 1,
+      rulesetVersion: 'prototype-2026.02',
+      simBuildHash: 'compatibility-test',
+      seed,
+      loadout,
+      fixedDt,
+      advanceRngPerFrame: false,
+      rules,
+      balanceTuning,
+      characterBalanceOverrides: {},
+      onlineMatch: {
+        schemaVersion: 'gw.online-match-replay.v1',
+        sessionId: '11111111-1111-4111-8111-111111111111',
+        matchId: '22222222-2222-4222-8222-222222222222',
+        balanceProfileId: 'default',
+        tuningFingerprint: fingerprintGameTuning(tuning),
+        characterRegistryFingerprint: 'gw.character-registry.v1:test',
+        characterPackageVersions: { P1: '1.0.0', P2: '1.0.0' },
+        stage: { id: 'wormhole_depths_v2', version: '2' },
+      },
+    },
+    inputTimeline: [frame],
+    rounds: [{
+      round: 1,
+      label: 'Round 1',
+      epoch: 0,
+      seed,
+      startFrame: 0,
+      endFrame: 0,
+      initialChecksum,
+      finalChecksum,
+    }],
+    expectedChecksums: [finalChecksum],
+    integrity: {
+      schemaVersion: 'gw.replay-integrity.v1',
+      algorithm: 'SHA-256',
+      digest: '0'.repeat(64),
+    },
+  };
+}
+
 describe('replay runner', () => {
   test('same replay payload produces identical checksums', () => {
     const replay = createReplayPayload();
@@ -159,6 +246,40 @@ describe('replay runner', () => {
       throw new Error('Expected payload validation failure');
     }
     expect(parsed.error.code).toBe('invalid_expected_checksums');
+  });
+
+  test('accepts legacy and current canonical tuning shapes with one zero-neutral fingerprint', () => {
+    const legacy = validateReplayPayload(createCanonicalOnlineReplay('legacy'));
+    const current = validateReplayPayload(createCanonicalOnlineReplay('current'));
+
+    expect(legacy.ok).toBe(true);
+    expect(current.ok).toBe(true);
+    if (legacy.ok === false) {
+      throw new Error(legacy.error.message);
+    }
+    if (current.ok === false) {
+      throw new Error(current.error.message);
+    }
+    expect(legacy.payload.header.balanceTuning?.[ZERO_NEUTRAL_TUNING_KEY]).toBe(0);
+    expect(current.payload.header.balanceTuning?.[ZERO_NEUTRAL_TUNING_KEY]).toBe(0);
+    expect(legacy.payload.header.onlineMatch?.tuningFingerprint)
+      .toBe(current.payload.header.onlineMatch?.tuningFingerprint);
+  });
+
+  test('rejects canonical tuning shapes with any other missing or additional key', () => {
+    const missingKey = createCanonicalOnlineReplay('current');
+    delete missingKey.header.balanceTuning.launchBasePower;
+    const additionalKey = createCanonicalOnlineReplay('current');
+    additionalKey.header.balanceTuning.unexpectedTuningKey = 0;
+
+    for (const replay of [missingKey, additionalKey]) {
+      const parsed = validateReplayPayload(replay);
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok !== false) {
+        throw new Error('Expected canonical tuning shape validation failure');
+      }
+      expect(parsed.error.code).toBe('invalid_online_identity');
+    }
   });
 
   test('rejects an unknown starting situation', () => {

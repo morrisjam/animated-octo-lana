@@ -94,6 +94,8 @@ const PLAYER_INPUT_KEYS = [
   'breakLaunch',
 ] as const;
 
+const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
+
 const GAME_TUNING_KEYS = [
   'chainWindowSeconds',
   'playerMoveAccel',
@@ -112,6 +114,7 @@ const GAME_TUNING_KEYS = [
   'launchInputInfluence',
   'launchHelplessSeconds',
   'startupClashGraceSeconds',
+  ZERO_NEUTRAL_TUNING_KEY,
   'launchClashSeparationPadding',
   'launchClashRecoilMultiplier',
   'closeRangeSeparationPadding',
@@ -125,6 +128,10 @@ const GAME_TUNING_KEYS = [
   'dunkRecoveryMoveSpeed',
   'dunkRecoveryFuelFraction',
 ] as const;
+
+const LEGACY_GAME_TUNING_KEYS = GAME_TUNING_KEYS.filter((key) => (
+  key !== ZERO_NEUTRAL_TUNING_KEY
+));
 
 function fail(
   errorCode: ReplayPayloadValidationErrorCode,
@@ -242,6 +249,14 @@ function fingerprintDeterministicValue(value: unknown): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function fingerprintGameTuning(tuning: Record<string, unknown>): string {
+  const fingerprintInput = { ...tuning };
+  if (fingerprintInput[ZERO_NEUTRAL_TUNING_KEY] === 0) {
+    delete fingerprintInput[ZERO_NEUTRAL_TUNING_KEY];
+  }
+  return fingerprintDeterministicValue(fingerprintInput);
 }
 
 export function computeReplayCanonicalDigestForArchive(payload: ReplayPayload): string {
@@ -363,11 +378,14 @@ function validateOnlineIdentity(
     return false;
   }
   return isObjectRecord(header.balanceTuning)
-    && hasExactKeys(header.balanceTuning, GAME_TUNING_KEYS)
+    && (
+      hasExactKeys(header.balanceTuning, GAME_TUNING_KEYS)
+      || hasExactKeys(header.balanceTuning, LEGACY_GAME_TUNING_KEYS)
+    )
     && Object.values(header.balanceTuning).every((value) => (
       typeof value === 'number' && Number.isFinite(value)
     ))
-    && identity.tuningFingerprint === fingerprintDeterministicValue(header.balanceTuning);
+    && identity.tuningFingerprint === fingerprintGameTuning(header.balanceTuning);
 }
 
 function validateCanonicalHeader(header: Record<string, unknown>): string | null {

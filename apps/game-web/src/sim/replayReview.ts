@@ -5,6 +5,7 @@ import {
   nextDeterministicRandom,
   step,
   type SimulationActionStart,
+  type SimulationLaunchClash,
 } from './sim';
 import { applyBalanceScenario } from './balanceScenarios';
 import { buildBalanceLabFlowModel, type BalanceLabFlowModel } from './balanceLab';
@@ -189,8 +190,10 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
     const input = normaliseFrameInput(payload.inputTimeline[frame]);
     const previousState = createStateSnapshot(state);
     const acceptedActionStarts: SimulationActionStart[] = [];
+    const launchClashes: SimulationLaunchClash[] = [];
     step(state, input, fixedDt, {
       onActionStart: (event) => acceptedActionStarts.push(event),
+      onLaunchClash: (event) => launchClashes.push(event),
     });
     if (payload.header.advanceRngPerFrame) {
       nextDeterministicRandom(state);
@@ -202,7 +205,7 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
       arePlayersInTelemetryContact(state),
       fixedDt,
     );
-    telemetry.recordFrame(input, state, fixedDt, acceptedActionStarts);
+    telemetry.recordFrame(input, state, fixedDt, acceptedActionStarts, launchClashes);
     if (focus && focusTelemetry && frame >= focus.startFrame && frame <= focus.endFrame) {
       focusContactStartFrame = trackContactFrame(
         focusContactWindows,
@@ -211,7 +214,7 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
         arePlayersInTelemetryContact(state),
         fixedDt,
       );
-      focusTelemetry.recordFrame(input, state, fixedDt, acceptedActionStarts);
+      focusTelemetry.recordFrame(input, state, fixedDt, acceptedActionStarts, launchClashes);
     }
     const currentState = createStateSnapshot(state);
     frames.push({
@@ -313,8 +316,10 @@ export function buildReplayReviewDataFromRounds(
       const frame = frames.length;
       const previousState = createStateSnapshot(state);
       const acceptedActionStarts: SimulationActionStart[] = [];
+      const launchClashes: SimulationLaunchClash[] = [];
       step(state, input, fixedDt, {
         onActionStart: (event) => acceptedActionStarts.push(event),
+        onLaunchClash: (event) => launchClashes.push(event),
       });
       contactStartFrame = trackContactFrame(
         contactWindows,
@@ -323,7 +328,7 @@ export function buildReplayReviewDataFromRounds(
         arePlayersInTelemetryContact(state),
         fixedDt,
       );
-      telemetry.recordFrame(input, state, fixedDt, acceptedActionStarts);
+      telemetry.recordFrame(input, state, fixedDt, acceptedActionStarts, launchClashes);
       const currentState = createStateSnapshot(state);
       frames.push({
         frame,

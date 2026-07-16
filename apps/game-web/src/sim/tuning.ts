@@ -17,6 +17,7 @@ import {
   SUPER_BOOST_VELOCITY_BLEND,
   SUPER_BOOST_WAVE_AMPLITUDE,
 } from './constants';
+import { fingerprintDeterministicValue } from './fingerprint';
 import type { GameTuning } from './types';
 
 const DEFAULT_HELPLESS_RELEASE_SPEED_RATIO = 0.38;
@@ -47,6 +48,7 @@ export function createDefaultTuning(): GameTuning {
     launchInputInfluence: LAUNCH_INPUT_INFLUENCE,
     launchHelplessSeconds: LAUNCH_HELPLESS_SECONDS,
     startupClashGraceSeconds: 0,
+    postControlCounterLaunchClashGraceSeconds: 0,
     launchClashSeparationPadding: DEFAULT_LAUNCH_CLASH_SEPARATION_PADDING,
     launchClashRecoilMultiplier: DEFAULT_LAUNCH_CLASH_RECOIL_MULTIPLIER,
     closeRangeSeparationPadding: DEFAULT_CLOSE_RANGE_SEPARATION_PADDING,
@@ -87,6 +89,11 @@ export function sanitiseTuning(tuning: Partial<GameTuning>): GameTuning {
     launchInputInfluence: clamp(value('launchInputInfluence'), 0, 1),
     launchHelplessSeconds: clamp(value('launchHelplessSeconds'), 0.1, 60),
     startupClashGraceSeconds: clamp(value('startupClashGraceSeconds'), 0, 0.25),
+    postControlCounterLaunchClashGraceSeconds: clamp(
+      value('postControlCounterLaunchClashGraceSeconds'),
+      0,
+      0.1,
+    ),
     launchClashSeparationPadding: clamp(value('launchClashSeparationPadding'), 0, 40),
     launchClashRecoilMultiplier: clamp(value('launchClashRecoilMultiplier'), 0, 2),
     closeRangeSeparationPadding: clamp(value('closeRangeSeparationPadding'), 0, 30),
@@ -100,4 +107,16 @@ export function sanitiseTuning(tuning: Partial<GameTuning>): GameTuning {
     dunkRecoveryMoveSpeed: clamp(value('dunkRecoveryMoveSpeed'), 1, 300),
     dunkRecoveryFuelFraction: clamp(value('dunkRecoveryFuelFraction'), 0, 1),
   };
+}
+
+export function createGameTuningFingerprintInput(tuning: GameTuning): Partial<GameTuning> {
+  const fingerprintInput: Partial<GameTuning> = { ...tuning };
+  if (fingerprintInput.postControlCounterLaunchClashGraceSeconds === 0) {
+    delete fingerprintInput.postControlCounterLaunchClashGraceSeconds;
+  }
+  return fingerprintInput;
+}
+
+export function fingerprintGameTuning(tuning: GameTuning): string {
+  return fingerprintDeterministicValue(createGameTuningFingerprintInput(tuning));
 }

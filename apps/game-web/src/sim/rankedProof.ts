@@ -5,8 +5,8 @@ import {
   CHARACTER_REGISTRY_FINGERPRINT,
   type CharacterId,
 } from './characters';
-import { fingerprintDeterministicValue } from './fingerprint';
 import { createInitialState, step } from './sim';
+import { fingerprintGameTuning } from './tuning';
 import type { FrameInput, PlayerFrameInput, PlayerId } from './types';
 
 export const RANKED_MATCH_PROOF_SCHEMA_VERSION = 1;
@@ -267,7 +267,7 @@ export function getRankedTuningFingerprint(balanceProfileId: string): string | n
   if (profile.id !== balanceProfileId) {
     return null;
   }
-  return fingerprintDeterministicValue(profile.tuning);
+  return fingerprintGameTuning(profile.tuning);
 }
 
 export function rankedSeedFromSessionId(sessionId: string): number {
@@ -425,7 +425,7 @@ export async function verifyRankedMatchProof(
   if (profile.id !== proof.balanceProfileId) {
     return fail('unsupported_balance_profile', `Balance profile ${proof.balanceProfileId} is unsupported.`);
   }
-  const expectedTuningFingerprint = fingerprintDeterministicValue(profile.tuning);
+  const expectedTuningFingerprint = fingerprintGameTuning(profile.tuning);
   if (proof.tuningFingerprint !== expectedTuningFingerprint) {
     return fail('tuning_mismatch', 'Ranked proof tuning fingerprint does not match the selected profile.');
   }

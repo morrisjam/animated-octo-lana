@@ -13,7 +13,11 @@ import {
   type BalanceLabRuleChange,
 } from './balanceLab';
 import { fingerprintDeterministicValue } from './fingerprint';
-import { createDefaultTuning, sanitiseTuning } from './tuning';
+import {
+  createDefaultTuning,
+  createGameTuningFingerprintInput,
+  sanitiseTuning,
+} from './tuning';
 import type { GameTuning } from './types';
 
 export const AI_BATCH_RULE_SNAPSHOT_SCHEMA_VERSION = 'gw.ai-batch-rule-snapshot.v1' as const;
@@ -38,7 +42,7 @@ function fingerprintSnapshotRules(
 ): string {
   return fingerprintDeterministicValue({
     schemaVersion: AI_BATCH_RULE_SNAPSHOT_SCHEMA_VERSION,
-    tuning,
+    tuning: createGameTuningFingerprintInput(tuning),
     characterBalanceOverrides,
     aiBehaviorTuning,
   });

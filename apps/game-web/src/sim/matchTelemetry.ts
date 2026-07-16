@@ -10,6 +10,7 @@ import {
   type CombatDistanceBand,
   type CombatEventTelemetrySummary,
   type CombatEventType,
+  type CombatLaunchClashCause,
   type CombatResourceTelemetry,
 } from './combatEventTelemetry';
 import type { FrameInput, GameState, PlayerId, PlayerState, PlayersById } from './types';
@@ -17,10 +18,10 @@ import {
   fingerprintCharacterBalanceConfig,
   resolveCharacterRulesFingerprint,
 } from './characterBalance';
-import type { SimulationActionStart } from './sim';
+import type { SimulationActionStart, SimulationLaunchClash } from './sim';
 
-export const MATCH_TELEMETRY_SCHEMA_VERSION = 'gw.match-telemetry.v6';
-export const MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION = 'gw.match-telemetry-aggregate.v6';
+export const MATCH_TELEMETRY_SCHEMA_VERSION = 'gw.match-telemetry.v7';
+export const MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION = 'gw.match-telemetry-aggregate.v7';
 export const MATCH_TELEMETRY_CONTACT_PADDING = 0.75;
 export const MATCH_TELEMETRY_SUSTAINED_DECISION_WINDOW_SECONDS = 0.75;
 
@@ -261,6 +262,7 @@ export interface MatchTelemetryAggregateSummary {
   spacing: MatchTelemetryAggregateSpacingSummary;
   sharedAgency: MatchTelemetryAggregateSharedAgencySummary;
   eventCounts: Record<CombatEventType, number>;
+  launchClashCauses: Record<CombatLaunchClashCause, number>;
 }
 
 interface TrackedInputState {
@@ -483,6 +485,7 @@ export class MatchTelemetryTracker {
     state: GameState,
     dt: number,
     acceptedActionStarts?: readonly SimulationActionStart[],
+    launchClashes?: readonly SimulationLaunchClash[],
   ): void {
     const frameSeconds = Math.max(0, dt);
     this.framesSimulated += 1;
@@ -565,7 +568,7 @@ export class MatchTelemetryTracker {
     this.updateHelplessDuration('P1', currentState.p1.helpless, dt);
     this.updateHelplessDuration('P2', currentState.p2.helpless, dt);
 
-    this.combatTelemetry.recordFrame(frameInput, state, dt, acceptedActionStarts);
+    this.combatTelemetry.recordFrame(frameInput, state, dt, acceptedActionStarts, launchClashes);
     this.previousState = currentState;
   }
 
@@ -1004,6 +1007,12 @@ export function aggregateMatchTelemetrySummaries(
   const eventCounts = Object.fromEntries(
     COMBAT_EVENT_TYPES.map((eventType) => [eventType, 0]),
   ) as Record<CombatEventType, number>;
+  const launchClashCauses: Record<CombatLaunchClashCause, number> = {
+    simultaneous_active: 0,
+    global_startup_grace: 0,
+    post_control_counter_launch: 0,
+    unattributed: 0,
+  };
   const distanceBandFrames: Record<CombatDistanceBand, number> = {
     point_blank: 0,
     pressure: 0,
@@ -1066,6 +1075,9 @@ export function aggregateMatchTelemetrySummaries(
     sustainedNeutralWindowSeconds += summary.sharedAgency.sustainedNeutralWindowSeconds;
     for (const eventType of COMBAT_EVENT_TYPES) {
       eventCounts[eventType] += summary.combat.eventCounts[eventType];
+    }
+    for (const cause of Object.keys(launchClashCauses) as CombatLaunchClashCause[]) {
+      launchClashCauses[cause] += summary.combat.launchClashCauses[cause];
     }
     for (const band of Object.keys(distanceBandFrames) as CombatDistanceBand[]) {
       distanceBandFrames[band] += summary.combat.spacingBands.frames[band];
@@ -1208,5 +1220,6 @@ export function aggregateMatchTelemetrySummaries(
         : 0,
     },
     eventCounts,
+    launchClashCauses,
   };
 }

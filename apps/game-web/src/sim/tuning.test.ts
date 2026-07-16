@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { createDefaultTuning, sanitiseTuning } from './tuning';
+import { fingerprintDeterministicValue } from './fingerprint';
+import {
+  createDefaultTuning,
+  fingerprintGameTuning,
+  sanitiseTuning,
+} from './tuning';
 
 describe('game tuning', () => {
   test('ships the locally validated flow candidate as explicit defaults', () => {
@@ -11,6 +16,7 @@ describe('game tuning', () => {
     expect(defaults.defensiveResetImpulse).toBe(14);
     expect(defaults.launchBreakResetMultiplier).toBe(1.1);
     expect(defaults.naturalRecoveryResetMultiplier).toBe(0);
+    expect(defaults.postControlCounterLaunchClashGraceSeconds).toBe(0);
   });
 
   test('fills missing fields from defaults for snapshot and draft compatibility', () => {
@@ -29,6 +35,7 @@ describe('game tuning', () => {
       helplessReleaseSpeedRatio: Number.NaN,
       actionRecoveryControlMultiplier: 2,
       startupClashGraceSeconds: 1,
+      postControlCounterLaunchClashGraceSeconds: 1,
       launchClashSeparationPadding: 80,
       launchClashRecoilMultiplier: -2,
       closeRangeSeparationPadding: -10,
@@ -43,6 +50,7 @@ describe('game tuning', () => {
     expect(tuning.helplessReleaseSpeedRatio).toBe(defaults.helplessReleaseSpeedRatio);
     expect(tuning.actionRecoveryControlMultiplier).toBe(1);
     expect(tuning.startupClashGraceSeconds).toBe(0.25);
+    expect(tuning.postControlCounterLaunchClashGraceSeconds).toBe(0.1);
     expect(tuning.launchClashSeparationPadding).toBe(40);
     expect(tuning.launchClashRecoilMultiplier).toBe(0);
     expect(tuning.closeRangeSeparationPadding).toBe(0);
@@ -52,5 +60,17 @@ describe('game tuning', () => {
     expect(tuning.defensiveResetImpulse).toBe(0);
     expect(tuning.launchBreakResetMultiplier).toBe(2);
     expect(tuning.naturalRecoveryResetMultiplier).toBe(2);
+  });
+
+  test('keeps the default tuning fingerprint compatible while attributing non-zero experiments', () => {
+    const defaults = createDefaultTuning();
+    const legacyDefaults = { ...defaults } as Partial<typeof defaults>;
+    delete legacyDefaults.postControlCounterLaunchClashGraceSeconds;
+
+    expect(fingerprintGameTuning(defaults)).toBe(fingerprintDeterministicValue(legacyDefaults));
+    expect(fingerprintGameTuning({
+      ...defaults,
+      postControlCounterLaunchClashGraceSeconds: 2 / 60,
+    })).not.toBe(fingerprintGameTuning(defaults));
   });
 });

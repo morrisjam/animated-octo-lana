@@ -28,7 +28,12 @@ import {
   type ReplayReviewFocus,
 } from './replay';
 import { deriveOfflineRoundSeed } from './offlineRoundSeed';
-import { createInitialState, step, type SimulationActionStart } from './sim';
+import {
+  createInitialState,
+  step,
+  type SimulationActionStart,
+  type SimulationLaunchClash,
+} from './sim';
 import type { FrameInput, GameRules, GameTuning, PlayerId } from './types';
 
 export const AI_ROUND_FIXED_DT = 1 / 60;
@@ -133,14 +138,16 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
       p2: { ...p2AiTick.input },
     };
     const acceptedActionStarts: SimulationActionStart[] = [];
+    const launchClashes: SimulationLaunchClash[] = [];
     step(state, frameInput, fixedDt, {
       onActionStart: (event) => acceptedActionStarts.push(event),
+      onLaunchClash: (event) => launchClashes.push(event),
     });
     aiDecisionTelemetry?.recordFrame(frame, {
       P1: p1AiTick.decision,
       P2: p2AiTick.decision,
     });
-    telemetry.recordFrame(frameInput, state, fixedDt, acceptedActionStarts);
+    telemetry.recordFrame(frameInput, state, fixedDt, acceptedActionStarts, launchClashes);
     inputTimeline?.push(frameInput);
     expectedChecksums?.push(computeStateChecksum(state));
     if (state.winner) {

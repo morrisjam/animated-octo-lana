@@ -44,7 +44,7 @@ import {
   type SimulationActionStart,
   type SimulationStepObserver,
 } from './sim';
-import { sanitiseTuning } from './tuning';
+import { fingerprintGameTuning, sanitiseTuning } from './tuning';
 import type {
   FrameInput,
   GameRules,
@@ -68,6 +68,7 @@ const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V7 = 'gw.ai-behavior-tuning.v7';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V6 = 'gw.ai-behavior-tuning.v6';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V5 = 'gw.ai-behavior-tuning.v5';
 const DEFAULT_FIXED_DT = 1 / 60;
+const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
 
 export interface ReplayHeader {
   payloadVersion: number;
@@ -504,7 +505,7 @@ function parseOnlineMatchIdentity(
     || !isNonEmptyTrimmedString(value.matchId)
     || !isNonEmptyTrimmedString(value.balanceProfileId)
     || !isNonEmptyTrimmedString(value.tuningFingerprint)
-    || value.tuningFingerprint !== fingerprintDeterministicValue(tuning)
+    || value.tuningFingerprint !== fingerprintGameTuning(tuning)
     || !isNonEmptyTrimmedString(value.characterRegistryFingerprint)
     || !isObjectRecord(value.characterPackageVersions)
     || !hasExactKeys(value.characterPackageVersions, ['P1', 'P2'])
@@ -544,6 +545,24 @@ function parseOnlineMatchIdentity(
         : {}),
     },
   };
+}
+
+function matchesCanonicalTuningSnapshot(
+  value: unknown,
+  tuning: GameTuning,
+): boolean {
+  if (!isObjectRecord(value)) {
+    return false;
+  }
+  const currentKeys = Object.keys(tuning);
+  const legacyKeys = currentKeys.filter((key) => key !== ZERO_NEUTRAL_TUNING_KEY);
+  const hasCurrentShape = hasExactKeys(value, currentKeys);
+  const hasLegacyShape = tuning[ZERO_NEUTRAL_TUNING_KEY] === 0
+    && hasExactKeys(value, legacyKeys);
+  return (hasCurrentShape || hasLegacyShape)
+    && Object.entries(value).every(([key, rawValue]) => (
+      rawValue === tuning[key as keyof GameTuning]
+    ));
 }
 
 function cloneReplayPlayerInput(value: unknown): Partial<PlayerFrameInput> | undefined {
@@ -943,9 +962,7 @@ function validateHeader(header: unknown): ReplayValidationResult {
   let onlineMatch: ReplayOnlineMatchIdentity | undefined;
   if (hasOnlineIdentity) {
     const tuningMatchesExactly = parsedTuning
-      && isObjectRecord(header.balanceTuning)
-      && hasExactKeys(header.balanceTuning, Object.keys(parsedTuning))
-      && Object.entries(parsedTuning).every(([key, value]) => header.balanceTuning?.[key] === value);
+      && matchesCanonicalTuningSnapshot(header.balanceTuning, parsedTuning);
     const characterOverridesMatchExactly = parsedCharacterBalanceOverrides
       && fingerprintDeterministicValue(parsedCharacterBalanceOverrides)
         === fingerprintDeterministicValue(header.characterBalanceOverrides);

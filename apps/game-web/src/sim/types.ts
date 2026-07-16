@@ -55,6 +55,7 @@ export interface GameTuning {
   launchInputInfluence: number;
   launchHelplessSeconds: number;
   startupClashGraceSeconds: number;
+  postControlCounterLaunchClashGraceSeconds: number;
   launchClashSeparationPadding: number;
   launchClashRecoilMultiplier: number;
   closeRangeSeparationPadding: number;
@@ -109,6 +110,11 @@ export interface PlayerState {
   launchStartup: number;
   launchActive: number;
   launchDidConnect: boolean;
+  launchAttemptSerial: number;
+  postControlCounterPending: boolean;
+  postControlCounterWindow: number;
+  postControlCounterOpponentLaunchSerialAtReturn: number;
+  postControlCounterLaunchEligible: boolean;
   dunkStartup: number;
   dunkActive: number;
   dunkDidConnect: boolean;

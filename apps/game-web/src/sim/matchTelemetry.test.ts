@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { createInitialState, step, type SimulationActionStart } from './sim';
+import {
+  createInitialState,
+  step,
+  type SimulationActionStart,
+  type SimulationLaunchClash,
+} from './sim';
 import {
   MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION,
   MATCH_TELEMETRY_SCHEMA_VERSION,
@@ -56,6 +61,33 @@ function recordContactEpisode(
 }
 
 describe('match telemetry tracker', () => {
+  test('records attributed launch clashes without relying on flash inference', () => {
+    const state = createInitialState();
+    const tracker = createMatchTelemetryTracker(state);
+    const clash: SimulationLaunchClash = {
+      cause: 'post_control_counter_launch',
+      gracePlayerId: 'P1',
+    };
+
+    tracker.recordFrame(neutralInput(), state, 1 / 60, [], [clash]);
+
+    const summary = tracker.toSummary();
+    expect(summary.combat.schemaVersion).toBe(COMBAT_EVENT_SCHEMA_VERSION);
+    expect(summary.combat.launchClashCauses).toEqual({
+      simultaneous_active: 0,
+      global_startup_grace: 0,
+      post_control_counter_launch: 1,
+      unattributed: 0,
+    });
+    expect(summary.combat.events.find((event) => event.type === 'launch_clash')).toMatchObject({
+      launchClashCause: 'post_control_counter_launch',
+      launchClashAttribution: 'simulation',
+      launchClashGracePlayerId: 'P1',
+    });
+    expect(summary.combat.events.find((event) => event.type === 'launch_clash'))
+      .not.toHaveProperty('actorId');
+  });
+
   test('records an accepted action that is consumed later in the same frame', () => {
     const state = createInitialState({ seed: 10 });
     state.players.P1.pos = { x: -3, y: 0 };

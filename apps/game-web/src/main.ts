@@ -108,6 +108,7 @@ import {
   getRenderSnapshot,
   step,
   type SimulationActionStart,
+  type SimulationLaunchClash,
 } from './sim/sim';
 import {
   BALANCE_PROFILES,
@@ -6427,6 +6428,7 @@ function tick(nowMs: number): void {
         inputTimeline.setLocalInput(simulationFrame, 'P1', frameInput.p1);
         inputTimeline.setLocalInput(simulationFrame, 'P2', frameInput.p2);
         let acceptedActionStarts: SimulationActionStart[] | undefined;
+        let launchClashes: SimulationLaunchClash[] | undefined;
         if (rollbackSession) {
           const rollbackResult = rollbackSession.advanceFrame({
             localInput: frameInput.p1,
@@ -6447,12 +6449,14 @@ function tick(nowMs: number): void {
           state = rollbackSession.getStateSnapshot();
         } else {
           acceptedActionStarts = [];
+          launchClashes = [];
           step(state, frameInput, fixedDt, {
             onActionStart: (event) => acceptedActionStarts?.push(event),
+            onLaunchClash: (event) => launchClashes?.push(event),
           });
         }
         aiDecisionTelemetry.recordFrame(simulationFrame, aiDecisions);
-        matchTelemetry.recordFrame(frameInput, state, fixedDt, acceptedActionStarts);
+        matchTelemetry.recordFrame(frameInput, state, fixedDt, acceptedActionStarts, launchClashes);
         liveAiRoundReplayRecorder?.recordFrame(frameInput, state, aiDecisions);
         if (selectedMode === 'training') {
           trainingTelemetry.recordFrame(frameInput, state, fixedDt);

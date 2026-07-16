@@ -45,7 +45,7 @@ export type {
 const LEGACY_BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v1';
 const PREVIOUS_BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v2';
 export const BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v3';
-export const BALANCE_LAB_EXPERIMENT_SCHEMA_VERSION = 'gw.balance-lab-experiment.v6';
+export const BALANCE_LAB_EXPERIMENT_SCHEMA_VERSION = 'gw.balance-lab-experiment.v7';
 
 export type BalanceLabDiagnosticSeverity = 'info' | 'warning' | 'critical';
 export type BalanceLabAiBehaviorControl = Exclude<keyof AiBehaviorTuning, 'schemaVersion'>;
@@ -3054,7 +3054,9 @@ function buildBalanceLabLoopStages(
       label: 'Commitment',
       status: commitmentStatus,
       detail: commitmentDetail,
-      relatedGlobalTuning: commitmentSaturation ? [] : ['startupClashGraceSeconds'],
+      relatedGlobalTuning: commitmentSaturation
+        ? []
+        : ['startupClashGraceSeconds', 'postControlCounterLaunchClashGraceSeconds'],
       relatedAiBehavior: [
         'reactionDelayScale',
         'postCommitmentDecisionScale',
@@ -3083,6 +3085,7 @@ function buildBalanceLabLoopStages(
       detail: exchangeDetail,
       relatedGlobalTuning: [
         'startupClashGraceSeconds',
+        'postControlCounterLaunchClashGraceSeconds',
         'launchClashSeparationPadding',
         'launchClashRecoilMultiplier',
         'actionRecoveryControlMultiplier',
@@ -3631,6 +3634,8 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
   const neutralExitFollowUp = analyseNeutralExitFollowUp(exchanges);
   const resetOutcomes = analyseResetOutcomes(summary);
   const launchClashes = summary.combat.eventCounts.launch_clash;
+  const recoveryCounterLaunchClashes =
+    summary.combat.launchClashCauses.post_control_counter_launch;
   const clashesPerMinute = ratePerMinute(launchClashes, elapsed);
   const clashFollowUp = analyseClashFollowUps(summary);
   const players: PlayersById<BalanceLabPlayerFlow> = {
@@ -3776,9 +3781,10 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       id: 'launch_clash_loop',
       severity: launchClashes >= 6 && clashesPerMinute >= 10 ? 'critical' : 'warning',
       title: 'Launch-clash loop',
-      detail: `${launchClashes} launch clashes (${clashesPerMinute.toFixed(1)}/min) are counting as exchange outcomes while repeatedly cancelling commitments. ${describeClashFollowUps(clashFollowUp)}. Compare the action mix and resulting separation before treating fewer hits as healthier play.`,
+      detail: `${launchClashes} launch clashes (${clashesPerMinute.toFixed(1)}/min), including ${recoveryCounterLaunchClashes} attributed recovery counter${recoveryCounterLaunchClashes === 1 ? '' : 's'}, are counting as exchange outcomes while repeatedly cancelling commitments. ${describeClashFollowUps(clashFollowUp)}. Compare the action mix and resulting separation before treating fewer hits as healthier play.`,
       relatedGlobalTuning: [
         'startupClashGraceSeconds',
+        'postControlCounterLaunchClashGraceSeconds',
         'launchClashSeparationPadding',
         'launchClashRecoilMultiplier',
         'actionRecoveryControlMultiplier',

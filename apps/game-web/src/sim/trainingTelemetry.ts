@@ -6,6 +6,7 @@ import {
   CHARACTER_REGISTRY_FINGERPRINT,
 } from './characters';
 import { fingerprintDeterministicValue } from './fingerprint';
+import { fingerprintGameTuning } from './tuning';
 import type { FrameInput, GameState, PlayerId } from './types';
 
 const LEGACY_TRAINING_TELEMETRY_SCHEMA_VERSION = 'gw.training-telemetry.v2';
@@ -472,7 +473,7 @@ export class TrainingTelemetryTracker {
     return {
       balanceProfileId: metadata.balanceProfileId,
       rulesetVersion: metadata.rulesetVersion,
-      tuningFingerprint: fingerprintDeterministicValue(state.tuning),
+      tuningFingerprint: fingerprintGameTuning(state.tuning),
       scenario: cloneScenarioIdentity(metadata.scenario),
       characterRegistryFingerprint: CHARACTER_REGISTRY_FINGERPRINT,
       characterRulesFingerprint: resolveCharacterRulesFingerprint(

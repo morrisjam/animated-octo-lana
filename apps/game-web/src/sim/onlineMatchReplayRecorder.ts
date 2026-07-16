@@ -10,7 +10,6 @@ import {
   type CharacterId,
 } from './characters';
 import { computeStateChecksum } from './checksum';
-import { fingerprintDeterministicValue } from './fingerprint';
 import {
   ONLINE_MATCH_REPLAY_SCHEMA_VERSION,
   REPLAY_CANONICAL_DIGEST_ALGORITHM,
@@ -21,6 +20,7 @@ import {
   type ReplayStageIdentity,
 } from './replay';
 import { createInitialState, createStateSnapshot, nextDeterministicRandom, step } from './sim';
+import { fingerprintGameTuning } from './tuning';
 import type {
   FrameInput,
   GameRules,
@@ -296,10 +296,10 @@ export class OnlineMatchReplayRecorder {
       throw new Error('Replay tuning must be a complete object.');
     }
     const profile = resolveBalanceProfile(balanceProfileId);
-    const tuningFingerprint = fingerprintDeterministicValue(options.tuning);
+    const tuningFingerprint = fingerprintGameTuning(options.tuning);
     if (
       profile.id !== balanceProfileId
-      || tuningFingerprint !== fingerprintDeterministicValue(profile.tuning)
+      || tuningFingerprint !== fingerprintGameTuning(profile.tuning)
     ) {
       throw new Error(`Replay tuning does not match balance profile ${balanceProfileId}.`);
     }
@@ -509,7 +509,7 @@ export class OnlineMatchReplayRecorder {
           sessionId: this.options.sessionId,
           matchId: this.options.matchId,
           balanceProfileId: this.options.balanceProfileId,
-          tuningFingerprint: fingerprintDeterministicValue(this.options.tuning),
+          tuningFingerprint: fingerprintGameTuning(this.options.tuning),
           characterRegistryFingerprint: this.options.characterRegistryFingerprint,
           characterPackageVersions: { ...this.options.characterPackageVersions },
           stage: { ...this.options.stage },

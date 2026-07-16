@@ -6,6 +6,8 @@ import {
   validateReplayPayloadForArchive,
 } from './payload';
 
+const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
+
 const TUNING = {
   chainWindowSeconds: 1,
   playerMoveAccel: 2,
@@ -65,6 +67,14 @@ function fingerprint(value: unknown): string {
   return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
+function fingerprintTuning(tuning: Record<string, unknown>): string {
+  const fingerprintInput = { ...tuning };
+  if (fingerprintInput[ZERO_NEUTRAL_TUNING_KEY] === 0) {
+    delete fingerprintInput[ZERO_NEUTRAL_TUNING_KEY];
+  }
+  return fingerprint(fingerprintInput);
+}
+
 function input(moveX: number) {
   return {
     moveX,
@@ -79,7 +89,13 @@ function input(moveX: number) {
   };
 }
 
-function canonicalOnlinePayload(): ReplayPayload & Record<string, unknown> {
+function canonicalOnlinePayload(
+  tuningShape: 'legacy' | 'current' = 'legacy',
+): ReplayPayload & Record<string, unknown> {
+  const balanceTuning: Record<string, number> = { ...TUNING };
+  if (tuningShape === 'current') {
+    balanceTuning[ZERO_NEUTRAL_TUNING_KEY] = 0;
+  }
   const payload = {
     header: {
       payloadVersion: 1,
@@ -90,14 +106,14 @@ function canonicalOnlinePayload(): ReplayPayload & Record<string, unknown> {
       fixedDt: 1 / 60,
       advanceRngPerFrame: false,
       rules: { allowDunkWin: true },
-      balanceTuning: { ...TUNING },
+      balanceTuning,
       characterBalanceOverrides: {},
       onlineMatch: {
         schemaVersion: 'gw.online-match-replay.v1',
         sessionId: '11111111-1111-4111-8111-111111111111',
         matchId: '22222222-2222-4222-8222-222222222222',
         balanceProfileId: 'default',
-        tuningFingerprint: fingerprint(TUNING),
+        tuningFingerprint: fingerprintTuning(balanceTuning),
         characterRegistryFingerprint: 'gw.character-registry.v1:test',
         characterPackageVersions: { P1: '1.2.3', P2: '4.5.6' },
         stage: {
@@ -211,6 +227,55 @@ test('preserves the complete canonical online payload as a detached JSON value',
     (validation.payload as ReplayPayload & { archiveExtension: unknown }).archiveExtension,
     { correlationId: 'complete-field-preservation' },
   );
+});
+
+test('accepts exact legacy and current tuning shapes without rewriting archived payloads', () => {
+  const legacy = canonicalOnlinePayload('legacy');
+  const current = canonicalOnlinePayload('current');
+  assert.equal(
+    legacy.header.onlineMatch!.tuningFingerprint,
+    current.header.onlineMatch!.tuningFingerprint,
+  );
+
+  for (const [shape, rawPayload] of [['legacy', legacy], ['current', current]] as const) {
+    const expectedPayload = structuredClone(rawPayload);
+    const validation = validateReplayPayloadForArchive(rawPayload);
+    assert.equal(validation.ok, true);
+    if (!validation.ok) {
+      throw new Error(validation.errorMessage);
+    }
+    assert.deepEqual(validation.payload, expectedPayload);
+    assert.equal(validation.payload.integrity!.digest, expectedPayload.integrity!.digest);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        validation.payload.header.balanceTuning,
+        ZERO_NEUTRAL_TUNING_KEY,
+      ),
+      shape === 'current',
+    );
+  }
+});
+
+test('rejects canonical tuning shapes with any other missing or additional key', () => {
+  const missingKey = canonicalOnlinePayload('current');
+  delete missingKey.header.balanceTuning!.launchBasePower;
+  missingKey.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
+    missingKey.header.balanceTuning!,
+  );
+  missingKey.integrity!.digest = computeReplayCanonicalDigestForArchive(missingKey);
+
+  const additionalKey = canonicalOnlinePayload('current');
+  additionalKey.header.balanceTuning!.unexpectedTuningKey = 0;
+  additionalKey.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
+    additionalKey.header.balanceTuning!,
+  );
+  additionalKey.integrity!.digest = computeReplayCanonicalDigestForArchive(additionalKey);
+
+  for (const payload of [missingKey, additionalKey]) {
+    const validation = validateReplayPayloadForArchive(payload);
+    assert.equal(validation.ok, false);
+    assert.equal(validation.errorCode, 'invalid_online_identity');
+  }
 });
 
 test('rejects canonical metadata tampering instead of archiving a different identity', () => {

@@ -6,6 +6,7 @@ import {
   parseAiBatchRuleSnapshot,
 } from './aiBatchRuleComparison';
 import { createCharacterBalanceConfig } from './characterBalance';
+import { fingerprintDeterministicValue } from './fingerprint';
 import { createDefaultTuning } from './tuning';
 
 describe('AI batch rule comparison', () => {
@@ -78,5 +79,48 @@ describe('AI batch rule comparison', () => {
     tampered.aiBehaviorTuning.commitmentResetFrames = 12;
     expect(parseAiBatchRuleSnapshot(tampered)).toBeNull();
     expect(parseAiBatchRuleSnapshot(candidate)).toEqual(candidate);
+  });
+
+  test('parses legacy zero-default tuning snapshots with the current neutral fingerprint', () => {
+    const current = createAiBatchRuleSnapshot();
+    const {
+      postControlCounterLaunchClashGraceSeconds: _zeroNeutralField,
+      ...legacyTuning
+    } = current.tuning;
+    const legacy = {
+      ...current,
+      tuning: legacyTuning,
+      fingerprint: fingerprintDeterministicValue({
+        schemaVersion: current.schemaVersion,
+        tuning: legacyTuning,
+        characterBalanceOverrides: current.characterBalanceOverrides,
+        aiBehaviorTuning: current.aiBehaviorTuning,
+      }),
+    };
+
+    expect(current.fingerprint).toBe(legacy.fingerprint);
+    expect(parseAiBatchRuleSnapshot(legacy)).toEqual(current);
+    expect(parseAiBatchRuleSnapshot(legacy)?.tuning.postControlCounterLaunchClashGraceSeconds)
+      .toBe(0);
+  });
+
+  test('includes a non-zero post-control counter grace value in rule fingerprints', () => {
+    const baseline = createAiBatchRuleSnapshot();
+    const tuning = createDefaultTuning();
+    tuning.postControlCounterLaunchClashGraceSeconds = 0.05;
+    const candidate = createAiBatchRuleSnapshot(tuning);
+
+    expect(candidate.fingerprint).not.toBe(baseline.fingerprint);
+    expect(compareAiBatchRuleSnapshots(baseline, candidate)).toEqual({
+      policy: 'single_variable',
+      changes: [{
+        scope: 'global',
+        characterId: null,
+        path: 'postControlCounterLaunchClashGraceSeconds',
+        baselineValue: 0,
+        candidateValue: 0.05,
+        delta: 0.05,
+      }],
+    });
   });
 });

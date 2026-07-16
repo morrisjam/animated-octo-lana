@@ -14,6 +14,7 @@ import {
   restoreStateFromSnapshot,
   serialiseState,
   type SimulationActionStart,
+  type SimulationLaunchClash,
   STATE_SNAPSHOT_VERSION,
   step,
 } from './sim';
@@ -947,6 +948,102 @@ describe('launch recovery and spacing', () => {
     expect(p2Active.players.P1.helpless).toBeGreaterThan(0);
   });
 
+  test('post-control counter launch clashes only against a launch started after control return', () => {
+    const state = createInitialState();
+    state.tuning.postControlCounterLaunchClashGraceSeconds = 2 / 60;
+    state.tuning.closeRangeSeparationPadding = 0;
+    state.tuning.closeRangeSeparationImpulse = 0;
+    state.players.P1.pos = { x: -2.5, y: 0 };
+    state.players.P2.pos = { x: 2.5, y: 0 };
+    state.players.P1.helpless = FIXED_DT * 0.5;
+    state.players.P1.lastLaunchedBy = 'P2';
+    state.players.P1.postControlCounterPending = true;
+    state.players.P2.launchAttemptSerial = 4;
+
+    step(state, neutralInput(), FIXED_DT);
+    expect(state.players.P1.postControlCounterWindow).toBe(1);
+    expect(state.players.P1.postControlCounterOpponentLaunchSerialAtReturn).toBe(4);
+
+    const launchInput = neutralInput();
+    launchInput.p1.launch = true;
+    launchInput.p2.launch = true;
+    const clashes: SimulationLaunchClash[] = [];
+    for (let frame = 0; frame < 12 && clashes.length === 0; frame += 1) {
+      step(state, frame === 0 ? launchInput : neutralInput(), FIXED_DT, {
+        onActionStart: () => undefined,
+        onLaunchClash: (event) => clashes.push(event),
+      });
+    }
+
+    expect(clashes).toEqual([{
+      cause: 'post_control_counter_launch',
+      gracePlayerId: 'P1',
+    }]);
+    expect(state.players.P1.helpless).toBe(0);
+    expect(state.players.P2.helpless).toBe(0);
+    expect(state.players.P2.pos.x - state.players.P1.pos.x).toBeGreaterThan(14);
+  });
+
+  test('post-control counter launch does not armor against an attack already underway at return', () => {
+    const state = createInitialState();
+    state.tuning.postControlCounterLaunchClashGraceSeconds = 2 / 60;
+    state.players.P1.pos = { x: -2.5, y: 0 };
+    state.players.P2.pos = { x: 2.5, y: 0 };
+    state.players.P1.launchStartup = 0.02;
+    state.players.P1.postControlCounterLaunchEligible = true;
+    state.players.P1.postControlCounterOpponentLaunchSerialAtReturn = 5;
+    state.players.P2.launchAttemptSerial = 5;
+    state.players.P2.launchActive = 0.12;
+    const clashes: SimulationLaunchClash[] = [];
+
+    step(state, neutralInput(), FIXED_DT, {
+      onActionStart: () => undefined,
+      onLaunchClash: (event) => clashes.push(event),
+    });
+
+    expect(clashes).toEqual([]);
+    expect(state.players.P1.helpless).toBeGreaterThan(0);
+    expect(state.players.P2.chain).toBe(1);
+  });
+
+  test('the first accepted non-launch action consumes post-control counter eligibility', () => {
+    const state = createInitialState();
+    state.tuning.postControlCounterLaunchClashGraceSeconds = 2 / 60;
+    state.players.P1.postControlCounterWindow = 1;
+    state.players.P1.postControlCounterOpponentLaunchSerialAtReturn = 3;
+    const input = neutralInput();
+    input.p1.parry = true;
+
+    step(state, input, FIXED_DT);
+
+    expect(state.players.P1.parry).toBeGreaterThan(0);
+    expect(state.players.P1.postControlCounterWindow).toBe(0);
+    expect(state.players.P1.postControlCounterOpponentLaunchSerialAtReturn).toBe(0);
+    expect(state.players.P1.postControlCounterLaunchEligible).toBe(false);
+  });
+
+  test('launch-break recovery arms the post-control counter window after recovery, not on spend', () => {
+    const state = createInitialState();
+    state.tuning.postControlCounterLaunchClashGraceSeconds = 2 / 60;
+    state.players.P1.helpless = 1;
+    state.players.P1.lastLaunchedBy = 'P2';
+    state.players.P1.postControlCounterPending = true;
+    const input = neutralInput();
+    input.p1.breakLaunch = true;
+
+    step(state, input, FIXED_DT);
+    expect(state.players.P1.postControlCounterWindow).toBe(0);
+    expect(state.players.P1.postControlCounterPending).toBe(true);
+
+    for (let frame = 0; frame < 120 && state.players.P1.stunned > 0; frame += 1) {
+      step(state, neutralInput(), FIXED_DT);
+    }
+
+    expect(state.players.P1.stunned).toBe(0);
+    expect(state.players.P1.postControlCounterPending).toBe(false);
+    expect(state.players.P1.postControlCounterWindow).toBeGreaterThan(0);
+  });
+
   test('launch activation uses only frame-start clash state for both player orders', () => {
     const p2Active = createInitialState();
     const p1Active = createInitialState();
@@ -1278,6 +1375,60 @@ describe('state snapshot and restore', () => {
     }));
 
     expect(restored.tuning).toEqual(createDefaultTuning());
+  });
+
+  test('deserialise v2 snapshots without post-control counter fields as neutral state', () => {
+    const state = createStateSnapshot(createInitialState({ seed: 2027 }));
+    const legacyTuning = state.tuning as Partial<typeof state.tuning>;
+    delete legacyTuning.postControlCounterLaunchClashGraceSeconds;
+    for (const playerId of ['P1', 'P2'] as const) {
+      const legacyPlayer = state.players[playerId] as Partial<PlayerState>;
+      delete legacyPlayer.launchAttemptSerial;
+      delete legacyPlayer.postControlCounterPending;
+      delete legacyPlayer.postControlCounterWindow;
+      delete legacyPlayer.postControlCounterOpponentLaunchSerialAtReturn;
+      delete legacyPlayer.postControlCounterLaunchEligible;
+    }
+
+    const restored = deserialiseState(JSON.stringify({ version: 2, state }));
+
+    expect(restored.tuning.postControlCounterLaunchClashGraceSeconds).toBe(0);
+    for (const playerId of ['P1', 'P2'] as const) {
+      expect(restored.players[playerId]).toMatchObject({
+        launchAttemptSerial: 0,
+        postControlCounterPending: false,
+        postControlCounterWindow: 0,
+        postControlCounterOpponentLaunchSerialAtReturn: 0,
+        postControlCounterLaunchEligible: false,
+      });
+    }
+  });
+
+  test('snapshot and checksum preserve active post-control counter state', () => {
+    const state = createInitialState({ seed: 2028 });
+    state.tuning.postControlCounterLaunchClashGraceSeconds = 2 / 60;
+    Object.assign(state.players.P1, {
+      launchAttemptSerial: 7,
+      postControlCounterPending: false,
+      postControlCounterWindow: 0,
+      postControlCounterOpponentLaunchSerialAtReturn: 5,
+      postControlCounterLaunchEligible: true,
+      launchStartup: 1 / 60,
+    });
+    const checksum = computeStateChecksum(state);
+
+    const restored = restoreStateFromSnapshot(createStateSnapshot(state));
+    expect(restored.players.P1).toMatchObject({
+      launchAttemptSerial: 7,
+      postControlCounterOpponentLaunchSerialAtReturn: 5,
+      postControlCounterLaunchEligible: true,
+    });
+    expect(computeStateChecksum(restored)).toBe(checksum);
+
+    restored.players.P1.launchAttemptSerial = 0;
+    restored.players.P1.postControlCounterOpponentLaunchSerialAtReturn = 0;
+    restored.players.P1.postControlCounterLaunchEligible = false;
+    expect(computeStateChecksum(restored)).not.toBe(checksum);
   });
 
   test('deserialise rejects unsupported snapshot envelope versions', () => {

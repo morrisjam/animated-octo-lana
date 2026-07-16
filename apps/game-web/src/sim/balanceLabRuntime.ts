@@ -12,8 +12,7 @@ import {
   cloneCharacterBalanceOverrides,
   type CharacterBalanceOverrides,
 } from './characterBalance';
-import { fingerprintDeterministicValue } from './fingerprint';
-import { sanitiseTuning } from './tuning';
+import { fingerprintGameTuning, sanitiseTuning } from './tuning';
 import type { GameTuning } from './types';
 
 export type BalanceLabSampleStopReason = 'target_reached' | 'round_finished_early';
@@ -67,7 +66,7 @@ export function evaluateBalanceLabSampleStop(
 }
 
 export function fingerprintBalanceTuning(tuning: GameTuning): string {
-  return fingerprintDeterministicValue(tuning);
+  return fingerprintGameTuning(tuning);
 }
 
 export function selectLocalCharacterBalanceOverrides(

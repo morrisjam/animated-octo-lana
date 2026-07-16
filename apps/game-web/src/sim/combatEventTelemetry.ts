@@ -8,14 +8,21 @@ import type {
   PlayersById,
   ProjectileState,
 } from './types';
-import type { SimulationAction, SimulationActionStart } from './sim';
+import type {
+  SimulationAction,
+  SimulationActionStart,
+  SimulationLaunchClash,
+  SimulationLaunchClashCause,
+} from './sim';
 
 export const LEGACY_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v2';
-export const PREVIOUS_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v3';
-export const COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v4';
+export const INTERMEDIATE_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v3';
+export const PREVIOUS_COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v4';
+export const COMBAT_EVENT_SCHEMA_VERSION = 'gw.combat-events.v5';
 
 export type CombatEventSchemaVersion =
   | typeof LEGACY_COMBAT_EVENT_SCHEMA_VERSION
+  | typeof INTERMEDIATE_COMBAT_EVENT_SCHEMA_VERSION
   | typeof PREVIOUS_COMBAT_EVENT_SCHEMA_VERSION
   | typeof COMBAT_EVENT_SCHEMA_VERSION;
 
@@ -41,6 +48,7 @@ export type CombatAction = SimulationAction;
 export type CombatDistanceBand = 'point_blank' | 'pressure' | 'mid' | 'long';
 export type CombatEventOutcome = 'impact' | 'expired_or_culled' | 'recovery' | 'win' | 'resolved';
 export type CombatMovementIntent = 'approach' | 'orbit' | 'retreat' | 'idle' | 'uncontrollable';
+export type CombatLaunchClashCause = SimulationLaunchClashCause | 'unattributed';
 
 export interface CombatDistanceTransitionPlayerContext {
   movementIntent: CombatMovementIntent;
@@ -82,6 +90,9 @@ export interface CombatTelemetryEvent {
   separationSpeed?: number;
   actorFuelPercent?: number;
   targetFuelPercent?: number;
+  launchClashCause?: CombatLaunchClashCause;
+  launchClashAttribution?: 'simulation' | 'inferred';
+  launchClashGracePlayerId?: PlayerId;
 }
 
 export interface CombatResourceTelemetry {
@@ -104,6 +115,7 @@ export interface CombatEventTelemetrySummary {
   eventCount: number;
   eventCounts: Record<CombatEventType, number>;
   events: CombatTelemetryEvent[];
+  launchClashCauses: Record<CombatLaunchClashCause, number>;
   resources: PlayersById<CombatResourceTelemetry>;
   spacingBands: CombatSpacingBandTelemetry;
 }
@@ -419,6 +431,7 @@ export class CombatEventTelemetryTracker {
     state: GameState,
     dt: number,
     acceptedActionStarts?: readonly SimulationActionStart[],
+    launchClashes?: readonly SimulationLaunchClash[],
   ): void {
     this.frame += 1;
     this.elapsedSeconds += Math.max(0, dt);
@@ -454,7 +467,7 @@ export class CombatEventTelemetryTracker {
         this.recordActionStarts('P1', frameInput.p1, previous.players.P1, current.players.P1, current);
         this.recordActionStarts('P2', frameInput.p2, previous.players.P2, current.players.P2, current);
       }
-      this.recordCombatOutcomes(previous, current, dt);
+      this.recordCombatOutcomes(previous, current, dt, launchClashes);
       this.recordResources('P1', previous.players.P1, current.players.P1, dt);
       this.recordResources('P2', previous.players.P2, current.players.P2, dt);
       if (!previous.winner && current.winner) {
@@ -485,6 +498,20 @@ export class CombatEventTelemetryTracker {
       eventCount: this.events.length,
       eventCounts: { ...this.eventCounts },
       events: this.events.map((event) => ({ ...event })),
+      launchClashCauses: this.events.reduce<Record<CombatLaunchClashCause, number>>(
+        (counts, event) => {
+          if (event.type === 'launch_clash') {
+            counts[event.launchClashCause ?? 'unattributed'] += 1;
+          }
+          return counts;
+        },
+        {
+          simultaneous_active: 0,
+          global_startup_grace: 0,
+          post_control_counter_launch: 0,
+          unattributed: 0,
+        },
+      ),
       resources: {
         P1: toResourceSummary('P1'),
         P2: toResourceSummary('P2'),
@@ -568,6 +595,7 @@ export class CombatEventTelemetryTracker {
     previous: TrackedState,
     current: TrackedState,
     dt: number,
+    launchClashes?: readonly SimulationLaunchClash[],
   ): void {
     const specialResolvedActors = new Set<PlayerId>();
     for (const attackerId of ['P1', 'P2'] as const) {
@@ -630,16 +658,35 @@ export class CombatEventTelemetryTracker {
       }
     }
 
-    const clashTriggered = previous.players.P1.launchFlash <= 0
-      && previous.players.P2.launchFlash <= 0
-      && current.players.P1.launchFlash > 0
-      && current.players.P2.launchFlash > 0
-      && current.players.P1.helpless <= 0
-      && current.players.P2.helpless <= 0
-      && current.players.P1.launchActive <= 0
-      && current.players.P2.launchActive <= 0;
-    if (clashTriggered) {
-      this.pushEvent({ type: 'launch_clash' });
+    if (launchClashes !== undefined) {
+      for (const clash of launchClashes) {
+        this.pushEvent({
+          type: 'launch_clash',
+          distance: roundMetric(Math.hypot(
+            current.players.P2.pos.x - current.players.P1.pos.x,
+            current.players.P2.pos.y - current.players.P1.pos.y,
+          ), 2),
+          launchClashCause: clash.cause,
+          launchClashAttribution: 'simulation',
+          launchClashGracePlayerId: clash.gracePlayerId ?? undefined,
+        });
+      }
+    } else {
+      const clashTriggered = previous.players.P1.launchFlash <= 0
+        && previous.players.P2.launchFlash <= 0
+        && current.players.P1.launchFlash > 0
+        && current.players.P2.launchFlash > 0
+        && current.players.P1.helpless <= 0
+        && current.players.P2.helpless <= 0
+        && current.players.P1.launchActive <= 0
+        && current.players.P2.launchActive <= 0;
+      if (clashTriggered) {
+        this.pushEvent({
+          type: 'launch_clash',
+          launchClashCause: 'unattributed',
+          launchClashAttribution: 'inferred',
+        });
+      }
     }
 
     const spawnedIds = new Set<number>();

@@ -3275,15 +3275,15 @@ function formatSummaryMarkdown(report: BatchReport): string {
     '',
     'Set results can expose AI-policy or kit asymmetry, but they are not the balancing target or score.',
     '',
-    '| P1 | P2 | Difficulty | Games | P1 wins | P2 wins | Draws | Timeouts | Avg set sec | Avg rounds | P1 launch conv | P2 launch conv | Accepted starts | Clashes / round | Dunk hits | Specials | Projectile impacts | Contact | Point blank |',
-    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    '| P1 | P2 | Difficulty | Games | P1 wins | P2 wins | Draws | Timeouts | Avg set sec | Avg rounds | P1 launch conv | P2 launch conv | Accepted starts | Clashes / round | Recovery clashes | Dunk hits | Specials | Projectile impacts | Contact | Point blank |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
   );
 
   for (const summary of report.summaries) {
     const telemetry = summary.telemetry;
     const rounds = Math.max(1, telemetry.rounds);
     lines.push(
-      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${summary.games} | ${summary.p1SetWins} | ${summary.p2SetWins} | ${summary.drawnSets} | ${summary.totalRoundTimeouts} | ${summary.averageSetSeconds.toFixed(2)} | ${summary.averageRoundsPerSet.toFixed(2)} | ${(telemetry.players.P1.launchConversionRate * 100).toFixed(1)}% | ${(telemetry.players.P2.launchConversionRate * 100).toFixed(1)}% | ${telemetry.players.P1.acceptedActionStarts}/${telemetry.players.P2.acceptedActionStarts} | ${(telemetry.eventCounts.launch_clash / rounds).toFixed(2)} | ${telemetry.players.P1.dunkHits}/${telemetry.players.P2.dunkHits} | ${telemetry.players.P1.specialResolves}/${telemetry.players.P2.specialResolves} | ${telemetry.players.P1.projectileImpacts}/${telemetry.players.P2.projectileImpacts} | ${(telemetry.spacing.contactRatio * 100).toFixed(1)}% | ${(telemetry.spacing.pointBlankRatio * 100).toFixed(1)}% |`,
+      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${summary.games} | ${summary.p1SetWins} | ${summary.p2SetWins} | ${summary.drawnSets} | ${summary.totalRoundTimeouts} | ${summary.averageSetSeconds.toFixed(2)} | ${summary.averageRoundsPerSet.toFixed(2)} | ${(telemetry.players.P1.launchConversionRate * 100).toFixed(1)}% | ${(telemetry.players.P2.launchConversionRate * 100).toFixed(1)}% | ${telemetry.players.P1.acceptedActionStarts}/${telemetry.players.P2.acceptedActionStarts} | ${(telemetry.eventCounts.launch_clash / rounds).toFixed(2)} | ${telemetry.launchClashCauses.post_control_counter_launch} | ${telemetry.players.P1.dunkHits}/${telemetry.players.P2.dunkHits} | ${telemetry.players.P1.specialResolves}/${telemetry.players.P2.specialResolves} | ${telemetry.players.P1.projectileImpacts}/${telemetry.players.P2.projectileImpacts} | ${(telemetry.spacing.contactRatio * 100).toFixed(1)}% | ${(telemetry.spacing.pointBlankRatio * 100).toFixed(1)}% |`,
     );
   }
 

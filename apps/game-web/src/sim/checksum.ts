@@ -1,5 +1,6 @@
 import type { GameState } from './types';
 import { fingerprintDeterministicValue } from './fingerprint';
+import { fingerprintGameTuning } from './tuning';
 
 function addHashNumber(hash: number, value: number): number {
   const next = (hash ^ (value >>> 0)) >>> 0;
@@ -27,7 +28,7 @@ export function computeStateChecksum(state: GameState): number {
   hash = addHashNumber(hash, state.winner === 'P1' ? 1 : state.winner === 'P2' ? 2 : 0);
   hash = addHashNumber(hash, state.projectiles.length);
   hash = addHashNumber(hash, state.rules.allowDunkWin ? 1 : 0);
-  hash = addHashNumber(hash, hashString(fingerprintDeterministicValue(state.tuning)));
+  hash = addHashNumber(hash, hashString(fingerprintGameTuning(state.tuning)));
   hash = addHashNumber(hash, hashString(fingerprintDeterministicValue(state.characterBalanceOverrides ?? {})));
 
   const players = [state.players.P1, state.players.P2];
@@ -43,6 +44,20 @@ export function computeStateChecksum(state: GameState): number {
     hash = addHashNumber(hash, quantise(player.stunned));
     hash = addHashNumber(hash, player.launchBreaks);
     hash = addHashNumber(hash, player.chain);
+    if (
+      player.launchAttemptSerial !== 0
+      || player.postControlCounterPending
+      || player.postControlCounterWindow > 0
+      || player.postControlCounterOpponentLaunchSerialAtReturn !== 0
+      || player.postControlCounterLaunchEligible
+    ) {
+      hash = addHashNumber(hash, 0x5043434c);
+      hash = addHashNumber(hash, player.launchAttemptSerial);
+      hash = addHashNumber(hash, player.postControlCounterPending ? 1 : 0);
+      hash = addHashNumber(hash, quantise(player.postControlCounterWindow));
+      hash = addHashNumber(hash, player.postControlCounterOpponentLaunchSerialAtReturn);
+      hash = addHashNumber(hash, player.postControlCounterLaunchEligible ? 1 : 0);
+    }
   }
 
   for (const projectile of state.projectiles) {

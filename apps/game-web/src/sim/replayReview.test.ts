@@ -204,4 +204,27 @@ describe('replay review data', () => {
     expect(flowReview.contactWindows.length).toBeGreaterThan(0);
     expect(windowFrames).toBe(flowReview.telemetry.spacing.contactFrames);
   });
+
+  test('carries simulator launch-clash attribution into replay telemetry', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: -2.5, y: 0 };
+    state.players.P2.pos = { x: 2.5, y: 0 };
+    state.players.P1.launchActive = 0.1;
+    state.players.P2.launchActive = 0.1;
+
+    const review = buildReplayReviewDataFromRounds([{
+      label: 'Clash attribution audit',
+      initialState: state,
+      inputs: [neutralFrameInput()],
+    }]);
+    const clash = review.flowReviews[0].telemetry.combat.events.find(
+      (event) => event.type === 'launch_clash',
+    );
+
+    expect(clash).toMatchObject({
+      launchClashCause: 'simultaneous_active',
+      launchClashAttribution: 'simulation',
+    });
+    expect(clash).not.toHaveProperty('actorId');
+  });
 });

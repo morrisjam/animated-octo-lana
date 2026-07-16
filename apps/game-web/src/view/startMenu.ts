@@ -85,7 +85,7 @@ export interface MatchOverScreenOptions {
   onSecondary?: () => void;
 }
 
-type StartScreen =
+export type StartScreen =
   | 'title'
   | 'login'
   | 'main'
@@ -97,6 +97,43 @@ type StartScreen =
   | 'rankings'
   | 'settings'
   | 'match_over';
+
+export type StartMenuMotionDirection = 'inward' | 'outward' | 'replace';
+
+const START_SCREEN_DEPTH: Record<Exclude<StartScreen, 'match_over'>, number> = {
+  title: 0,
+  login: 1,
+  main: 2,
+  online: 3,
+  local: 3,
+  replays: 3,
+  rankings: 3,
+  settings: 3,
+  online_ranked: 4,
+  online_room: 4,
+};
+
+export function resolveStartMenuMotionDirection(
+  previousScreen: StartScreen,
+  nextScreen: StartScreen,
+): StartMenuMotionDirection {
+  if (
+    previousScreen === nextScreen
+    || previousScreen === 'match_over'
+    || nextScreen === 'match_over'
+  ) {
+    return 'replace';
+  }
+  const previousDepth = START_SCREEN_DEPTH[previousScreen];
+  const nextDepth = START_SCREEN_DEPTH[nextScreen];
+  if (nextDepth > previousDepth) {
+    return 'inward';
+  }
+  if (nextDepth < previousDepth) {
+    return 'outward';
+  }
+  return 'replace';
+}
 
 interface StartMenuOptions {
   onlineMenuEnabled?: boolean;
@@ -1321,12 +1358,11 @@ export class StartMenu {
   public showMatchOver(winner: PlayerId, p1Wins: number, p2Wins: number): void {
     this.resetMatchOverActions();
     this.root.hidden = false;
-    this.currentScreen = 'match_over';
     this.prevPadStateByIndex.clear();
     this.matchTitle.textContent = `${winner} wins the match`;
     this.matchSubtitle.textContent = `Final rounds: P1 ${p1Wins} - ${p2Wins} P2`;
     this.setMatchSelection(0);
-    this.refreshPanelVisibility();
+    this.setScreen('match_over');
   }
 
   public showMatchOverScreen(options: MatchOverScreenOptions): void {
@@ -1346,12 +1382,11 @@ export class StartMenu {
     }
 
     this.root.hidden = false;
-    this.currentScreen = 'match_over';
     this.prevPadStateByIndex.clear();
     this.matchTitle.textContent = options.title ?? 'Match Over';
     this.matchSubtitle.textContent = options.subtitle ?? '';
     this.setMatchSelection(0);
-    this.refreshPanelVisibility();
+    this.setScreen('match_over');
   }
 
   public dispose(): void {
@@ -1576,10 +1611,52 @@ export class StartMenu {
     }
   }
 
+  private getPanelForScreen(screen: StartScreen): HTMLDivElement {
+    switch (screen) {
+      case 'title':
+        return this.titlePanel;
+      case 'login':
+        return this.loginPanel;
+      case 'main':
+        return this.mainPanel;
+      case 'online':
+        return this.onlinePanel;
+      case 'online_ranked':
+        return this.onlineRankedPanel;
+      case 'online_room':
+        return this.onlineRoomPanel;
+      case 'local':
+        return this.localPanel;
+      case 'replays':
+        return this.replaysPanel;
+      case 'rankings':
+        return this.rankingsPanel;
+      case 'settings':
+        return this.settingsPanel;
+      case 'match_over':
+        return this.matchOverPanel;
+    }
+  }
+
+  private playScreenTransition(previousScreen: StartScreen, nextScreen: StartScreen): void {
+    const panel = this.getPanelForScreen(nextScreen);
+    const direction = resolveStartMenuMotionDirection(previousScreen, nextScreen);
+    panel.classList.remove(
+      'start-panel-enter-inward',
+      'start-panel-enter-outward',
+      'start-panel-enter-replace',
+    );
+    // A layout read restarts the same directional animation when revisiting a screen.
+    void panel.offsetWidth;
+    panel.classList.add(`start-panel-enter-${direction}`);
+  }
+
   private setScreen(screen: StartScreen): void {
+    const previousScreen = this.currentScreen;
     this.currentScreen = screen;
     this.refreshPanelVisibility();
     this.refreshRowHighlights();
+    this.playScreenTransition(previousScreen, screen);
     if (
       screen === 'replays'
       && this.options.onLoadLocalFlowReviews

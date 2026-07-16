@@ -35,6 +35,7 @@ export function createDefaultTuning(): GameTuning {
     playerMoveAccel: PLAYER_MOVE_ACCEL,
     playerVelocityDamping: PLAYER_VELOCITY_DAMPING,
     actionRecoveryControlMultiplier: 1,
+    combatBoostReacquireDelaySeconds: 0,
     helplessVelocityDamping: HELPLESS_VELOCITY_DAMPING,
     helplessReleaseSpeedRatio: DEFAULT_HELPLESS_RELEASE_SPEED_RATIO,
     boostHoldSpeed: BOOST_HOLD_SPEED,
@@ -76,6 +77,7 @@ export function sanitiseTuning(tuning: Partial<GameTuning>): GameTuning {
     playerMoveAccel: clamp(value('playerMoveAccel'), 1, 400),
     playerVelocityDamping: clamp(value('playerVelocityDamping'), 0.5, 0.9995),
     actionRecoveryControlMultiplier: clamp(value('actionRecoveryControlMultiplier'), 0, 1),
+    combatBoostReacquireDelaySeconds: clamp(value('combatBoostReacquireDelaySeconds'), 0, 1),
     helplessVelocityDamping: clamp(value('helplessVelocityDamping'), 0.5, 0.9999),
     helplessReleaseSpeedRatio: clamp(value('helplessReleaseSpeedRatio'), 0.05, 2),
     boostHoldSpeed: clamp(value('boostHoldSpeed'), 1, 300),
@@ -113,6 +115,9 @@ export function createGameTuningFingerprintInput(tuning: GameTuning): Partial<Ga
   const fingerprintInput: Partial<GameTuning> = { ...tuning };
   if (fingerprintInput.postControlCounterLaunchClashGraceSeconds === 0) {
     delete fingerprintInput.postControlCounterLaunchClashGraceSeconds;
+  }
+  if (fingerprintInput.combatBoostReacquireDelaySeconds === 0) {
+    delete fingerprintInput.combatBoostReacquireDelaySeconds;
   }
   return fingerprintInput;
 }

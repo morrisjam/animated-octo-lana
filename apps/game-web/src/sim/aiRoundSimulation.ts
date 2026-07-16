@@ -33,12 +33,13 @@ import {
   createInitialState,
   step,
   type SimulationActionStart,
+  type SimulationCombatBoostLockFrame,
   type SimulationLaunchClash,
 } from './sim';
 import type { FrameInput, GameRules, GameTuning, PlayerId, PlayersById } from './types';
 
 export const AI_ROUND_FIXED_DT = 1 / 60;
-export const AI_ROUND_DECISION_FLOW_SCHEMA_VERSION = 'gw.ai-round-decision-flow.v2';
+export const AI_ROUND_DECISION_FLOW_SCHEMA_VERSION = 'gw.ai-round-decision-flow.v3';
 
 export interface AiRoundDecisionFlowPlayerSummary {
   tacticalRepositionOpportunityFrames: number;
@@ -47,6 +48,10 @@ export interface AiRoundDecisionFlowPlayerSummary {
   tacticalRepositionFrames: number;
   postControlCounterstepWindows: number;
   postControlCounterstepFrames: number;
+  combatBoostLockFrames: number;
+  combatBoostDelayFrames: number;
+  combatBoostHeldInputFrames: number;
+  combatBoostCancellations: number;
 }
 
 export interface AiRoundDecisionFlowSummary {
@@ -112,7 +117,30 @@ function createDecisionFlowPlayerSummary(): AiRoundDecisionFlowPlayerSummary {
     tacticalRepositionFrames: 0,
     postControlCounterstepWindows: 0,
     postControlCounterstepFrames: 0,
+    combatBoostLockFrames: 0,
+    combatBoostDelayFrames: 0,
+    combatBoostHeldInputFrames: 0,
+    combatBoostCancellations: 0,
   };
+}
+
+function recordCombatBoostLocks(
+  summary: AiRoundDecisionFlowSummary,
+  events: readonly SimulationCombatBoostLockFrame[],
+): void {
+  for (const event of events) {
+    const player = summary.players[event.playerId];
+    player.combatBoostLockFrames += 1;
+    if (event.phase === 'delay') {
+      player.combatBoostDelayFrames += 1;
+    }
+    if (event.inputHeld) {
+      player.combatBoostHeldInputFrames += 1;
+    }
+    if (event.cancelledActiveBoost) {
+      player.combatBoostCancellations += 1;
+    }
+  }
 }
 
 function recordDecisionFlow(
@@ -222,10 +250,13 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
     };
     const acceptedActionStarts: SimulationActionStart[] = [];
     const launchClashes: SimulationLaunchClash[] = [];
+    const combatBoostLocks: SimulationCombatBoostLockFrame[] = [];
     step(state, frameInput, fixedDt, {
       onActionStart: (event) => acceptedActionStarts.push(event),
       onLaunchClash: (event) => launchClashes.push(event),
+      onCombatBoostLockFrame: (event) => combatBoostLocks.push(event),
     });
+    recordCombatBoostLocks(decisionFlow, combatBoostLocks);
     aiDecisionTelemetry?.recordFrame(frame, {
       P1: p1AiTick.decision,
       P2: p2AiTick.decision,

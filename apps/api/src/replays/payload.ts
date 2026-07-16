@@ -94,13 +94,17 @@ const PLAYER_INPUT_KEYS = [
   'breakLaunch',
 ] as const;
 
-const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
+const ZERO_DEFAULT_TUNING_KEYS = [
+  'postControlCounterLaunchClashGraceSeconds',
+  'combatBoostReacquireDelaySeconds',
+] as const;
 
 const GAME_TUNING_KEYS = [
   'chainWindowSeconds',
   'playerMoveAccel',
   'playerVelocityDamping',
   'actionRecoveryControlMultiplier',
+  'combatBoostReacquireDelaySeconds',
   'helplessVelocityDamping',
   'helplessReleaseSpeedRatio',
   'boostHoldSpeed',
@@ -114,7 +118,7 @@ const GAME_TUNING_KEYS = [
   'launchInputInfluence',
   'launchHelplessSeconds',
   'startupClashGraceSeconds',
-  ZERO_NEUTRAL_TUNING_KEY,
+  'postControlCounterLaunchClashGraceSeconds',
   'launchClashSeparationPadding',
   'launchClashRecoilMultiplier',
   'closeRangeSeparationPadding',
@@ -129,9 +133,15 @@ const GAME_TUNING_KEYS = [
   'dunkRecoveryFuelFraction',
 ] as const;
 
-const LEGACY_GAME_TUNING_KEYS = GAME_TUNING_KEYS.filter((key) => (
-  key !== ZERO_NEUTRAL_TUNING_KEY
-));
+function hasSupportedGameTuningKeys(value: Record<string, unknown>): boolean {
+  const actualKeys = Object.keys(value);
+  return actualKeys.every((key) => GAME_TUNING_KEYS.includes(key as typeof GAME_TUNING_KEYS[number]))
+    && GAME_TUNING_KEYS.every((key) => (
+      actualKeys.includes(key) || ZERO_DEFAULT_TUNING_KEYS.includes(
+        key as typeof ZERO_DEFAULT_TUNING_KEYS[number],
+      )
+    ));
+}
 
 function fail(
   errorCode: ReplayPayloadValidationErrorCode,
@@ -253,8 +263,10 @@ function fingerprintDeterministicValue(value: unknown): string {
 
 function fingerprintGameTuning(tuning: Record<string, unknown>): string {
   const fingerprintInput = { ...tuning };
-  if (fingerprintInput[ZERO_NEUTRAL_TUNING_KEY] === 0) {
-    delete fingerprintInput[ZERO_NEUTRAL_TUNING_KEY];
+  for (const key of ZERO_DEFAULT_TUNING_KEYS) {
+    if (fingerprintInput[key] === 0) {
+      delete fingerprintInput[key];
+    }
   }
   return fingerprintDeterministicValue(fingerprintInput);
 }
@@ -378,10 +390,7 @@ function validateOnlineIdentity(
     return false;
   }
   return isObjectRecord(header.balanceTuning)
-    && (
-      hasExactKeys(header.balanceTuning, GAME_TUNING_KEYS)
-      || hasExactKeys(header.balanceTuning, LEGACY_GAME_TUNING_KEYS)
-    )
+    && hasSupportedGameTuningKeys(header.balanceTuning)
     && Object.values(header.balanceTuning).every((value) => (
       typeof value === 'number' && Number.isFinite(value)
     ))

@@ -83,6 +83,46 @@ describe('LocalRoundReplayRecorder', () => {
     )).toBeNull();
   });
 
+  it('replays a nonzero combat boost lock with checksum-verified latent state', () => {
+    const state = createInitialState({ seed: 90211 });
+    state.tuning.combatBoostReacquireDelaySeconds = 0.18;
+    const recorder = new LocalRoundReplayRecorder({
+      rulesetVersion: 'test-rules',
+      simBuildHash: 'test-build',
+      roundNumber: 1,
+      seed: state.seed,
+      loadout: state.loadout,
+      fixedDt: 1 / 60,
+      rules: state.rules,
+      tuning: state.tuning,
+      characterBalanceOverrides: state.characterBalanceOverrides,
+      sourceLabel: 'Combat boost lock replay',
+    });
+    const inputs: FrameInput[] = [
+      {
+        p1: { moveX: 1, moveY: 0, boost: true, superBoost: false, special: false, launch: false, dunk: false, parry: false, breakLaunch: false },
+        p2: { moveX: 0, moveY: 0, boost: false, superBoost: false, special: false, launch: false, dunk: false, parry: false, breakLaunch: false },
+      },
+      {
+        p1: { moveX: 1, moveY: 0, boost: true, superBoost: false, special: false, launch: true, dunk: false, parry: false, breakLaunch: false },
+        p2: { moveX: 0, moveY: 0, boost: false, superBoost: false, special: false, launch: false, dunk: false, parry: false, breakLaunch: false },
+      },
+    ];
+
+    for (const input of inputs) {
+      step(state, input, 1 / 60);
+      recorder.recordFrame(input, state);
+    }
+
+    const payload = recorder.buildPayload();
+    expect(payload?.header.balanceTuning?.combatBoostReacquireDelaySeconds).toBe(0.18);
+    expect(validateReplayPayload(payload).ok).toBe(true);
+    expect(findFirstChecksumMismatch(
+      runReplay(payload as NonNullable<typeof payload>).checksums,
+      payload?.expectedChecksums ?? [],
+    )).toBeNull();
+  });
+
   it('does not emit an empty replay', () => {
     const state = createInitialState({ seed: 7 });
     const recorder = new LocalRoundReplayRecorder({

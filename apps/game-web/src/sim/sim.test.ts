@@ -822,6 +822,240 @@ describe('launch recovery and spacing', () => {
     expect(committed.players.P1.boostActive).toBe(false);
   });
 
+  test('combat boost lock is opt-in and preserves inherited momentum after an accepted launch', () => {
+    const boosted = createInitialState();
+    boosted.players.P1.vel = { x: -40, y: 0 };
+    const startBoost = neutralInput();
+    startBoost.p1.moveX = -1;
+    startBoost.p1.boost = true;
+    step(boosted, startBoost, FIXED_DT);
+    expect(boosted.players.P1.boostActive).toBe(true);
+    boosted.players.P1.vel = { x: -40, y: 0 };
+
+    const baseline = restoreStateFromSnapshot(createStateSnapshot(boosted));
+    const candidate = restoreStateFromSnapshot(createStateSnapshot(boosted));
+    candidate.tuning.combatBoostReacquireDelaySeconds = 0.18;
+    const input = neutralInput();
+    input.p1.moveX = 1;
+    input.p1.boost = true;
+    input.p1.launch = true;
+    const lockFrames: Array<{
+      phase: 'commitment' | 'recovery' | 'delay';
+      inputHeld: boolean;
+      cancelledActiveBoost: boolean;
+    }> = [];
+    const actionStarts: SimulationActionStart[] = [];
+
+    step(baseline, input, FIXED_DT);
+    step(candidate, input, FIXED_DT, {
+      onActionStart: (event) => actionStarts.push(event),
+      onCombatBoostLockFrame: (event) => {
+        if (event.playerId === 'P1') {
+          lockFrames.push(event);
+        }
+      },
+    });
+
+    expect(baseline.players.P1.boostActive).toBe(true);
+    expect(candidate.players.P1.boostActive).toBe(false);
+    expect(candidate.players.P1.vel.x).toBeLessThan(0);
+    expect(candidate.players.P1.combatBoostLockRemaining).toBeCloseTo(0.18);
+    expect(actionStarts).toContainEqual({ playerId: 'P1', action: 'launch' });
+    expect(lockFrames).toEqual([{
+      playerId: 'P1',
+      phase: 'commitment',
+      inputHeld: true,
+      cancelledActiveBoost: true,
+    }]);
+  });
+
+  test.each(['special', 'dunk', 'parry'] as const)(
+    'accepted %s commitment cancels ordinary boost and arms the lock',
+    (action) => {
+      const state = createInitialState();
+      state.tuning.combatBoostReacquireDelaySeconds = 0.18;
+      const boost = neutralInput();
+      boost.p1.moveX = 1;
+      boost.p1.boost = true;
+      step(state, boost, FIXED_DT);
+      expect(state.players.P1.boostActive).toBe(true);
+
+      const commitment = neutralInput();
+      commitment.p1.boost = true;
+      commitment.p1[action] = true;
+      const actionStarts: SimulationActionStart[] = [];
+      step(state, commitment, FIXED_DT, {
+        onActionStart: (event) => actionStarts.push(event),
+        onCombatBoostLockFrame: () => undefined,
+      });
+
+      expect(actionStarts).toContainEqual({ playerId: 'P1', action });
+      expect(state.players.P1.boostActive).toBe(false);
+      expect(state.players.P1.combatBoostLockRemaining).toBeCloseTo(0.18);
+    },
+  );
+
+  test('combat boost lock keeps ordinary boost unavailable for the authored post-recovery delay', () => {
+    const state = createInitialState();
+    state.tuning.combatBoostReacquireDelaySeconds = 0.18;
+    const startLaunch = neutralInput();
+    startLaunch.p1.launch = true;
+    step(state, startLaunch, FIXED_DT);
+
+    const heldBoost = neutralInput();
+    heldBoost.p1.moveX = 1;
+    heldBoost.p1.boost = true;
+    const observedPhases = new Set<'commitment' | 'recovery' | 'delay'>();
+    const observer = {
+      onActionStart: () => undefined,
+      onCombatBoostLockFrame: (event: {
+        playerId: PlayerId;
+        phase: 'commitment' | 'recovery' | 'delay';
+      }) => {
+        if (event.playerId === 'P1') {
+          observedPhases.add(event.phase);
+        }
+      },
+    };
+
+    let recoveryFrames = 0;
+    while (
+      state.players.P1.launchStartup > 0
+      || state.players.P1.launchActive > 0
+      || state.players.P1.endLag > 0
+    ) {
+      step(state, heldBoost, FIXED_DT, observer);
+      expect(state.players.P1.boostActive).toBe(false);
+      recoveryFrames += 1;
+      expect(recoveryFrames).toBeLessThan(120);
+    }
+    expect(state.players.P1.combatBoostLockRemaining).toBeCloseTo(0.18);
+
+    let delayFrames = 0;
+    while (state.players.P1.combatBoostLockRemaining > 0) {
+      step(state, heldBoost, FIXED_DT, observer);
+      expect(state.players.P1.boostActive).toBe(false);
+      delayFrames += 1;
+      expect(delayFrames).toBeLessThan(20);
+    }
+    step(state, heldBoost, FIXED_DT);
+
+    expect(delayFrames).toBe(11);
+    expect(state.players.P1.boostActive).toBe(true);
+    expect(observedPhases).toEqual(new Set(['commitment', 'recovery', 'delay']));
+  });
+
+  test('combat boost lock does not disable paid super boost during an attack commitment', () => {
+    const state = createInitialState();
+    state.tuning.combatBoostReacquireDelaySeconds = 0.18;
+    const input = neutralInput();
+    input.p1.moveY = 1;
+    input.p1.superBoost = true;
+    input.p1.launch = true;
+
+    step(state, input, FIXED_DT);
+
+    expect(state.players.P1.superBoost).toBeGreaterThan(0);
+    expect(state.players.P1.combatBoostLockRemaining).toBeCloseTo(0.18);
+  });
+
+  test('launch break starts its boost delay only after authored recovery returns control', () => {
+    const state = createInitialState();
+    state.tuning.combatBoostReacquireDelaySeconds = 0.18;
+    state.players.P1.helpless = 1;
+    state.players.P1.lastLaunchedBy = 'P2';
+    const breakAndBoost = neutralInput();
+    breakAndBoost.p1.breakLaunch = true;
+    breakAndBoost.p1.boost = true;
+    const phases: string[] = [];
+    const observer = {
+      onActionStart: () => undefined,
+      onCombatBoostLockFrame: (event: { playerId: PlayerId; phase: string }) => {
+        if (event.playerId === 'P1') {
+          phases.push(event.phase);
+        }
+      },
+    };
+
+    step(state, breakAndBoost, FIXED_DT, observer);
+    expect(state.players.P1.stunned).toBeGreaterThan(0);
+    expect(state.players.P1.combatBoostLockRemaining).toBeCloseTo(0.18);
+
+    let recoveryFrames = 0;
+    while (state.players.P1.stunned > 0) {
+      step(state, breakAndBoost, FIXED_DT, observer);
+      expect(state.players.P1.combatBoostLockRemaining).toBeCloseTo(0.18);
+      recoveryFrames += 1;
+      expect(recoveryFrames).toBeLessThan(60);
+    }
+    expect(phases).toContain('recovery');
+
+    let delayFrames = 0;
+    while (state.players.P1.combatBoostLockRemaining > 0) {
+      step(state, breakAndBoost, FIXED_DT, observer);
+      expect(state.players.P1.boostActive).toBe(false);
+      delayFrames += 1;
+      expect(delayFrames).toBeLessThan(20);
+    }
+    step(state, breakAndBoost, FIXED_DT);
+    expect(delayFrames).toBe(11);
+    expect(state.players.P1.boostActive).toBe(true);
+  });
+
+  test('a rejected commitment does not create a combat boost lock', () => {
+    const state = createInitialState();
+    state.tuning.combatBoostReacquireDelaySeconds = 0.18;
+    state.players.P1.endLag = 0.2;
+    const input = neutralInput();
+    input.p1.moveX = 1;
+    input.p1.boost = true;
+    input.p1.launch = true;
+    const actionStarts: SimulationActionStart[] = [];
+
+    step(state, input, FIXED_DT, {
+      onActionStart: (event) => actionStarts.push(event),
+      onCombatBoostLockFrame: () => undefined,
+    });
+
+    expect(actionStarts).not.toContainEqual({ playerId: 'P1', action: 'launch' });
+    expect(state.players.P1.combatBoostLockRemaining).toBe(0);
+    expect(state.players.P1.boostActive).toBe(true);
+  });
+
+  test('setting combat boost delay back to zero disables a latent lock immediately', () => {
+    const state = createInitialState();
+    state.tuning.combatBoostReacquireDelaySeconds = 0;
+    state.players.P1.combatBoostLockRemaining = 0.18;
+    const input = neutralInput();
+    input.p1.moveX = 1;
+    input.p1.boost = true;
+
+    step(state, input, FIXED_DT);
+
+    expect(state.players.P1.boostActive).toBe(true);
+    expect(state.players.P1.combatBoostLockRemaining).toBe(0);
+  });
+
+  test('combat boost lock survives an interrupted accepted commitment and is checksummed', () => {
+    const state = createInitialState();
+    state.tuning.combatBoostReacquireDelaySeconds = 0.18;
+    const input = neutralInput();
+    input.p1.launch = true;
+    step(state, input, FIXED_DT);
+
+    state.players.P1.launchStartup = 0;
+    state.players.P1.stunned = 4 * FIXED_DT;
+    const interrupted = restoreStateFromSnapshot(createStateSnapshot(state));
+    const unlocked = restoreStateFromSnapshot(createStateSnapshot(state));
+    unlocked.players.P1.combatBoostLockRemaining = 0;
+
+    expect(computeStateChecksum(interrupted)).not.toBe(computeStateChecksum(unlocked));
+    for (let frame = 0; frame < 4; frame += 1) {
+      step(interrupted, neutralInput(), FIXED_DT);
+      expect(interrupted.players.P1.combatBoostLockRemaining).toBeCloseTo(0.18);
+    }
+  });
+
   test('default parry reset converts a successful defense into neutral space', () => {
     const state = createInitialState();
     state.players.P1.pos = { x: -2, y: 0 };
@@ -1403,6 +1637,7 @@ describe('state snapshot and restore', () => {
     const legacyTuning = { ...state.tuning } as Partial<typeof state.tuning>;
     delete legacyTuning.helplessReleaseSpeedRatio;
     delete legacyTuning.actionRecoveryControlMultiplier;
+    delete legacyTuning.combatBoostReacquireDelaySeconds;
     delete legacyTuning.startupClashGraceSeconds;
     delete legacyTuning.launchClashSeparationPadding;
     delete legacyTuning.launchClashRecoilMultiplier;
@@ -1426,8 +1661,10 @@ describe('state snapshot and restore', () => {
     const state = createStateSnapshot(createInitialState({ seed: 2027 }));
     const legacyTuning = state.tuning as Partial<typeof state.tuning>;
     delete legacyTuning.postControlCounterLaunchClashGraceSeconds;
+    delete legacyTuning.combatBoostReacquireDelaySeconds;
     for (const playerId of ['P1', 'P2'] as const) {
       const legacyPlayer = state.players[playerId] as Partial<PlayerState>;
+      delete legacyPlayer.combatBoostLockRemaining;
       delete legacyPlayer.launchAttemptSerial;
       delete legacyPlayer.postControlCounterPending;
       delete legacyPlayer.postControlCounterWindow;
@@ -1438,8 +1675,10 @@ describe('state snapshot and restore', () => {
     const restored = deserialiseState(JSON.stringify({ version: 2, state }));
 
     expect(restored.tuning.postControlCounterLaunchClashGraceSeconds).toBe(0);
+    expect(restored.tuning.combatBoostReacquireDelaySeconds).toBe(0);
     for (const playerId of ['P1', 'P2'] as const) {
       expect(restored.players[playerId]).toMatchObject({
+        combatBoostLockRemaining: 0,
         launchAttemptSerial: 0,
         postControlCounterPending: false,
         postControlCounterWindow: 0,
@@ -1447,6 +1686,20 @@ describe('state snapshot and restore', () => {
         postControlCounterLaunchEligible: false,
       });
     }
+  });
+
+  test('deserialise v3 snapshots without combat boost fields as an unlocked state', () => {
+    const state = createStateSnapshot(createInitialState({ seed: 2028 }));
+    delete (state.tuning as Partial<typeof state.tuning>).combatBoostReacquireDelaySeconds;
+    for (const playerId of ['P1', 'P2'] as const) {
+      delete (state.players[playerId] as Partial<PlayerState>).combatBoostLockRemaining;
+    }
+
+    const restored = deserialiseState(JSON.stringify({ version: 3, state }));
+
+    expect(restored.tuning.combatBoostReacquireDelaySeconds).toBe(0);
+    expect(restored.players.P1.combatBoostLockRemaining).toBe(0);
+    expect(restored.players.P2.combatBoostLockRemaining).toBe(0);
   });
 
   test('snapshot and checksum preserve active post-control counter state', () => {

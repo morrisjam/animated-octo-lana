@@ -20,6 +20,7 @@ import { createInitialState, step } from './sim';
 import { createDefaultTuning, fingerprintGameTuning } from './tuning';
 
 const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
+const COMBAT_BOOST_TUNING_KEY = 'combatBoostReacquireDelaySeconds' as const;
 
 function createDecision(overrides: Partial<AiDecisionTrace> = {}): AiDecisionTrace {
   const candidates = Object.fromEntries(AI_DECISION_CANDIDATES.map((action) => [action, {
@@ -113,15 +114,20 @@ function createCanonicalPlayerInput(moveX: number) {
   };
 }
 
-function createCanonicalOnlineReplay(tuningShape: 'legacy' | 'current') {
+function createCanonicalOnlineReplay(
+  tuningShape: 'historical' | 'counter_only' | 'boost_only' | 'current',
+) {
   const seed = 20260716;
   const fixedDt = 1 / 60;
   const loadout = { P1: 'vanguard', P2: 'duelist' } as const;
   const rules = { allowDunkWin: true } as const;
   const tuning = createDefaultTuning();
   const balanceTuning: Record<string, number> = { ...tuning };
-  if (tuningShape === 'legacy') {
+  if (tuningShape === 'historical' || tuningShape === 'boost_only') {
     delete balanceTuning[ZERO_NEUTRAL_TUNING_KEY];
+  }
+  if (tuningShape === 'historical' || tuningShape === 'counter_only') {
+    delete balanceTuning[COMBAT_BOOST_TUNING_KEY];
   }
   const frame = {
     p1: createCanonicalPlayerInput(0.25),
@@ -248,22 +254,22 @@ describe('replay runner', () => {
     expect(parsed.error.code).toBe('invalid_expected_checksums');
   });
 
-  test('accepts legacy and current canonical tuning shapes with one zero-neutral fingerprint', () => {
-    const legacy = validateReplayPayload(createCanonicalOnlineReplay('legacy'));
-    const current = validateReplayPayload(createCanonicalOnlineReplay('current'));
+  test('accepts every historical zero-default canonical tuning shape', () => {
+    const shapes = ['historical', 'counter_only', 'boost_only', 'current'] as const;
+    const parsed = shapes.map((shape) => validateReplayPayload(createCanonicalOnlineReplay(shape)));
 
-    expect(legacy.ok).toBe(true);
-    expect(current.ok).toBe(true);
-    if (legacy.ok === false) {
-      throw new Error(legacy.error.message);
+    for (const result of parsed) {
+      expect(result.ok).toBe(true);
+      if (result.ok === false) {
+        throw new Error(result.error.message);
+      }
+      expect(result.payload.header.balanceTuning?.[ZERO_NEUTRAL_TUNING_KEY]).toBe(0);
+      expect(result.payload.header.balanceTuning?.[COMBAT_BOOST_TUNING_KEY]).toBe(0);
     }
-    if (current.ok === false) {
-      throw new Error(current.error.message);
-    }
-    expect(legacy.payload.header.balanceTuning?.[ZERO_NEUTRAL_TUNING_KEY]).toBe(0);
-    expect(current.payload.header.balanceTuning?.[ZERO_NEUTRAL_TUNING_KEY]).toBe(0);
-    expect(legacy.payload.header.onlineMatch?.tuningFingerprint)
-      .toBe(current.payload.header.onlineMatch?.tuningFingerprint);
+    const fingerprints = parsed.map((result) => (
+      result.ok ? result.payload.header.onlineMatch?.tuningFingerprint : null
+    ));
+    expect(new Set(fingerprints).size).toBe(1);
   });
 
   test('rejects canonical tuning shapes with any other missing or additional key', () => {

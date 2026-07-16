@@ -12,6 +12,7 @@ describe('game tuning', () => {
 
     expect(defaults.helplessVelocityDamping).toBe(0.995);
     expect(defaults.actionRecoveryControlMultiplier).toBe(1);
+    expect(defaults.combatBoostReacquireDelaySeconds).toBe(0);
     expect(defaults.defensiveResetDistance).toBe(26);
     expect(defaults.defensiveResetImpulse).toBe(14);
     expect(defaults.launchBreakResetMultiplier).toBe(1.1);
@@ -34,6 +35,7 @@ describe('game tuning', () => {
       ...defaults,
       helplessReleaseSpeedRatio: Number.NaN,
       actionRecoveryControlMultiplier: 2,
+      combatBoostReacquireDelaySeconds: 2,
       startupClashGraceSeconds: 1,
       postControlCounterLaunchClashGraceSeconds: 1,
       launchClashSeparationPadding: 80,
@@ -49,6 +51,7 @@ describe('game tuning', () => {
 
     expect(tuning.helplessReleaseSpeedRatio).toBe(defaults.helplessReleaseSpeedRatio);
     expect(tuning.actionRecoveryControlMultiplier).toBe(1);
+    expect(tuning.combatBoostReacquireDelaySeconds).toBe(1);
     expect(tuning.startupClashGraceSeconds).toBe(0.25);
     expect(tuning.postControlCounterLaunchClashGraceSeconds).toBe(0.1);
     expect(tuning.launchClashSeparationPadding).toBe(40);
@@ -66,11 +69,16 @@ describe('game tuning', () => {
     const defaults = createDefaultTuning();
     const legacyDefaults = { ...defaults } as Partial<typeof defaults>;
     delete legacyDefaults.postControlCounterLaunchClashGraceSeconds;
+    delete legacyDefaults.combatBoostReacquireDelaySeconds;
 
     expect(fingerprintGameTuning(defaults)).toBe(fingerprintDeterministicValue(legacyDefaults));
     expect(fingerprintGameTuning({
       ...defaults,
       postControlCounterLaunchClashGraceSeconds: 2 / 60,
+    })).not.toBe(fingerprintGameTuning(defaults));
+    expect(fingerprintGameTuning({
+      ...defaults,
+      combatBoostReacquireDelaySeconds: 0.18,
     })).not.toBe(fingerprintGameTuning(defaults));
   });
 });

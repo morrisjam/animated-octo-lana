@@ -7,6 +7,7 @@ import {
 } from './payload';
 
 const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
+const COMBAT_BOOST_TUNING_KEY = 'combatBoostReacquireDelaySeconds' as const;
 
 const TUNING = {
   chainWindowSeconds: 1,
@@ -69,8 +70,10 @@ function fingerprint(value: unknown): string {
 
 function fingerprintTuning(tuning: Record<string, unknown>): string {
   const fingerprintInput = { ...tuning };
-  if (fingerprintInput[ZERO_NEUTRAL_TUNING_KEY] === 0) {
-    delete fingerprintInput[ZERO_NEUTRAL_TUNING_KEY];
+  for (const key of [ZERO_NEUTRAL_TUNING_KEY, COMBAT_BOOST_TUNING_KEY] as const) {
+    if (fingerprintInput[key] === 0) {
+      delete fingerprintInput[key];
+    }
   }
   return fingerprint(fingerprintInput);
 }
@@ -90,11 +93,14 @@ function input(moveX: number) {
 }
 
 function canonicalOnlinePayload(
-  tuningShape: 'legacy' | 'current' = 'legacy',
+  tuningShape: 'historical' | 'counter_only' | 'boost_only' | 'current' = 'historical',
 ): ReplayPayload & Record<string, unknown> {
   const balanceTuning: Record<string, number> = { ...TUNING };
-  if (tuningShape === 'current') {
+  if (tuningShape === 'counter_only' || tuningShape === 'current') {
     balanceTuning[ZERO_NEUTRAL_TUNING_KEY] = 0;
+  }
+  if (tuningShape === 'boost_only' || tuningShape === 'current') {
+    balanceTuning[COMBAT_BOOST_TUNING_KEY] = 0;
   }
   const payload = {
     header: {
@@ -229,15 +235,15 @@ test('preserves the complete canonical online payload as a detached JSON value',
   );
 });
 
-test('accepts exact legacy and current tuning shapes without rewriting archived payloads', () => {
-  const legacy = canonicalOnlinePayload('legacy');
-  const current = canonicalOnlinePayload('current');
-  assert.equal(
-    legacy.header.onlineMatch!.tuningFingerprint,
-    current.header.onlineMatch!.tuningFingerprint,
-  );
+test('accepts every historical zero-default tuning shape without rewriting archives', () => {
+  const shapes = ['historical', 'counter_only', 'boost_only', 'current'] as const;
+  const payloads = shapes.map((shape) => canonicalOnlinePayload(shape));
+  assert.equal(new Set(payloads.map((payload) => (
+    payload.header.onlineMatch!.tuningFingerprint
+  ))).size, 1);
 
-  for (const [shape, rawPayload] of [['legacy', legacy], ['current', current]] as const) {
+  for (const [index, rawPayload] of payloads.entries()) {
+    const shape = shapes[index];
     const expectedPayload = structuredClone(rawPayload);
     const validation = validateReplayPayloadForArchive(rawPayload);
     assert.equal(validation.ok, true);
@@ -251,9 +257,36 @@ test('accepts exact legacy and current tuning shapes without rewriting archived 
         validation.payload.header.balanceTuning,
         ZERO_NEUTRAL_TUNING_KEY,
       ),
-      shape === 'current',
+      shape === 'counter_only' || shape === 'current',
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        validation.payload.header.balanceTuning,
+        COMBAT_BOOST_TUNING_KEY,
+      ),
+      shape === 'boost_only' || shape === 'current',
     );
   }
+});
+
+test('accepts a current recorder tuning snapshot with a nonzero combat boost lock', () => {
+  const payload = canonicalOnlinePayload('current');
+  payload.header.balanceTuning![COMBAT_BOOST_TUNING_KEY] = 0.18;
+  payload.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
+    payload.header.balanceTuning!,
+  );
+  payload.integrity!.digest = computeReplayCanonicalDigestForArchive(payload);
+
+  const validation = validateReplayPayloadForArchive(payload);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) {
+    throw new Error(validation.errorMessage);
+  }
+  assert.equal(
+    validation.payload.header.balanceTuning?.[COMBAT_BOOST_TUNING_KEY],
+    0.18,
+  );
 });
 
 test('rejects canonical tuning shapes with any other missing or additional key', () => {

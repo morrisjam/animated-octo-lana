@@ -3061,6 +3061,7 @@ function buildBalanceLabLoopStages(
       detail: neutralDetail,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'closeRangeSeparationImpulse',
         'defensiveResetDistance',
         'defensiveResetImpulse',
@@ -3082,7 +3083,7 @@ function buildBalanceLabLoopStages(
       status: commitmentStatus,
       detail: commitmentDetail,
       relatedGlobalTuning: commitmentSaturation
-        ? []
+        ? ['combatBoostReacquireDelaySeconds']
         : ['startupClashGraceSeconds', 'postControlCounterLaunchClashGraceSeconds'],
       relatedAiBehavior: [
         'reactionDelayScale',
@@ -3117,6 +3118,7 @@ function buildBalanceLabLoopStages(
         'launchClashSeparationPadding',
         'launchClashRecoilMultiplier',
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'closeRangeSeparationImpulse',
       ],
       relatedCharacterControls: ['launch', 'special', 'parry'],
@@ -3135,6 +3137,7 @@ function buildBalanceLabLoopStages(
       detail: separationDetail,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'launchClashSeparationPadding',
         'launchClashRecoilMultiplier',
         'closeRangeSeparationPadding',
@@ -3789,6 +3792,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
         'closeRangeSeparationImpulse',
         'closeRangeCommitSeparationMultiplier',
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
       ],
     });
   }
@@ -3802,6 +3806,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
         'launchClashSeparationPadding',
         'launchClashRecoilMultiplier',
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'closeRangeSeparationImpulse',
         'defensiveResetDistance',
         'defensiveResetImpulse',
@@ -3840,6 +3845,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       detail: `${Math.round(pressureBandRatio * 100)}% of the round is inside the pressure band, leaving little mid-range decision play.`,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'defensiveResetDistance',
         'defensiveResetImpulse',
         'launchBreakResetMultiplier',
@@ -3864,6 +3870,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       detail: `The longest uninterrupted pressure sequence is ${pressureSequences.longestSeconds.toFixed(1)}s. A clash or defensive exchange should create a clearer reset opportunity.`,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'closeRangeSeparationImpulse',
         'defensiveResetDistance',
         'defensiveResetImpulse',
@@ -3892,6 +3899,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       detail: `Both fighters were free to start a new commitment for ${sharedAgency.actionReadySeconds.toFixed(1)}s, but none of their outside-pressure windows lasted ${sharedAgency.sustainedWindowThresholdSeconds.toFixed(2)}s. ${Math.round(sharedAgency.pressureRatio * 100)}% of shared action-ready time remained in pressure. This distinguishes real neutral from helpless travel or move recovery.`,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'closeRangeSeparationImpulse',
         'defensiveResetDistance',
         'defensiveResetImpulse',
@@ -3984,6 +3992,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       detail: `Only ${resetOutcomes.all.successes} of ${resetOutcomes.all.attempts} clashes, parries, or launch breaks created at least 0.75s outside pressure. Review separation impulse and post-action recovery.`,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'defensiveResetDistance',
         'defensiveResetImpulse',
         'launchBreakResetMultiplier',
@@ -4080,6 +4089,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       detail: `${briefExitExchanges.length} of ${exchanges.length} pressure phases left close range for less than 0.75s; ${neutralExitFollowUp.briefExitsWithoutAcceptedAction}/${neutralExitFollowUp.briefExits} brief exits resumed without any newly accepted action (${carriedCauseSummary}). The fighters are crossing the spacing threshold and snapping straight back in instead of creating a decision window. ${carriedCauseGuidance}`,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'closeRangeSeparationImpulse',
         'closeRangeCommitSeparationMultiplier',
         'defensiveResetDistance',
@@ -4231,6 +4241,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       detail: `${detail}. Inspect the returning fighter's movement and break choices alongside the attacker's launch cadence before changing global helpless duration.`,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'defensiveResetDistance',
         'defensiveResetImpulse',
         'launchBreakResetMultiplier',
@@ -4283,6 +4294,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       detail: `${detail}. A delayed re-launch is not healthier if the returning fighter still cannot establish a durable decision window.`,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'defensiveResetDistance',
         'defensiveResetImpulse',
         'launchBreakResetMultiplier',

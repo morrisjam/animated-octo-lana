@@ -71,14 +71,26 @@ export interface SimulationLaunchClash {
   gracePlayerId: PlayerId | null;
 }
 
+export interface SimulationCombatBoostLockFrame {
+  playerId: PlayerId;
+  phase: 'commitment' | 'recovery' | 'delay';
+  inputHeld: boolean;
+  cancelledActiveBoost: boolean;
+}
+
 export interface SimulationStepObserver {
   onActionStart(event: SimulationActionStart): void;
   onLaunchClash?(event: SimulationLaunchClash): void;
+  onCombatBoostLockFrame?(event: SimulationCombatBoostLockFrame): void;
 }
 
 interface LaunchAttemptFrameState {
   startup: number;
   active: number;
+}
+
+interface CombatBoostStepState {
+  cancelledActiveBoost: boolean;
 }
 
 const POST_CONTROL_COUNTER_ACTION_WINDOW_SECONDS = 1;
@@ -198,6 +210,7 @@ function createPlayer(
     boostActive: false,
     boostDir: { x: 0, y: 0 },
     boostHeldTime: 0,
+    combatBoostLockRemaining: 0,
     radius: 2.25,
     maxFuel,
     fuel: maxFuel,
@@ -318,6 +331,7 @@ function clonePlayerState(player: PlayerState): PlayerState {
     boostActive: player.boostActive ?? false,
     boostDir: player.boostDir ? cloneVec2(player.boostDir) : { x: 0, y: 0 },
     boostHeldTime: player.boostHeldTime ?? 0,
+    combatBoostLockRemaining: player.combatBoostLockRemaining ?? 0,
     radius: player.radius,
     maxFuel: player.maxFuel,
     fuel: player.fuel,
@@ -440,8 +454,8 @@ function assertSnapshotRootShape(snapshot: unknown): asserts snapshot is GameSta
   }
 }
 
-export const STATE_SNAPSHOT_VERSION = 3;
-const LEGACY_STATE_SNAPSHOT_VERSIONS = [1, 2] as const;
+export const STATE_SNAPSHOT_VERSION = 4;
+const LEGACY_STATE_SNAPSHOT_VERSIONS = [1, 2, 3] as const;
 
 interface GameStateSnapshotEnvelope {
   version: number;
@@ -507,7 +521,7 @@ export function deserialiseState(serialised: string): GameState {
       !Number.isFinite(version)
       || (
         version !== STATE_SNAPSHOT_VERSION
-        && !LEGACY_STATE_SNAPSHOT_VERSIONS.includes(version as 1 | 2)
+        && !LEGACY_STATE_SNAPSHOT_VERSIONS.includes(version as 1 | 2 | 3)
       )
     ) {
       throw new Error(
@@ -659,6 +673,7 @@ function startParryAttempt(
   state: GameState,
   playerId: PlayerId,
   input: PlayerFrameInput,
+  combatBoostStepState: CombatBoostStepState,
   observer?: SimulationStepObserver,
 ): boolean {
   const player = state.players[playerId];
@@ -679,6 +694,7 @@ function startParryAttempt(
   player.parryFlash = PARRY_FLASH_SECONDS;
   player.endLag = Math.max(player.endLag, framesToSeconds(parryMove.recoveryFrames));
   recordAcceptedActionStart(state, playerId, 'parry', observer);
+  armCombatBoostLock(state, player, combatBoostStepState);
   return true;
 }
 
@@ -1107,6 +1123,64 @@ function finishCommittedBoost(player: PlayerState, interrupted = false): void {
   clearBoostState(player);
 }
 
+function armCombatBoostLock(
+  state: GameState,
+  player: PlayerState,
+  stepState: CombatBoostStepState,
+): void {
+  const delaySeconds = state.tuning.combatBoostReacquireDelaySeconds;
+  if (delaySeconds <= 0) {
+    return;
+  }
+
+  const cancelledActiveBoost = player.boostActive;
+  finishCommittedBoost(player, true);
+  player.combatBoostLockRemaining = Math.max(
+    player.combatBoostLockRemaining,
+    delaySeconds,
+  );
+  stepState.cancelledActiveBoost ||= cancelledActiveBoost;
+}
+
+function getCombatBoostLockPhase(
+  player: PlayerState,
+): SimulationCombatBoostLockFrame['phase'] {
+  if (hasAttackCommitment(player) || player.parry > 0) {
+    return 'commitment';
+  }
+  if (
+    player.endLag > 0
+    || player.stunned > 0
+    || player.helpless > 0
+    || player.recovering > 0
+  ) {
+    return 'recovery';
+  }
+  return 'delay';
+}
+
+function emitCombatBoostLockFrame(
+  state: GameState,
+  playerId: PlayerId,
+  playerInput: PlayerFrameInput,
+  stepState: CombatBoostStepState,
+  observer?: SimulationStepObserver,
+): void {
+  const player = state.players[playerId];
+  if (
+    state.tuning.combatBoostReacquireDelaySeconds <= 0
+    || player.combatBoostLockRemaining <= 0
+  ) {
+    return;
+  }
+  observer?.onCombatBoostLockFrame?.({
+    playerId,
+    phase: getCombatBoostLockPhase(player),
+    inputHeld: playerInput.boost,
+    cancelledActiveBoost: stepState.cancelledActiveBoost,
+  });
+}
+
 function applyBoostHold(player: PlayerState, speed: number, controlMultiplier = 1): void {
   if (player.helpless > 0) {
     return;
@@ -1172,6 +1246,7 @@ function tryLaunchBreak(
   state: GameState,
   playerId: PlayerId,
   playerInput: PlayerFrameInput,
+  combatBoostStepState: CombatBoostStepState,
   observer?: SimulationStepObserver,
 ): boolean {
   const player = state.players[playerId];
@@ -1193,6 +1268,7 @@ function tryLaunchBreak(
     player.lastLaunchedBy = null;
   }
   recordAcceptedActionStart(state, playerId, 'launch_break', observer);
+  armCombatBoostLock(state, player, combatBoostStepState);
   return true;
 }
 
@@ -1235,6 +1311,7 @@ function movement(
   playerId: PlayerId,
   playerInput: PlayerFrameInput,
   dt: number,
+  combatBoostStepState: CombatBoostStepState,
   observer?: SimulationStepObserver,
 ): void {
   const tuning = state.tuning;
@@ -1253,6 +1330,7 @@ function movement(
     if (startSpecialAttempt(state, player)) {
       player.didCommitAttackDuringSuperBoost ||= player.superBoost > 0;
       recordAcceptedActionStart(state, playerId, 'special', observer);
+      armCombatBoostLock(state, player, combatBoostStepState);
       if (player.specialStartup <= 0 && player.specialActive > 0 && !player.specialDidResolve) {
         advanceSpecialAttempt(state, player, target, 0);
       }
@@ -1261,17 +1339,22 @@ function movement(
   if (playerInput.launch && startLaunchAttempt(state, player)) {
     player.didCommitAttackDuringSuperBoost ||= player.superBoost > 0;
     recordAcceptedActionStart(state, playerId, 'launch', observer);
+    armCombatBoostLock(state, player, combatBoostStepState);
   }
   if (playerInput.dunk && startDunkAttempt(state, player)) {
     player.didCommitAttackDuringSuperBoost ||= player.superBoost > 0;
     recordAcceptedActionStart(state, playerId, 'dunk', observer);
+    armCombatBoostLock(state, player, combatBoostStepState);
   }
   const actionRecoveryControlMultiplier = player.endLag > 0
     ? tuning.actionRecoveryControlMultiplier
     : 1;
   const boostHeld = playerInput.boost && player.superBoost <= 0 && (
     playerMoves.boost.holdFuelPerSecond <= 0 || player.fuel > 0
-  ) && actionRecoveryControlMultiplier > 0;
+  ) && actionRecoveryControlMultiplier > 0 && (
+    tuning.combatBoostReacquireDelaySeconds <= 0
+    || player.combatBoostLockRemaining <= 0
+  );
   if (boostHeld && !player.boostActive) {
     if (startCommittedBoost(player, target, playerInput)) {
       recordAcceptedActionStart(state, playerId, 'boost', observer);
@@ -1405,6 +1488,10 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): PlayerI
   const previousHelpless = player.helpless;
   const wasRecovering = player.recovering > 0;
   const wasWithoutControl = player.helpless > 0 || player.stunned > 0 || player.recovering > 0;
+  const combatBoostLockPaused = hasAttackCommitment(player)
+    || player.parry > 0
+    || player.endLag > 0
+    || wasWithoutControl;
   const hadPostControlCounterWindow = player.postControlCounterWindow > 0;
 
   if (player.recovering > 0) {
@@ -1431,6 +1518,14 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): PlayerI
   player.cool.launch = Math.max(0, player.cool.launch - dt);
   player.cool.dunk = Math.max(0, player.cool.dunk - dt);
   player.cool.boost = Math.max(0, player.cool.boost - dt);
+  if (tuning.combatBoostReacquireDelaySeconds <= 0) {
+    player.combatBoostLockRemaining = 0;
+  } else if (!combatBoostLockPaused) {
+    player.combatBoostLockRemaining = Math.max(
+      0,
+      player.combatBoostLockRemaining - dt,
+    );
+  }
 
   if (player.helpless > 0 || player.recovering > 0 || player.stunned > 0) {
     clearBoostState(player);
@@ -1660,8 +1755,12 @@ export function step(
   state.gameTime += dt;
 
   if (!state.winner) {
-    startParryAttempt(state, 'P1', input.p1, observer);
-    startParryAttempt(state, 'P2', input.p2, observer);
+    const combatBoostStepState: PlayersById<CombatBoostStepState> = {
+      P1: { cancelledActiveBoost: false },
+      P2: { cancelledActiveBoost: false },
+    };
+    startParryAttempt(state, 'P1', input.p1, combatBoostStepState.P1, observer);
+    startParryAttempt(state, 'P2', input.p2, combatBoostStepState.P2, observer);
     const launchFrameStart: PlayersById<LaunchAttemptFrameState> = {
       P1: {
         startup: state.players.P1.launchStartup,
@@ -1672,8 +1771,20 @@ export function step(
         active: state.players.P2.launchActive,
       },
     };
-    const p1BrokeLaunch = tryLaunchBreak(state, 'P1', input.p1, observer);
-    const p2BrokeLaunch = tryLaunchBreak(state, 'P2', input.p2, observer);
+    const p1BrokeLaunch = tryLaunchBreak(
+      state,
+      'P1',
+      input.p1,
+      combatBoostStepState.P1,
+      observer,
+    );
+    const p2BrokeLaunch = tryLaunchBreak(
+      state,
+      'P2',
+      input.p2,
+      combatBoostStepState.P2,
+      observer,
+    );
     if (!p1BrokeLaunch) {
       advanceCommittedSpecial(state, 'P1', dt);
     }
@@ -1693,11 +1804,13 @@ export function step(
       advanceCommittedDunk(state, 'P2', dt);
     }
     if (!p1BrokeLaunch) {
-      movement(state, 'P1', input.p1, dt, observer);
+      movement(state, 'P1', input.p1, dt, combatBoostStepState.P1, observer);
     }
     if (!p2BrokeLaunch) {
-      movement(state, 'P2', input.p2, dt, observer);
+      movement(state, 'P2', input.p2, dt, combatBoostStepState.P2, observer);
     }
+    emitCombatBoostLockFrame(state, 'P1', input.p1, combatBoostStepState.P1, observer);
+    emitCombatBoostLockFrame(state, 'P2', input.p2, combatBoostStepState.P2, observer);
   }
 
   const naturalControlReturns: PlayersById<PlayerId | null> = {

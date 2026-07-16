@@ -85,6 +85,7 @@ describe('AI batch rule comparison', () => {
     const current = createAiBatchRuleSnapshot();
     const {
       postControlCounterLaunchClashGraceSeconds: _zeroNeutralField,
+      combatBoostReacquireDelaySeconds: _combatBoostNeutralField,
       ...legacyTuning
     } = current.tuning;
     const legacy = {
@@ -102,6 +103,7 @@ describe('AI batch rule comparison', () => {
     expect(parseAiBatchRuleSnapshot(legacy)).toEqual(current);
     expect(parseAiBatchRuleSnapshot(legacy)?.tuning.postControlCounterLaunchClashGraceSeconds)
       .toBe(0);
+    expect(parseAiBatchRuleSnapshot(legacy)?.tuning.combatBoostReacquireDelaySeconds).toBe(0);
   });
 
   test('includes a non-zero post-control counter grace value in rule fingerprints', () => {

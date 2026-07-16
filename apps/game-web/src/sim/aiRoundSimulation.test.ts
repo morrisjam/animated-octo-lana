@@ -160,6 +160,10 @@ describe('AI round simulation', () => {
       tacticalRepositionFrames: 0,
       postControlCounterstepWindows: 0,
       postControlCounterstepFrames: 0,
+      combatBoostLockFrames: 0,
+      combatBoostDelayFrames: 0,
+      combatBoostHeldInputFrames: 0,
+      combatBoostCancellations: 0,
     });
     expect(first.decisionFlow.players.P2).toEqual(first.decisionFlow.players.P1);
   });
@@ -182,7 +186,7 @@ describe('AI round simulation', () => {
       0,
     );
 
-    expect(result.decisionFlow.schemaVersion).toBe('gw.ai-round-decision-flow.v2');
+    expect(result.decisionFlow.schemaVersion).toBe('gw.ai-round-decision-flow.v3');
     expect(selections).toBeGreaterThan(0);
     for (const player of players) {
       expect(player.tacticalRepositionSelections).toBeLessThanOrEqual(
@@ -213,6 +217,37 @@ describe('AI round simulation', () => {
       expect(player.postControlCounterstepFrames).toBeGreaterThanOrEqual(
         player.postControlCounterstepWindows,
       );
+    }
+  });
+
+  test('summarises combat boost lock exposure without changing the default path', () => {
+    const candidateTuning = createDefaultTuning();
+    candidateTuning.combatBoostReacquireDelaySeconds = 0.18;
+    const candidate = simulateAiRound({
+      ...BASE_OPTIONS,
+      maxFrames: 5_400,
+      tuning: candidateTuning,
+    });
+    const baseline = simulateAiRound({
+      ...BASE_OPTIONS,
+      maxFrames: 5_400,
+    });
+    const candidatePlayers = Object.values(candidate.decisionFlow.players);
+
+    expect(candidatePlayers.some((player) => player.combatBoostLockFrames > 0)).toBe(true);
+    expect(candidatePlayers.some((player) => player.combatBoostDelayFrames > 0)).toBe(true);
+    expect(candidatePlayers.some((player) => player.combatBoostHeldInputFrames > 0)).toBe(true);
+    expect(candidatePlayers.some((player) => player.combatBoostCancellations > 0)).toBe(true);
+    for (const player of candidatePlayers) {
+      expect(player.combatBoostHeldInputFrames).toBeLessThanOrEqual(player.combatBoostLockFrames);
+      expect(player.combatBoostDelayFrames).toBeLessThanOrEqual(player.combatBoostLockFrames);
+      expect(player.combatBoostCancellations).toBeLessThanOrEqual(player.combatBoostLockFrames);
+    }
+    for (const player of Object.values(baseline.decisionFlow.players)) {
+      expect(player.combatBoostLockFrames).toBe(0);
+      expect(player.combatBoostDelayFrames).toBe(0);
+      expect(player.combatBoostHeldInputFrames).toBe(0);
+      expect(player.combatBoostCancellations).toBe(0);
     }
   });
 

@@ -575,7 +575,7 @@ describe('balance lab flow model', () => {
     });
     expect(model.loopStages.find((stage) => stage.id === 'commitment')).toMatchObject({
       status: 'blocked',
-      relatedGlobalTuning: [],
+      relatedGlobalTuning: ['combatBoostReacquireDelaySeconds'],
     });
   });
 
@@ -1146,6 +1146,7 @@ describe('balance lab flow model', () => {
     expect(model.diagnostics.find((diagnostic) => diagnostic.id === 'failed_reset')).toMatchObject({
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
+        'combatBoostReacquireDelaySeconds',
         'defensiveResetDistance',
         'defensiveResetImpulse',
         'launchBreakResetMultiplier',
@@ -2630,6 +2631,7 @@ describe('balance lab drafts', () => {
     const tuning = { ...createDefaultTuning() } as Partial<GameTuning>;
     delete tuning.helplessReleaseSpeedRatio;
     delete tuning.actionRecoveryControlMultiplier;
+    delete tuning.combatBoostReacquireDelaySeconds;
     delete tuning.startupClashGraceSeconds;
     delete tuning.launchClashSeparationPadding;
     delete tuning.launchClashRecoilMultiplier;

@@ -44,6 +44,10 @@ export function computeStateChecksum(state: GameState): number {
     hash = addHashNumber(hash, quantise(player.stunned));
     hash = addHashNumber(hash, player.launchBreaks);
     hash = addHashNumber(hash, player.chain);
+    if (player.combatBoostLockRemaining > 0) {
+      hash = addHashNumber(hash, 0x43424c4b);
+      hash = addHashNumber(hash, quantise(player.combatBoostLockRemaining));
+    }
     if (
       player.launchAttemptSerial !== 0
       || player.postControlCounterPending

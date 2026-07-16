@@ -203,6 +203,14 @@ interface AiMatchupFlowPlayerSummary {
   postControlCounterstepWindows: number;
   postControlCounterstepWindowsPerRound: number;
   postControlCounterstepSecondsPerRound: number;
+  combatBoostLockFrames: number;
+  combatBoostLockSecondsPerRound: number;
+  combatBoostDelayFrames: number;
+  combatBoostDelaySecondsPerRound: number;
+  combatBoostHeldInputFrames: number;
+  combatBoostHeldInputSecondsPerRound: number;
+  combatBoostCancellations: number;
+  combatBoostCancellationsPerRound: number;
   naturalControlReturns: number;
   launchBreakControlReturns: number;
   relaunchesAfterControlReturn: number;
@@ -438,6 +446,14 @@ interface BatchComparisonDelta {
   p2TacticalRepositionSelectionsPerRound: number | null;
   p1TacticalRepositionSecondsPerRound: number | null;
   p2TacticalRepositionSecondsPerRound: number | null;
+  p1CombatBoostLockSecondsPerRound: number | null;
+  p2CombatBoostLockSecondsPerRound: number | null;
+  p1CombatBoostDelaySecondsPerRound: number | null;
+  p2CombatBoostDelaySecondsPerRound: number | null;
+  p1CombatBoostHeldInputSecondsPerRound: number | null;
+  p2CombatBoostHeldInputSecondsPerRound: number | null;
+  p1CombatBoostCancellationsPerRound: number | null;
+  p2CombatBoostCancellationsPerRound: number | null;
   pointBlankRatioPoints: number;
   pressureBandRatioPoints: number;
   neutralResetsPerRound: number;
@@ -495,7 +511,7 @@ interface BatchComparison {
 }
 
 interface BatchReport {
-  schemaVersion: 'gw.ai-matchup-batch.v17';
+  schemaVersion: 'gw.ai-matchup-batch.v18';
   generatedAt: string;
   characterRegistry: {
     schemaVersion: string;
@@ -846,6 +862,18 @@ function buildAiMatchupFlowSummary(
     const postControlCounterstepFrames = decisionTotal(
       (player) => player.postControlCounterstepFrames ?? 0,
     );
+    const combatBoostLockFrames = decisionTotal(
+      (player) => player.combatBoostLockFrames ?? 0,
+    );
+    const combatBoostDelayFrames = decisionTotal(
+      (player) => player.combatBoostDelayFrames ?? 0,
+    );
+    const combatBoostHeldInputFrames = decisionTotal(
+      (player) => player.combatBoostHeldInputFrames ?? 0,
+    );
+    const combatBoostCancellations = decisionTotal(
+      (player) => player.combatBoostCancellations ?? 0,
+    );
     const naturalControlReturns = flowModels.reduce(
       (sum, flow) => sum + flow.players[playerId].controlReturn.naturalControlReturns,
       0,
@@ -1135,6 +1163,26 @@ function buildAiMatchupFlowSummary(
       ),
       postControlCounterstepSecondsPerRound: roundMetric(
         postControlCounterstepFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      combatBoostLockFrames,
+      combatBoostLockSecondsPerRound: roundMetric(
+        combatBoostLockFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      combatBoostDelayFrames,
+      combatBoostDelaySecondsPerRound: roundMetric(
+        combatBoostDelayFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      combatBoostHeldInputFrames,
+      combatBoostHeldInputSecondsPerRound: roundMetric(
+        combatBoostHeldInputFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      combatBoostCancellations,
+      combatBoostCancellationsPerRound: roundMetric(
+        combatBoostCancellations / Math.max(1, summaries.length),
         2,
       ),
       naturalControlReturns,
@@ -2139,6 +2187,7 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
     report.schemaVersion === 'gw.ai-matchup-batch.v15'
     || report.schemaVersion === 'gw.ai-matchup-batch.v16'
     || report.schemaVersion === 'gw.ai-matchup-batch.v17'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v18'
   )
     ? parseAiBatchRuleSnapshot(report.ruleSnapshot)
     : null;
@@ -2159,6 +2208,7 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
       && report.schemaVersion !== 'gw.ai-matchup-batch.v15'
       && report.schemaVersion !== 'gw.ai-matchup-batch.v16'
       && report.schemaVersion !== 'gw.ai-matchup-batch.v17'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v18'
     )
     || typeof report.generatedAt !== 'string'
     || !report.options
@@ -2173,7 +2223,8 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
         || report.schemaVersion === 'gw.ai-matchup-batch.v14'
         || report.schemaVersion === 'gw.ai-matchup-batch.v15'
         || report.schemaVersion === 'gw.ai-matchup-batch.v16'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v17')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v17'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v18')
       && typeof report.aiBaseProfilesFingerprint !== 'string'
     )
     || !Array.isArray(report.summaries)
@@ -2182,13 +2233,15 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
       (report.schemaVersion === 'gw.ai-matchup-batch.v14'
         || report.schemaVersion === 'gw.ai-matchup-batch.v15'
         || report.schemaVersion === 'gw.ai-matchup-batch.v16'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v17')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v17'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v18')
       && report.summaries.some((summary) => !hasSharedAgencyTelemetry(summary))
     )
     || (
       (report.schemaVersion === 'gw.ai-matchup-batch.v15'
         || report.schemaVersion === 'gw.ai-matchup-batch.v16'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v17')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v17'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v18')
       && !ruleSnapshot
     )
   ) {
@@ -2299,6 +2352,19 @@ function tacticalRepositionMetric(
   summary: MatchSummary,
   playerId: 'P1' | 'P2',
   key: 'tacticalRepositionSelectionsPerRound' | 'tacticalRepositionSecondsPerRound',
+): number | null {
+  const player = summary.flow.players[playerId] as Partial<AiMatchupFlowPlayerSummary>;
+  const value = player[key];
+  return isFiniteMetric(value) ? value : null;
+}
+
+function combatBoostCommitmentMetric(
+  summary: MatchSummary,
+  playerId: 'P1' | 'P2',
+  key: 'combatBoostLockSecondsPerRound'
+    | 'combatBoostDelaySecondsPerRound'
+    | 'combatBoostHeldInputSecondsPerRound'
+    | 'combatBoostCancellationsPerRound',
 ): number | null {
   const player = summary.flow.players[playerId] as Partial<AiMatchupFlowPlayerSummary>;
   const value = player[key];
@@ -2591,7 +2657,8 @@ function buildBatchComparison(
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v14'
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v15'
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v16'
-    || baseline.schemaVersion === 'gw.ai-matchup-batch.v17';
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v17'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v18';
   const candidateScenarioFingerprint = controlledScenarioFingerprint(candidate);
   const baselineScenarioFingerprint = controlledScenarioFingerprint(baseline);
   if (candidateScenarioFingerprint !== baselineScenarioFingerprint) {
@@ -2701,6 +2768,38 @@ function buildBatchComparison(
       p2TacticalRepositionSecondsPerRound: optionalMetricDelta(
         tacticalRepositionMetric(summary, 'P2', 'tacticalRepositionSecondsPerRound'),
         tacticalRepositionMetric(previous, 'P2', 'tacticalRepositionSecondsPerRound'),
+      ),
+      p1CombatBoostLockSecondsPerRound: optionalMetricDelta(
+        combatBoostCommitmentMetric(summary, 'P1', 'combatBoostLockSecondsPerRound'),
+        combatBoostCommitmentMetric(previous, 'P1', 'combatBoostLockSecondsPerRound'),
+      ),
+      p2CombatBoostLockSecondsPerRound: optionalMetricDelta(
+        combatBoostCommitmentMetric(summary, 'P2', 'combatBoostLockSecondsPerRound'),
+        combatBoostCommitmentMetric(previous, 'P2', 'combatBoostLockSecondsPerRound'),
+      ),
+      p1CombatBoostDelaySecondsPerRound: optionalMetricDelta(
+        combatBoostCommitmentMetric(summary, 'P1', 'combatBoostDelaySecondsPerRound'),
+        combatBoostCommitmentMetric(previous, 'P1', 'combatBoostDelaySecondsPerRound'),
+      ),
+      p2CombatBoostDelaySecondsPerRound: optionalMetricDelta(
+        combatBoostCommitmentMetric(summary, 'P2', 'combatBoostDelaySecondsPerRound'),
+        combatBoostCommitmentMetric(previous, 'P2', 'combatBoostDelaySecondsPerRound'),
+      ),
+      p1CombatBoostHeldInputSecondsPerRound: optionalMetricDelta(
+        combatBoostCommitmentMetric(summary, 'P1', 'combatBoostHeldInputSecondsPerRound'),
+        combatBoostCommitmentMetric(previous, 'P1', 'combatBoostHeldInputSecondsPerRound'),
+      ),
+      p2CombatBoostHeldInputSecondsPerRound: optionalMetricDelta(
+        combatBoostCommitmentMetric(summary, 'P2', 'combatBoostHeldInputSecondsPerRound'),
+        combatBoostCommitmentMetric(previous, 'P2', 'combatBoostHeldInputSecondsPerRound'),
+      ),
+      p1CombatBoostCancellationsPerRound: optionalMetricDelta(
+        combatBoostCommitmentMetric(summary, 'P1', 'combatBoostCancellationsPerRound'),
+        combatBoostCommitmentMetric(previous, 'P1', 'combatBoostCancellationsPerRound'),
+      ),
+      p2CombatBoostCancellationsPerRound: optionalMetricDelta(
+        combatBoostCommitmentMetric(summary, 'P2', 'combatBoostCancellationsPerRound'),
+        combatBoostCommitmentMetric(previous, 'P2', 'combatBoostCancellationsPerRound'),
       ),
       pointBlankRatioPoints: roundMetric(
         (summary.telemetry.spacing.pointBlankRatio - previous.telemetry.spacing.pointBlankRatio) * 100,
@@ -3645,6 +3744,23 @@ function formatSummaryMarkdown(report: BatchReport): string {
 
   lines.push(
     '',
+    '### Combat Boost Commitment',
+    '',
+    'These counters prove whether the zero-default ordinary-boost commitment rule was exposed. Lock time covers attack, parry, launch-break recovery, interrupted commitments, and the configured post-recovery delay; held time is the subset where boost input continued; cancellations count active boosts interrupted by the rule. Super boost is intentionally excluded.',
+    '',
+    '| P1 | P2 | Difficulty | P1 lock sec / round | P1 delay sec / round | P1 held sec / round | P1 cancels / round | P2 lock sec / round | P2 delay sec / round | P2 held sec / round | P2 cancels / round |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const summary of report.summaries) {
+    const p1 = summary.flow.players.P1;
+    const p2 = summary.flow.players.P2;
+    lines.push(
+      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${p1.combatBoostLockSecondsPerRound.toFixed(2)}s | ${p1.combatBoostDelaySecondsPerRound.toFixed(2)}s | ${p1.combatBoostHeldInputSecondsPerRound.toFixed(2)}s | ${p1.combatBoostCancellationsPerRound.toFixed(2)} | ${p2.combatBoostLockSecondsPerRound.toFixed(2)}s | ${p2.combatBoostDelaySecondsPerRound.toFixed(2)}s | ${p2.combatBoostHeldInputSecondsPerRound.toFixed(2)}s | ${p2.combatBoostCancellationsPerRound.toFixed(2)} |`,
+    );
+  }
+
+  lines.push(
+    '',
     '### Post-Control Decisions',
     '',
     'This table classifies the first simulation-accepted action after control returns. `Return reset` starts at the actual control-return moment; per-action `reset` starts at the first accepted action. Both require a sustained 0.75s exit from pressure within two seconds. `<=1s` counts immediate counter-launches after that action. `Move` records whether the accepted action was accompanied by approach, orbit, retreat, idle, or uncontrollable input; historical samples without that context remain `unavailable`. It is intended to expose controller choices and their consequences, not class strength.',
@@ -3842,6 +3958,21 @@ function formatSummaryMarkdown(report: BatchReport): string {
     lines.push('');
 
     lines.push(
+      '### Combat Boost Commitment Deltas',
+      '',
+      'Each value is candidate minus baseline. It proves exposure to the zero-default ordinary-boost lock; it is not a quality score. N/A means the report predates decision-flow v3 counters.',
+      '',
+      '| P1 | P2 | Difficulty | P1 lock sec / round | P2 lock sec / round | P1 delay sec / round | P2 delay sec / round | P1 held sec / round | P2 held sec / round | P1 cancels / round | P2 cancels / round |',
+      '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    );
+    for (const delta of report.comparison.deltas) {
+      lines.push(
+        `| \`${delta.pairing.p1}\` | \`${delta.pairing.p2}\` | \`${delta.pairing.difficulty}\` | ${formatSignedOptional(delta.p1CombatBoostLockSecondsPerRound, 's')} | ${formatSignedOptional(delta.p2CombatBoostLockSecondsPerRound, 's')} | ${formatSignedOptional(delta.p1CombatBoostDelaySecondsPerRound, 's')} | ${formatSignedOptional(delta.p2CombatBoostDelaySecondsPerRound, 's')} | ${formatSignedOptional(delta.p1CombatBoostHeldInputSecondsPerRound, 's')} | ${formatSignedOptional(delta.p2CombatBoostHeldInputSecondsPerRound, 's')} | ${formatSignedOptional(delta.p1CombatBoostCancellationsPerRound)} | ${formatSignedOptional(delta.p2CombatBoostCancellationsPerRound)} |`,
+      );
+    }
+    lines.push('');
+
+    lines.push(
       'Every value is candidate minus baseline using identical seeds and AI settings. Negative timeout, physical-contact, point-blank, pressure, brief-exit, unresolved-pressure, helpless, immediate re-launch, no-dunk, repetition, and timing deltas usually indicate a healthier loop; positive reset conversion, post-return reset, resolved-exchange, exchange-reset, neutral-reset, and control-window deltas usually indicate more breathing room. Received-launch frequency, helpless duration per hit, first-action choice, and return-to-relaunch timing must be inspected independently. N/A means either side lacked the required sequence denominator.',
       '',
       '| P1 | P2 | Difficulty | Round sec | Timeout pp | Contact pp | Point blank pp | Pressure pp | Neutral resets / round | Reset conversion pp | Resolved exchange pp | Exchange reset pp | Brief exit pp | Unresolved avg sec | Parry reset pp | Break reset pp | Breaks/round P1 / P2 | Break reaction P1 / P2 sec | Helpless P1 / P2 pp | Launches received / round P1 / P2 | Helpless / hit P1 / P2 sec | Immediate re-launch P1 / P2 pp | Control window P1 / P2 sec | Control-return reset P1 / P2 pp | First-action reset P1 / P2 pp | First action delay P1 / P2 sec | Pressure p90 sec | No dunk pp | Launch/no dunk pp | Dominant action pp | Repeat streak | Launch-to-dunk sec |',
@@ -4001,7 +4132,7 @@ function run(): void {
   })));
 
   const report: BatchReport = {
-    schemaVersion: 'gw.ai-matchup-batch.v17',
+    schemaVersion: 'gw.ai-matchup-batch.v18',
     generatedAt: new Date().toISOString(),
     characterRegistry: {
       schemaVersion: CHARACTER_REGISTRY_SCHEMA_VERSION,

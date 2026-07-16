@@ -15,8 +15,9 @@ Story: `S1.5` Full state serialise and restore
   - `restoreStateFromSnapshot(snapshot)` validates snapshot root shape and serializable values.
   - Invalid payloads fail with explicit `Invalid state snapshot` errors.
 - Serialized format:
-  - Versioned envelope `{ version, state }` with `STATE_SNAPSHOT_VERSION`.
-  - Legacy compatibility: direct `GameState` JSON payloads are still accepted by `deserialiseState`.
+  - Versioned envelope `{ version, state }` with `STATE_SNAPSHOT_VERSION` (`v4` currently).
+  - Versions `v1` through `v3` and direct legacy `GameState` JSON payloads remain readable.
+  - Missing zero-default flow fields, including the combat-boost lock timer, restore to neutral values.
 
 ## Validation Rules
 - Snapshot must include required root branches:
@@ -34,5 +35,5 @@ Story: `S1.5` Full state serialise and restore
 - `apps/game-web/src/sim/sim.test.ts`
   - restore/resume checksum parity
   - serialise/deserialise checksum parity
-  - legacy payload compatibility
+  - `v1` through `v3` legacy payload compatibility and zero-default field migration
   - malformed payload and unsupported version failures

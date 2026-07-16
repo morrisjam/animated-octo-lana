@@ -74,7 +74,10 @@ const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V7 = 'gw.ai-behavior-tuning.v7';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V6 = 'gw.ai-behavior-tuning.v6';
 const AI_BEHAVIOR_TUNING_SCHEMA_VERSION_V5 = 'gw.ai-behavior-tuning.v5';
 const DEFAULT_FIXED_DT = 1 / 60;
-const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
+const ZERO_DEFAULT_TUNING_KEYS = [
+  'postControlCounterLaunchClashGraceSeconds',
+  'combatBoostReacquireDelaySeconds',
+] as const satisfies readonly (keyof GameTuning)[];
 
 export interface ReplayHeader {
   payloadVersion: number;
@@ -579,11 +582,16 @@ function matchesCanonicalTuningSnapshot(
     return false;
   }
   const currentKeys = Object.keys(tuning);
-  const legacyKeys = currentKeys.filter((key) => key !== ZERO_NEUTRAL_TUNING_KEY);
-  const hasCurrentShape = hasExactKeys(value, currentKeys);
-  const hasLegacyShape = tuning[ZERO_NEUTRAL_TUNING_KEY] === 0
-    && hasExactKeys(value, legacyKeys);
-  return (hasCurrentShape || hasLegacyShape)
+  const snapshotKeys = Object.keys(value);
+  const hasSupportedShape = snapshotKeys.every((key) => currentKeys.includes(key))
+    && currentKeys.every((key) => (
+      snapshotKeys.includes(key)
+      || (
+        ZERO_DEFAULT_TUNING_KEYS.includes(key as typeof ZERO_DEFAULT_TUNING_KEYS[number])
+        && tuning[key as keyof GameTuning] === 0
+      )
+    ));
+  return hasSupportedShape
     && Object.entries(value).every(([key, rawValue]) => (
       rawValue === tuning[key as keyof GameTuning]
     ));

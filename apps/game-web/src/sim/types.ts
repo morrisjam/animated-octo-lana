@@ -42,6 +42,7 @@ export interface GameTuning {
   playerMoveAccel: number;
   playerVelocityDamping: number;
   actionRecoveryControlMultiplier: number;
+  combatBoostReacquireDelaySeconds: number;
   helplessVelocityDamping: number;
   helplessReleaseSpeedRatio: number;
   boostHoldSpeed: number;
@@ -82,6 +83,7 @@ export interface PlayerState {
   boostActive: boolean;
   boostDir: Vec2;
   boostHeldTime: number;
+  combatBoostLockRemaining: number;
   radius: number;
   maxFuel: number;
   fuel: number;

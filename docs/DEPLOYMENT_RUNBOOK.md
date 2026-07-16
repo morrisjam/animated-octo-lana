@@ -154,6 +154,16 @@ npm run api:smoke:auth-session-rotation
 
 For a planned, non-compromise rotation, first deploy with `AUTH_SESSION_SECRET=<new>` and `AUTH_SESSION_PREVIOUS_SECRET=<old>`. Confirm existing and newly issued sessions, then wait at least `AUTH_SESSION_TTL_SECONDS` before removing `AUTH_SESSION_PREVIOUS_SECRET`. New tokens are never signed with the previous key. Do not leave the overlap configured indefinitely, and do not change the auth-rate-limit secret as part of this operation. If the old key may be compromised, do not configure it as previous: rotate immediately and accept forced sign-in for every existing session.
 
+### Reverse-proxy source boundary
+
+Run the framework-level spoof-chain proof locally whenever the provider topology or `API_TRUST_PROXY_HOPS` changes:
+
+```powershell
+npm run api:smoke:auth-proxy-source
+```
+
+The smoke exercises Fastify's real `request.ip`/`request.ips` resolution with direct, one-hop, and two-hop requests. It requires attacker-controlled left-side `X-Forwarded-For` prefixes to leave the selected client unchanged and requires separate nearest clients to remain distinct. This does not prove the hosted provider's actual chain. Before opening the allowlist, send bounded staging sign-in attempts from one known egress until its source bucket returns `429`, verify a second known egress remains available, and confirm that adding a forged forwarding prefix cannot avoid the first bucket. Re-run that check after any proxy/CDN routing change.
+
 ## Deployment flow
 
 CI runs the production bundle budget and production-root `npm run alpha:visual-smoke`, durable auth-rate and route-ownership smokes, plus `npm run api:smoke:ranked-online`, `npm run api:smoke:ranked-authoritative-forfeit`, `npm run api:smoke:database-interruption`, `npm run api:smoke:matchmaking-restart`, and `npm run api:smoke:matchmaking-multi-instance` against disposable local services before release evidence is accepted. The bundle gate measures the emitted initial graph and requires optional tools to remain lazy. The visual gate blocks external requests, requires bundled replay JSON and WebGL rendering, exercises Replay Review and pause/resume first-load behavior, and archives action-marker screenshots. The service gates prove atomic auth boundaries, account privacy, valid proof replay, tamper rejection, durable authenticated heartbeat handling, pool reconnection, checkpoint/restore, reconnect replay protection, signaling recovery, pending proof-backed settlement across sequential API processes, and shared queue/session/transport/drain state across two simultaneously live API processes. The multi-instance gate terminates only its explicitly named API backends while a ranked session is active, requires replacement backend PIDs, and proves both API PIDs and cross-instance control-plane operations survive. The API health response reports only the database target class (`local`, `remote`, or `unknown`), never connection details; smoke commands refuse anything except `local` by default. Set `ALLOW_REMOTE_DATABASE_SMOKE=1` only while intentionally running the same commands against an isolated staging database during release rehearsal. This is not permission to target production or skip the production drain because only the current simulator verifier is loaded and the legacy HTTP frame relay remains process-local.

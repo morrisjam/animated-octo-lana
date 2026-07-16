@@ -20,7 +20,7 @@ Optional:
 - `AUTH_SESSION_TTL_SECONDS` defaults to `43200` (12 hours).
 - `AUTH_SESSION_PREVIOUS_SECRET` optionally accepts tokens signed by one retired 32+ character key during a bounded rotation overlap. New tokens always use `AUTH_SESSION_SECRET`; remove the previous key after one full session TTL.
 - `AUTH_RATE_LIMIT_SECRET` is the 32+ character HMAC key for pseudonymous durable auth buckets. It falls back to `AUTH_SESSION_SECRET`; use a distinct production secret.
-- `API_TRUST_PROXY_HOPS` enables forwarded client-IP handling for source throttles and must match the verified reverse-proxy path. Leave it unset for direct/local traffic.
+- `API_TRUST_PROXY_HOPS` enables forwarded client-IP handling for source throttles and must match the verified reverse-proxy path. Leave it unset for direct/local traffic. Run `npm run api:smoke:auth-proxy-source` from the repository root after changing the hop count.
 - `AUTH_IDENTITY_ADMIN_KEY` optionally enables the emergency identity-link and identity-lookup routes. Without it those routes return `404`.
 - `AUTH_RATE_LIMIT_<POLICY>_MAX_ATTEMPTS` and `_WINDOW_SECONDS` tune the documented global-source, guest, web signup/signin, and Steam source/ticket defaults from `.env.example`.
 - `AUTH_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS` defaults to `900` and is clamped to 60-86400 seconds.

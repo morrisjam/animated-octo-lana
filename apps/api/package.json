@@ -17,6 +17,7 @@
     "smoke:matchmaking-restart": "tsx scripts/matchmakingRestartSmoke.ts",
     "smoke:matchmaking-multi-instance": "tsx scripts/matchmakingMultiInstanceSmoke.ts",
     "smoke:auth-rate-limit": "tsx scripts/authRateLimitSmoke.ts",
+    "smoke:auth-proxy-source": "tsx scripts/authProxySourceSmoke.ts",
     "smoke:auth-security": "tsx scripts/authSecuritySmoke.ts",
     "smoke:auth-session-rotation": "tsx scripts/authSessionRotationSmoke.ts",
     "smoke:database-interruption": "tsx scripts/databaseInterruptionSmoke.ts",

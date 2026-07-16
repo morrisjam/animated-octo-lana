@@ -112,6 +112,7 @@ import {
   resolveAuthSessionPreviousSecrets,
   resolveAuthSessionSecret,
 } from './auth/sessionConfig';
+import { resolveTrustProxyHops } from './auth/proxySource';
 import {
   resolveAccountAuthorizationStatus,
   resolveAuthenticatedAccountId,
@@ -814,17 +815,6 @@ interface AuthRateLimitRejection {
   code?: string;
   recovery: string;
   retryAfterSeconds?: number;
-}
-
-function resolveTrustProxyHops(value: string | undefined): number | false {
-  if (!value?.trim()) {
-    return false;
-  }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 8) {
-    throw new Error('API_TRUST_PROXY_HOPS must be an integer between 1 and 8.');
-  }
-  return parsed;
 }
 
 function resolveOptionalSecret(value: string | undefined, name: string): string | null {

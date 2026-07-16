@@ -4012,6 +4012,7 @@ function beginMode(
   roundTransitionRemaining = 0;
   resetRoundState();
   appPhase = 'playing';
+  hud.setControlsVisible(selectedMode !== 'cpu_vs_cpu');
   setTrainingFrameDataVisibility(selectedMode === 'training');
   if (!onlineMatchContext) {
     persistSettings();
@@ -4052,6 +4053,7 @@ function returnToHome(): void {
     arcadeRun = null;
   }
   appPhase = 'home';
+  hud.setControlsVisible(true);
   void platform.presence.setStatus('home');
   pauseMenu.setPaused(false);
   pauseMenu.setCanRestartTraining(false);
@@ -4630,6 +4632,7 @@ function beginOnlineMatch(
   }
 
   selectedMode = 'best_of_3';
+  hud.setControlsVisible(true);
   pauseMenu.setBalanceLabAvailable(false);
   selectedMatchSeed = rankedSeedFromSessionId(matchStart.sessionId);
   const balanceProfileId = matchStart.balanceProfileId ?? activeBalanceProfile.id;
@@ -5512,6 +5515,7 @@ function beginReplayReview(
   }
 
   appPhase = 'replay_review';
+  hud.setControlsVisible(true);
   pauseMenu.setPaused(false);
   pauseMenu.setCanRestartTraining(false);
   startMenu.hideRoundBanner();

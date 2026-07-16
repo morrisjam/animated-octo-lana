@@ -101,6 +101,10 @@ html, body {
   border: 1px solid var(--ui-hud-status-border);
 }
 
+#hud.is-spectator-view #status {
+  margin-bottom: 0;
+}
+
 #controls {
   align-self: center;
   display: flex;

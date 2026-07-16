@@ -60,7 +60,7 @@ export interface StageAtmosphereOption {
 }
 
 export const DEFAULT_STAGE_ATMOSPHERE_ID = 'default';
-export const ONLINE_ALPHA_STAGE_ATMOSPHERE_ID = 'wormhole_depths_v2';
+export const ONLINE_ALPHA_STAGE_ATMOSPHERE_ID = 'wormhole_rim_v3';
 
 const DEFAULT_STAGE_ATMOSPHERE_TOKENS: StageAtmosphereTokens = {
   sceneBackgroundColor: '#040816',

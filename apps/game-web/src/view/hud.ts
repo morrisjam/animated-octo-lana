@@ -10,6 +10,7 @@ interface HudElements {
   p1Breaks: HTMLDivElement;
   p2Breaks: HTMLDivElement;
   status: HTMLDivElement;
+  controls: HTMLDivElement;
   frameData: HTMLDivElement;
   rollbackDiagnostics: HTMLDivElement;
   p1InputHistory: HTMLDivElement;
@@ -44,6 +45,7 @@ export interface RuntimeMemoryDiagnosticsView {
 export interface HudController {
   update(snapshot: RenderSnapshot): void;
   setTrainingFrameDataVisible(visible: boolean): void;
+  setControlsVisible(visible: boolean): void;
   setRollbackDiagnosticsVisible(visible: boolean): void;
   setInputHistoryVisible(visible: boolean): void;
   setMatchTelemetryVisible(visible: boolean): void;
@@ -136,6 +138,7 @@ export function createHud(): HudController {
     p1Breaks: getRequiredElement<HTMLDivElement>('#p1Breaks'),
     p2Breaks: getRequiredElement<HTMLDivElement>('#p2Breaks'),
     status: getRequiredElement<HTMLDivElement>('#status'),
+    controls: getRequiredElement<HTMLDivElement>('#controls'),
     frameData: getRequiredElement<HTMLDivElement>('#frameData'),
     rollbackDiagnostics: getRequiredElement<HTMLDivElement>('#rollbackDiagnostics'),
     p1InputHistory,
@@ -201,6 +204,10 @@ export function createHud(): HudController {
   }
 
   return {
+    setControlsVisible(visible: boolean): void {
+      elements.controls.hidden = !visible;
+      elements.root.classList.toggle('is-spectator-view', !visible);
+    },
     setTrainingFrameDataVisible(visible: boolean): void {
       trainingFrameDataVisible = visible;
       elements.frameData.hidden = !visible;

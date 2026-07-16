@@ -23,7 +23,7 @@ Optional:
 - `API_TRUST_PROXY_HOPS` enables forwarded client-IP handling for source throttles and must match the verified reverse-proxy path. Leave it unset for direct/local traffic. Run `npm run api:smoke:auth-proxy-source` from the repository root after changing the hop count.
 - `AUTH_IDENTITY_ADMIN_KEY` optionally enables the emergency identity-link and identity-lookup routes. Without it those routes return `404`.
 - `AUTH_RATE_LIMIT_<POLICY>_MAX_ATTEMPTS` and `_WINDOW_SECONDS` tune the documented global-source, guest, web signup/signin, and Steam source/ticket defaults from `.env.example`.
-- `AUTH_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS` defaults to `900` and is clamped to 60-86400 seconds.
+- `AUTH_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS` defaults to `900` and is clamped to 60-86400 seconds. Cleanup runs at startup and, once due, after real API activity; infrastructure probes never trigger it.
 - `ALLOW_INSECURE_ACCOUNT_HEADER=true` permits the legacy `x-account-id` credential for local tools only. Leave it unset in production.
 - `STEAM_WEB_API_BASE` defaults to `https://partner.steam-api.com`.
 - `STEAM_WEB_API_TIMEOUT_MS` defaults to `5000` and is bounded to 10-30000 ms.
@@ -35,7 +35,7 @@ Optional:
 - `MATCHMAKING_HEARTBEAT_INTERVAL_SECONDS` defaults to `5`; clients pulse during signaling and active play.
 - `MATCHMAKING_HEARTBEAT_TIMEOUT_SECONDS` defaults to `30` and is clamped to at least three heartbeat intervals. A missed window enters reconnect grace before any timeout resolution.
 - `MATCHMAKING_CLOSED_RETENTION_SECONDS` defaults to `120`.
-- `MATCHMAKING_SNAPSHOT_INTERVAL_MS` defaults to `5000` and controls how often queue, session, and reconnect state is checkpointed to PostgreSQL.
+- `MATCHMAKING_SNAPSHOT_INTERVAL_MS` defaults to `5000` and controls how often resident queue, session, and reconnect state is checkpointed to PostgreSQL. An empty unchanged runtime skips the database lease entirely.
 - `MATCHMAKING_RANKED_INITIAL_GAP` defaults to `120`.
 - `MATCHMAKING_RANKED_GAP_EXPANSION_PER_SECOND` defaults to `8`.
 - `MATCHMAKING_RANKED_MAX_GAP` defaults to `700`.
@@ -56,9 +56,9 @@ Optional:
 - `MATCHMAKING_TURN_USERNAME` and `MATCHMAKING_TURN_CREDENTIAL` remain a local/static compatibility fallback only.
 - `MATCHMAKING_DIRECT_CONNECT_TIMEOUT_MS` defaults to `8000`.
 - `MATCHMAKING_SIGNAL_TTL_SECONDS` defaults to `600` and controls short-lived PostgreSQL offer/answer/ICE retention.
-- `MATCHMAKING_SIGNAL_CLEANUP_INTERVAL_SECONDS` defaults to `60` and is clamped to 30-3600 seconds. Startup and bounded periodic cleanup remove expired signaling rows even if a session-resolution callback never runs.
+- `MATCHMAKING_SIGNAL_CLEANUP_INTERVAL_SECONDS` defaults to `60` and is clamped to 30-3600 seconds. Startup and bounded activity-triggered cleanup remove expired signaling rows even if a session-resolution callback never runs, without polling PostgreSQL while the service is idle.
 - `MATCHMAKING_SIGNAL_MAX_MESSAGES_PER_SESSION` and `MATCHMAKING_SIGNAL_MAX_BYTES_PER_SESSION` default to `512` and `2097152`; `_PER_SENDER` defaults to `256` and `1048576`. PostgreSQL serializes quota checks per session and returns `429 signal_quota_exceeded` before an offer/answer/ICE mailbox can grow without bound.
-- `RANKED_TERMINAL_DECISION_PROCESS_INTERVAL_MS` defaults to `1000` and is clamped to 250-60000 milliseconds. The bounded worker leases durable forfeit/no-contest decisions and safely retries interrupted settlements.
+- `RANKED_TERMINAL_DECISION_PROCESS_INTERVAL_MS` defaults to `1000` and is clamped to 250-60000 milliseconds. It is the transient scheduler retry delay; normal durable forfeit/no-contest work sleeps until the database-reported due/retry deadline instead of polling continuously.
 - `MATCHMAKING_TELEMETRY_RETENTION_MS` defaults to `86400000` (24h).
 - `ROOM_IDLE_TIMEOUT_SECONDS` defaults to `900`.
 - `ROOM_CLOSED_RETENTION_SECONDS` defaults to `1800`.
@@ -79,7 +79,7 @@ Optional:
 - `REPLAY_RETENTION_DAYS_CASUAL` defaults to `90`.
 - `REPLAY_INGEST_RATE_LIMIT_SOURCE_*` and `REPLAY_INGEST_RATE_LIMIT_ACCOUNT_*` configure durable shared upload throttles; defaults are 40 and 20 attempts per hour respectively.
 - `REPLAY_MAX_ACTIVE_ARCHIVES_PER_ACCOUNT` defaults to `200`, and `REPLAY_MAX_ACTIVE_BYTES_PER_ACCOUNT` defaults to `256 MiB` using a conservative incoming-size estimate.
-- `REPLAY_RETENTION_CLEANUP_INTERVAL_SECONDS` defaults to `3600`; expired metadata and payload blobs are deleted in bounded retryable batches.
+- `REPLAY_RETENTION_CLEANUP_INTERVAL_SECONDS` defaults to `3600`; expired metadata and payload blobs are deleted at startup and in bounded retryable batches after real API activity once the interval is due.
 - `RANKED_SEASON_DURATION_DAYS` defaults to `90`.
 - `RANKED_SEASON_RESET_ADMIN_KEY` optional admin key required by `POST /ranked/seasons/reset`.
 - `RANKED_CALIBRATION_MATCHES` defaults to `5` (matches before initial league placement).
@@ -101,7 +101,7 @@ Optional:
 - `SLO_REPORT_WINDOW_DAYS` defaults to `7` (used by weekly SLO report script).
 - `SLO_SAMPLE_RETENTION_DAYS` defaults to `14`; samples older than this are pruned.
 - `SLO_SAMPLE_MAX_ROWS` defaults to `250000`; only the newest configured sample-id window is retained.
-- `SLO_SAMPLE_CLEANUP_INTERVAL_SECONDS` defaults to `300` and accepts `60` through `86400`.
+- `SLO_SAMPLE_CLEANUP_INTERVAL_SECONDS` defaults to `300` and accepts `60` through `86400`. Time-based cleanup runs after real API activity; the shared 100-sample cadence remains available under sustained traffic.
 - `API_BASE_URL` required for deploy health-gate script.
 - `API_SLO_ADMIN_KEY` and `API_OPS_ADMIN_KEY` are required by hosted safe rollouts.
 - `DEPLOY_HEALTHCHECK_WINDOW_HOURS` defaults to `1`.
@@ -329,7 +329,7 @@ Both deployment gates require an independently configured expected API hostname,
 
 ## Authentication safety
 
-Migration `023_auth_rate_limit_buckets.sql` stores fixed-window counters by scope and HMAC-pseudonymized subject. Each auth request consumes all applicable source and principal buckets in one atomic PostgreSQL operation, so concurrent API instances share the same boundary. Raw IP addresses, emails, and Steam tickets are not stored in the bucket table. Hexadecimal ticket subjects are case-canonicalized, and expired rows are pruned in bounded `SKIP LOCKED` batches at startup and on the cleanup interval. A successful web sign-in clears only that principal's failure bucket; its source bucket remains intact.
+Migration `023_auth_rate_limit_buckets.sql` stores fixed-window counters by scope and HMAC-pseudonymized subject. Each auth request consumes all applicable source and principal buckets in one atomic PostgreSQL operation, so concurrent API instances share the same boundary. Raw IP addresses, emails, and Steam tickets are not stored in the bucket table. Hexadecimal ticket subjects are case-canonicalized, and expired rows are pruned in bounded `SKIP LOCKED` batches at startup and after real API activity once the cleanup interval is due. A successful web sign-in clears only that principal's failure bucket; its source bucket remains intact.
 
 Run the database and route checks locally without hosted compute:
 
@@ -360,8 +360,8 @@ Ranked proof verification reuses the durable PostgreSQL buckets from migration `
 - `GET /matchmaking/queue/config` read queue types, regions, and TTL config.
 - `GET /matchmaking/access/status` read public access mode/readiness counts without exposing allowlist entries.
 - `GET /matchmaking/network/status` read public relay readiness and credential mode without receiving ICE credentials.
-- `GET /health` read process liveness, database target class, and deployed release SHA without querying the database.
-- `GET /readyz` verify database connectivity and report release SHA, migration head, deployment environment, and stable database identity.
+- `GET /health` read process liveness, database target class, and deployed release SHA without querying the database, writing an SLO sample, or triggering maintenance. Hosting-provider probes must use this route.
+- `GET /readyz` deliberately verify database connectivity and report release SHA, migration head, deployment environment, and stable database identity. Use it for bounded rollout/operator checks, not continuous provider polling.
 - `POST /matchmaking/network/ice-config` issue account-scoped ICE configuration only for a bearer-authenticated participant with a valid active matchmaking session token.
 - `GET /ops/matchmaking/runtime` read protected queue/session drain counters (`x-admin-key: SLO_ADMIN_KEY`).
 - `POST /ops/matchmaking/drain` pause or resume queue joins and close queued tickets before process replacement (`x-admin-key: SLO_ADMIN_KEY`).

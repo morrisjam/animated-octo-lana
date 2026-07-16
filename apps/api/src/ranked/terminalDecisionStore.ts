@@ -314,6 +314,33 @@ export class RankedTerminalDecisionStore {
     return affectedExactlyOneRow(result);
   }
 
+  public async getNextActionAt(): Promise<string | null> {
+    const result = await this.database.query(
+      `
+      SELECT MIN(
+        CASE
+          WHEN status = 'pending' THEN GREATEST(due_at, next_attempt_at)
+          WHEN status = 'processing' THEN lease_expires_at
+          ELSE NULL
+        END
+      ) AS next_action_at
+      FROM ranked_terminal_decisions
+      WHERE status IN ('pending', 'processing')
+      `,
+    );
+    if (result.rows.length !== 1) {
+      throw new Error('Database did not return one ranked terminal decision wake deadline.');
+    }
+    const row = result.rows[0];
+    if (!row || typeof row !== 'object') {
+      throw new Error('Database returned an invalid ranked terminal decision wake deadline.');
+    }
+    return nullableTimestampFromRow(
+      (row as Record<string, unknown>).next_action_at,
+      'next_action_at',
+    );
+  }
+
   public async getBySession(sessionId: string): Promise<RankedTerminalDecision | null> {
     const normalisedSessionId = normaliseUuid(sessionId, 'sessionId');
     const result = await this.database.query(

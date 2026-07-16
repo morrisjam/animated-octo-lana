@@ -11,6 +11,7 @@ function createValidEnvironment(): Record<string, string> {
     NODE_ENV: 'production',
     DEPLOYMENT_ENVIRONMENT: 'canary',
     DEPLOYMENT_DATABASE_ID: 'gravity-well-canary',
+    RENDER_HEALTH_CHECK_PATH: '/health',
     MATCHMAKING_RUNTIME_NAMESPACE: 'canary',
     MATCHMAKING_RUNTIME_LOCK_TIMEOUT_MS: '5000',
     RELEASE_SHA,
@@ -143,6 +144,18 @@ test('blocks an implicit or cross-environment matchmaking runtime namespace', ()
   assert.deepEqual(
     report.checks.filter((check) => check.status === 'fail').map((check) => check.id),
     ['matchmaking_runtime_coordination'],
+  );
+});
+
+test('blocks a database-backed Render health probe', () => {
+  const env = createValidEnvironment();
+  env.RENDER_HEALTH_CHECK_PATH = '/readyz';
+  const report = auditAlphaProviderConfig(env);
+
+  assert.equal(report.ready, false);
+  assert.deepEqual(
+    report.checks.filter((check) => check.status === 'fail').map((check) => check.id),
+    ['provider_health_probe'],
   );
 });
 

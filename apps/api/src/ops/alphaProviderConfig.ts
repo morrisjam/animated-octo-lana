@@ -113,6 +113,13 @@ export function auditAlphaProviderConfig(
     'Deployment environment and stable database identity are configured.',
     'Set DEPLOYMENT_ENVIRONMENT to canary/production and provide DEPLOYMENT_DATABASE_ID.',
   );
+  addCheck(
+    checks,
+    'provider_health_probe',
+    String(env.RENDER_HEALTH_CHECK_PATH ?? '').trim() === '/health',
+    'Render liveness uses the database-free health endpoint.',
+    'Set the Render health check path and RENDER_HEALTH_CHECK_PATH audit metadata to /health; reserve /readyz for deliberate rollout checks.',
+  );
   const runtimeNamespace = String(env.MATCHMAKING_RUNTIME_NAMESPACE ?? '').trim();
   const runtimeLockTimeoutMs = Number(env.MATCHMAKING_RUNTIME_LOCK_TIMEOUT_MS ?? 5_000);
   addCheck(

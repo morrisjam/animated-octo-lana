@@ -78,7 +78,7 @@ Service: `gravity-well` (Web Service)
 - Build command: `npm ci`
 - Pre-deploy command: `npm run api:migrate`
 - Start command: `npm run api:dev`
-- Health check path: `/readyz`
+- Health check path: `/health`
 - Auto-deploy: `Off`; releases are exact-SHA deploy-hook promotions only
 - Suggested plan: `Starter`
 
@@ -88,6 +88,8 @@ Service: `gravity-well` (Web Service)
 NODE_ENV=production
 DEPLOYMENT_ENVIRONMENT=<canary_or_production>
 DEPLOYMENT_DATABASE_ID=<stable_non_secret_database_identity>
+# Audit metadata; keep equal to the Render service setting above:
+RENDER_HEALTH_CHECK_PATH=/health
 DATABASE_URL=<neon_connection_string>
 API_CORS_ORIGINS=https://play.gravitywell.space
 AUTH_SESSION_SECRET=<32+ character random secret>
@@ -120,7 +122,7 @@ MATCHMAKING_TURN_SHARED_SECRET=<coturn_rest_api_shared_secret>
 MATCHMAKING_TURN_CREDENTIAL_TTL_SECONDS=600
 ```
 
-Render supplies `RENDER_GIT_COMMIT`; the API reports it as `releaseSha` from `/health` and `/readyz`. The safe rollout gate also checks `DEPLOYMENT_ENVIRONMENT`, `DEPLOYMENT_DATABASE_ID`, database connectivity, migration head, PostgreSQL matchmaking coordination, and a runtime namespace equal to the rollout target before it resumes matchmaking. Configure GitHub repository variables `API_CANARY_DATABASE_ID` and `API_PRODUCTION_DATABASE_ID` to match the corresponding Render values. Configure `API_CANARY_EXPECTED_HOSTNAME` and `API_PRODUCTION_EXPECTED_HOSTNAME` independently of the secret API base URLs; the gate rejects non-HTTPS hosted URLs, hostname mismatches, URL credentials, and redirects before sending the operations key.
+Render supplies `RENDER_GIT_COMMIT`; the API reports it as `releaseSha` from `/health` and `/readyz`. `/health` is a database-free liveness probe and is excluded from durable SLO sampling, so provider polling cannot keep Neon awake. `/readyz` deliberately checks PostgreSQL and migration checksums and is reserved for the bounded safe-rollout gate and operator diagnostics. The offline provider audit blocks any `RENDER_HEALTH_CHECK_PATH` other than `/health`; this metadata must match the actual Render service setting. The safe rollout gate also checks `DEPLOYMENT_ENVIRONMENT`, `DEPLOYMENT_DATABASE_ID`, database connectivity, migration head, PostgreSQL matchmaking coordination, and a runtime namespace equal to the rollout target before it resumes matchmaking. Configure GitHub repository variables `API_CANARY_DATABASE_ID` and `API_PRODUCTION_DATABASE_ID` to match the corresponding Render values. Configure `API_CANARY_EXPECTED_HOSTNAME` and `API_PRODUCTION_EXPECTED_HOSTNAME` independently of the secret API base URLs; the gate rejects non-HTTPS hosted URLs, hostname mismatches, URL credentials, and redirects before sending the operations key.
 
 The web release must use matching `VITE_APP_BUILD`, `VITE_RULESET_VERSION`, and `VITE_BALANCE_PROFILE_ID` values. Ranked queue entry fails closed when these do not match the durable session/verifier contract.
 

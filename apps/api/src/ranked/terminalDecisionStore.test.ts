@@ -259,6 +259,25 @@ test('retry is claim-owned, clears the lease, and bounds UTF-8 errors and expone
   assert.match(sql, /lease_expires_at > NOW\(\)/);
 });
 
+test('reports the next durable decision deadline without polling settled rows', async () => {
+  const client = new ScriptedClient([
+    { rowCount: 1, rows: [{ next_action_at: new Date(DUE_AT) }] },
+    { rowCount: 1, rows: [{ next_action_at: null }] },
+  ]);
+  const store = createRankedTerminalDecisionStore(client);
+
+  assert.equal(await store.getNextActionAt(), DUE_AT);
+  assert.equal(await store.getNextActionAt(), null);
+  for (const query of client.queries) {
+    assert.match(query.sql, /MIN\( CASE/);
+    assert.match(query.sql, /status = 'pending'/);
+    assert.match(query.sql, /GREATEST\(due_at, next_attempt_at\)/);
+    assert.match(query.sql, /status = 'processing'/);
+    assert.match(query.sql, /WHERE status IN \('pending', 'processing'\)/);
+    assert.deepEqual(query.values, []);
+  }
+});
+
 test('reads durable status by session and returns null when absent', async () => {
   const client = new ScriptedClient([
     {

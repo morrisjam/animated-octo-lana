@@ -52,6 +52,7 @@ import {
 } from './matchmaking/sessionSignalStore';
 import { createMatchmakingSessionAccessStore } from './matchmaking/sessionAccessStore';
 import { requestUsesMatchmakingRuntime } from './matchmaking/runtimeRoutePolicy';
+import { shouldRunMatchmakingCheckpoint } from './matchmaking/backgroundActivityPolicy';
 import {
   createConnectivityTelemetryStore,
   type ConnectionPath,
@@ -136,6 +137,12 @@ import {
   resolveSloSampleRetentionConfig,
 } from './ops/sloSampleStore';
 import {
+  ActivityBoundMaintenanceScheduler,
+  isInfrastructureProbe,
+  shouldTriggerDatabaseMaintenance,
+} from './ops/activityBoundMaintenance';
+import { DueWorkScheduler } from './ops/dueWorkScheduler';
+import {
   evaluateRankedResultConsensus,
   evaluateRankedResultSubmission,
   type RankedResultSuspiciousReason,
@@ -181,6 +188,7 @@ const sloSampleStore = createSloSampleStore(
   db,
   resolveSloSampleRetentionConfig(process.env),
 );
+let databaseMaintenanceScheduler: ActivityBoundMaintenanceScheduler | null = null;
 const allowedCorsOrigins = parseCorsOrigins(process.env.API_CORS_ORIGINS);
 app.register(cors, {
   origin: (origin, callback) => {
@@ -202,7 +210,14 @@ app.register(cors, {
 });
 
 app.addHook('onRequest', async (request) => {
-  (request as { _sloRequestStartAt?: bigint })._sloRequestStartAt = process.hrtime.bigint();
+  const trackedRequest = request as {
+    _sloRequestStartAt?: bigint;
+    _excludeFromSloAvailability?: boolean;
+  };
+  trackedRequest._sloRequestStartAt = process.hrtime.bigint();
+  if (isInfrastructureProbe(request.url)) {
+    trackedRequest._excludeFromSloAvailability = true;
+  }
 });
 
 app.addHook('onResponse', async (request, reply) => {
@@ -299,6 +314,13 @@ const authRateLimitCleanupIntervalMs = Math.min(
   86_400,
   Math.max(60, parsePositiveIntegerEnv(process.env.AUTH_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS) ?? 900),
 ) * 1_000;
+const rankedTerminalDecisionRetryDelayMs = Math.min(
+  60_000,
+  Math.max(
+    250,
+    parsePositiveIntegerEnv(process.env.RANKED_TERMINAL_DECISION_PROCESS_INTERVAL_MS) ?? 1_000,
+  ),
+);
 const allowInsecureAccountHeader = resolveAllowInsecureAccountHeader(process.env);
 const legacyHttpFrameRelayEnabled = process.env.NODE_ENV !== 'production'
   && process.env.MATCHMAKING_ENABLE_LEGACY_HTTP_FRAME_RELAY === 'true';
@@ -376,7 +398,7 @@ interface MatchmakingRuntimeRequestLeaseState {
 
 const matchmakingRuntimeLeaseByRequest = new WeakMap<object, MatchmakingRuntimeRequestLeaseState>();
 let matchmakingPersistenceChain: Promise<void> = Promise.resolve();
-let rankedTerminalDecisionProcessingChain: Promise<void> = Promise.resolve();
+let rankedTerminalDecisionScheduler: DueWorkScheduler | null = null;
 let lastPersistedMatchmakingFingerprint: string | null = null;
 let matchmakingDraining = false;
 const matchmakingAccessPolicy = createMatchmakingAccessPolicyFromEnv(process.env);
@@ -1171,14 +1193,18 @@ async function processRankedTerminalDecisionBatch(): Promise<void> {
 }
 
 function scheduleRankedTerminalDecisionProcessing(): Promise<void> {
-  const processing = rankedTerminalDecisionProcessingChain
-    .catch(() => undefined)
-    .then(() => processRankedTerminalDecisionBatch())
-    .catch((error) => {
-      app.log.error({ err: error }, 'Failed to claim ranked terminal decisions.');
-    });
-  rankedTerminalDecisionProcessingChain = processing;
-  return processing;
+  rankedTerminalDecisionScheduler ??= new DueWorkScheduler({
+    retryDelayMs: rankedTerminalDecisionRetryDelayMs,
+    run: async () => {
+      await processRankedTerminalDecisionBatch();
+      const nextActionAt = await rankedTerminalDecisionStore.getNextActionAt();
+      return nextActionAt ? new Date(nextActionAt).getTime() : null;
+    },
+    onError: (error) => {
+      app.log.error({ err: error }, 'Failed to process scheduled ranked terminal decisions.');
+    },
+  });
+  return rankedTerminalDecisionScheduler.runNow();
 }
 
 function captureMatchmakingState(): MatchmakingQueueSnapshot {
@@ -1221,7 +1247,9 @@ function persistMatchmakingSnapshot(
           pendingRankedTerminalDecisions.delete(decision.sessionId);
         }
       }
-      await scheduleRankedTerminalDecisionProcessing();
+      if (decisions.length > 0) {
+        await scheduleRankedTerminalDecisionProcessing();
+      }
     });
   matchmakingPersistenceChain = checkpoint;
   return checkpoint;
@@ -1338,6 +1366,12 @@ app.addHook('onRequest', async (request, reply) => {
       return;
     }
     throw error;
+  }
+});
+
+app.addHook('onResponse', async (request) => {
+  if (shouldTriggerDatabaseMaintenance(request.method, request.url)) {
+    void databaseMaintenanceScheduler?.notifyActivity();
   }
 });
 
@@ -8490,19 +8524,7 @@ const port = Number(process.env.PORT ?? process.env.API_PORT ?? 8787);
 const matchmakingCheckpointIntervalMs = parsePositiveIntegerEnv(
   process.env.MATCHMAKING_SNAPSHOT_INTERVAL_MS,
 ) ?? 5_000;
-const rankedTerminalDecisionProcessingIntervalMs = Math.min(
-  60_000,
-  Math.max(
-    250,
-    parsePositiveIntegerEnv(process.env.RANKED_TERMINAL_DECISION_PROCESS_INTERVAL_MS) ?? 1_000,
-  ),
-);
 let matchmakingCheckpointTimer: NodeJS.Timeout | null = null;
-let rankedTerminalDecisionProcessingTimer: NodeJS.Timeout | null = null;
-let authRateLimitCleanupTimer: NodeJS.Timeout | null = null;
-let replayRetentionCleanupTimer: NodeJS.Timeout | null = null;
-let matchmakingSignalCleanupTimer: NodeJS.Timeout | null = null;
-let sloSampleCleanupTimer: NodeJS.Timeout | null = null;
 let shuttingDown = false;
 
 async function runSloSampleCleanup(): Promise<void> {
@@ -8557,26 +8579,7 @@ async function shutdown(signal: string): Promise<void> {
     clearInterval(matchmakingCheckpointTimer);
     matchmakingCheckpointTimer = null;
   }
-  if (rankedTerminalDecisionProcessingTimer) {
-    clearInterval(rankedTerminalDecisionProcessingTimer);
-    rankedTerminalDecisionProcessingTimer = null;
-  }
-  if (authRateLimitCleanupTimer) {
-    clearInterval(authRateLimitCleanupTimer);
-    authRateLimitCleanupTimer = null;
-  }
-  if (replayRetentionCleanupTimer) {
-    clearInterval(replayRetentionCleanupTimer);
-    replayRetentionCleanupTimer = null;
-  }
-  if (matchmakingSignalCleanupTimer) {
-    clearInterval(matchmakingSignalCleanupTimer);
-    matchmakingSignalCleanupTimer = null;
-  }
-  if (sloSampleCleanupTimer) {
-    clearInterval(sloSampleCleanupTimer);
-    sloSampleCleanupTimer = null;
-  }
+  rankedTerminalDecisionScheduler?.stop();
   try {
     await app.close();
     await matchmakingRuntimeCoordinator.withLease(async (lease) => {
@@ -8593,49 +8596,59 @@ async function shutdown(signal: string): Promise<void> {
 
 async function startServer(): Promise<void> {
   await matchmakingRuntimeCoordinator.withLease((lease) => restoreMatchmakingState(lease));
-  await processRankedTerminalDecisionBatch();
+  await scheduleRankedTerminalDecisionProcessing();
   await authRateLimiter.pruneExpired();
   await runReplayRetentionCleanup();
   await runMatchmakingSignalCleanup();
   await runSloSampleCleanup();
+  databaseMaintenanceScheduler = new ActivityBoundMaintenanceScheduler([
+    {
+      id: 'auth-rate-limit',
+      intervalMs: authRateLimitCleanupIntervalMs,
+      run: async () => {
+        await authRateLimiter.pruneExpired();
+      },
+    },
+    {
+      id: 'replay-retention',
+      intervalMs: replayRetentionCleanupIntervalMs,
+      run: runReplayRetentionCleanup,
+    },
+    {
+      id: 'matchmaking-signals',
+      intervalMs: matchmakingSignalCleanupIntervalMs,
+      run: runMatchmakingSignalCleanup,
+    },
+    {
+      id: 'slo-samples',
+      intervalMs: sloSampleStore.config.cleanupIntervalMs,
+      run: runSloSampleCleanup,
+    },
+  ], {
+    onError: ({ taskId, error }) => {
+      app.log.warn({ err: error, taskId }, 'Activity-bound database maintenance failed.');
+    },
+  });
   await app.listen({ port, host: '0.0.0.0' });
-  authRateLimitCleanupTimer = setInterval(() => {
-    void authRateLimiter.pruneExpired().catch((error) => {
-      app.log.warn({ err: error }, 'Failed to prune expired authentication rate-limit buckets.');
-    });
-  }, authRateLimitCleanupIntervalMs);
-  authRateLimitCleanupTimer.unref();
-  replayRetentionCleanupTimer = setInterval(() => {
-    void runReplayRetentionCleanup().catch((error) => {
-      app.log.warn({ err: error }, 'Failed to prune expired replay archives.');
-    });
-  }, replayRetentionCleanupIntervalMs);
-  replayRetentionCleanupTimer.unref();
-  matchmakingSignalCleanupTimer = setInterval(() => {
-    void runMatchmakingSignalCleanup().catch((error) => {
-      app.log.warn({ err: error }, 'Failed to prune expired WebRTC signaling messages.');
-    });
-  }, matchmakingSignalCleanupIntervalMs);
-  matchmakingSignalCleanupTimer.unref();
-  sloSampleCleanupTimer = setInterval(() => {
-    void runSloSampleCleanup().catch((error) => {
-      app.log.warn({ err: error }, 'Failed to prune retained SLO request samples.');
-    });
-  }, sloSampleStore.config.cleanupIntervalMs);
-  sloSampleCleanupTimer.unref();
   matchmakingCheckpointTimer = setInterval(() => {
+    const snapshot = captureMatchmakingState();
+    const snapshotChanged = fingerprintMatchmakingRuntimeSnapshot(snapshot)
+      !== lastPersistedMatchmakingFingerprint;
+    if (!shouldRunMatchmakingCheckpoint(
+      snapshot,
+      pendingRankedTerminalDecisions.size,
+      snapshotChanged,
+    )) {
+      return;
+    }
     void matchmakingRuntimeCoordinator.withLease(async (lease) => {
       await refreshMatchmakingState(lease);
-      await persistMatchmakingState(lease);
+      await persistMatchmakingStateIfChanged(lease);
     }).catch((error) => {
       app.log.error(error, 'Periodic matchmaking state checkpoint failed.');
     });
   }, matchmakingCheckpointIntervalMs);
   matchmakingCheckpointTimer.unref();
-  rankedTerminalDecisionProcessingTimer = setInterval(() => {
-    void scheduleRankedTerminalDecisionProcessing();
-  }, rankedTerminalDecisionProcessingIntervalMs);
-  rankedTerminalDecisionProcessingTimer.unref();
 }
 
 process.once('SIGTERM', () => {

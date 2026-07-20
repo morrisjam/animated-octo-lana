@@ -193,6 +193,34 @@ describe('storage-backed asynchronous persistence', () => {
     expect(storage.getItem(pendingIntentKey)).toBeNull();
   });
 
+  test('retains a write intent when the target write fails and repairs it after restart', async () => {
+    const storage = createTestStorage();
+    const checkedSetItem = storage.setItemChecked?.bind(storage);
+    let failNextTargetWrite = true;
+    storage.setItemChecked = (key, value) => {
+      if (failNextTargetWrite && !key.includes('.intent.')) {
+        failNextTargetWrite = false;
+        throw new Error('simulated target write interruption');
+      }
+      checkedSetItem?.(key, value);
+    };
+    const interrupted = createStorageBackedPersistenceService(storage);
+
+    await expect(interrupted.write(
+      'settings',
+      { volume: 0.8 },
+      { userId: 'user-a', intent: 'atomic_replace' },
+    )).resolves.toMatchObject({ ok: false, status: 'error' });
+    expect(storage.listKeys?.().some((key) => key.includes('.intent.'))).toBe(true);
+
+    const restarted = createStorageBackedPersistenceService(storage);
+    await expect(restarted.read<{ volume: number }>('settings', { userId: 'user-a' })).resolves.toMatchObject({
+      ok: true,
+      value: { volume: 0.8 },
+    });
+    expect(storage.listKeys?.().some((key) => key.includes('.intent.'))).toBe(false);
+  });
+
   test('uses collision-safe namespaces for punctuated users and keys', async () => {
     const persistence = createStorageBackedPersistenceService(createTestStorage());
     await persistence.write('b.c', { owner: 'a' }, { userId: 'a' });

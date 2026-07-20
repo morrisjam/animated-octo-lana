@@ -7,10 +7,8 @@ import type {
 } from './types';
 import { createConfiguredEntitlementService, parseEntitlementMode } from './entitlement';
 import { createBrowserPlatformLifecycleAdapter } from './lifecycle';
-import {
-  createStorageBackedPersistenceService,
-  PLATFORM_PERSISTENCE_KEYS,
-} from './persistence';
+import { createLazyStorageBackedPersistenceService } from './lazyPersistence';
+import { PLATFORM_PERSISTENCE_KEYS } from './persistenceKeys';
 
 const GUEST_ACCOUNT_KEY = 'gravity_well.guest_account_id';
 const GUEST_ACCESS_TOKEN_KEY = 'gravity_well.guest_access_token';
@@ -229,7 +227,7 @@ export function createWebPlatformServices(): PlatformServices {
     deniedMessage: String(import.meta.env.VITE_ENTITLEMENT_DENY_MESSAGE ?? '').trim() || undefined,
     unavailableMessage: 'Entitlement service is unavailable. Please retry later or contact support.',
   });
-  const persistence = createStorageBackedPersistenceService(storage, {
+  const persistence = createLazyStorageBackedPersistenceService(storage, {
     supportedScopes: ['local'],
     quotaProvider: estimateBrowserStorageQuota,
     legacySourceResolver(key, userId) {

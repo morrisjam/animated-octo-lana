@@ -459,11 +459,8 @@ export function createStorageBackedPersistenceService(
       checkedSetItem(storageKey, serialisedEnvelope);
       checkedRemoveItem(intentKey);
     } catch (error) {
-      try {
-        checkedRemoveItem(intentKey);
-      } catch {
-        // A later read will either finish or discard the recoverable intent.
-      }
+      // Preserve any complete intent. The next read can finish a target write that
+      // failed, or remove the intent after a target write whose cleanup failed.
       const latestQuota = await quotaSnapshot(context.userId, context.scope);
       return writeFailure(
         context,
@@ -812,7 +809,4 @@ export function createStorageBackedPersistenceService(
 
 export const PLATFORM_PERSISTENCE_ENVELOPE_SCHEMA = ENVELOPE_SCHEMA;
 export const PLATFORM_PERSISTENCE_WRITE_INTENT_SCHEMA = WRITE_INTENT_SCHEMA;
-export const PLATFORM_PERSISTENCE_KEYS = {
-  settings: 'settings',
-  profile: 'profile',
-} as const;
+export { PLATFORM_PERSISTENCE_KEYS } from './persistenceKeys';

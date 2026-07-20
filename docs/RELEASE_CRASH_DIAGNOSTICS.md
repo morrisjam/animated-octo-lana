@@ -2,13 +2,14 @@
 
 ## Purpose
 
-The release crash bundle is a small, versioned support artifact for reproducing failures without exporting personal data or arbitrary application logs. The implementation is intentionally not wired into `main.ts` yet.
+The release crash bundle is a small, versioned support artifact for reproducing failures without exporting personal data or arbitrary application logs. Players can explicitly export it from the pause menu.
 
 Source modules:
 
 - `apps/game-web/src/diagnostics/crashBundle.ts`
 - `apps/game-web/src/diagnostics/crashBundleExport.ts`
 - `apps/game-web/src/diagnostics/capabilities.ts`
+- `apps/game-web/src/diagnostics/browserSupportBundle.ts`
 
 Current schema: `gw.crash-bundle.v1`.
 
@@ -54,20 +55,20 @@ The schema explicitly excludes:
 
 Renderer limits remain useful for support, but exact hardware counts are bucketed. The capability summary reports WebGL generation, numeric WebGL limits, fixed extension support flags, coarse device-pixel-ratio, processor and memory buckets, and reduced-motion preference.
 
-## Integration Contract
+## Runtime Integration
 
-The future crash boundary should maintain bounded action, event, and performance buffers during play. On a handled fatal error it should:
+The browser runtime maintains bounded action, event, and performance buffers during play. Export:
 
-1. Convert the exception to a registered failure `category`, `phase`, and stable `code`. Do not pass its message or stack.
+1. Converts observed window, promise, and renderer-context failures to a registered `category`, `phase`, and stable `code`. It never passes a message or stack.
 2. Supply the current release and deterministic balance fingerprints.
 3. Supply persisted settings directly; the builder will retain only allowlisted values.
 4. Reference the current replay by integrity digest and frame counts, not by online session identity.
 5. Build the capability summary from safe renderer limits and coarse browser capability values.
-6. Call `buildCrashBundle` and pass the result to an injected `CrashBundleExporter`.
+6. Calls `buildCrashBundle` and downloads through the browser exporter only after the player presses `Export Support Bundle`.
 
 `createCrashBundleExportFile` is pure and produces deterministic, newline-terminated JSON. `exportCrashBundle` accepts an injected save port for Steam or console shells. `createBrowserCrashBundleExporter` provides the opt-in browser download implementation.
 
-Production integration must require an explicit player action before exporting. Bundles should remain local unless the player separately chooses to send them.
+Bundles remain local unless the player separately chooses to send them. Automatic upload is not implemented.
 
 ## Verification
 

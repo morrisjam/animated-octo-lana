@@ -135,6 +135,16 @@ export function resolveStartMenuMotionDirection(
   return 'replace';
 }
 
+type MenuGamepadAction =
+  | 'up'
+  | 'down'
+  | 'left'
+  | 'right'
+  | 'confirm'
+  | 'back'
+  | 'page_previous'
+  | 'page_next';
+
 interface StartMenuOptions {
   onlineMenuEnabled?: boolean;
   initialMode?: GameMode;
@@ -147,6 +157,9 @@ interface StartMenuOptions {
   availableStageAtmospheres?: StartStageAtmosphereOption[];
   enabledModes?: GameMode[];
   initialAccountSummary?: string;
+  getMenuGamepad?(): Gamepad | null;
+  getMenuGamepadActions?(gamepad: Gamepad, nowMs: number): readonly MenuGamepadAction[];
+  onGamepadActivity?(gamepad: Gamepad): void;
   onStartMode(
     mode: GameMode,
     loadout: PlayersById<CharacterId>,
@@ -175,16 +188,6 @@ interface StartMenuOptions {
   onStageAtmosphereChange?(atmosphereId: string): void;
   onReturnHome(): void;
   onPlayAgain(): void;
-}
-
-interface PadState {
-  up: boolean;
-  down: boolean;
-  left: boolean;
-  right: boolean;
-  confirm: boolean;
-  back: boolean;
-  start: boolean;
 }
 
 const MODE_LABELS: Record<GameMode, string> = {
@@ -217,26 +220,6 @@ function readButton(gamepad: Gamepad, index: number, threshold = 0.35): boolean 
     return false;
   }
   return button.pressed || button.value > threshold;
-}
-
-function readPadState(gamepad: Gamepad): PadState {
-  const axisX = gamepad.axes[0] ?? 0;
-  const axisY = gamepad.axes[1] ?? 0;
-  const threshold = 0.55;
-  const dpadUp = readButton(gamepad, 12);
-  const dpadDown = readButton(gamepad, 13);
-  const dpadLeft = readButton(gamepad, 14);
-  const dpadRight = readButton(gamepad, 15);
-
-  return {
-    up: dpadUp || axisY < -threshold,
-    down: dpadDown || axisY > threshold,
-    left: dpadLeft || axisX < -threshold,
-    right: dpadRight || axisX > threshold,
-    confirm: readButton(gamepad, 0),
-    back: readButton(gamepad, 1),
-    start: readButton(gamepad, 9) || readButton(gamepad, 16),
-  };
 }
 
 function cloneLoadout(loadout: PlayersById<CharacterId>): PlayersById<CharacterId> {
@@ -545,7 +528,8 @@ export class StartMenu {
   private readonly matchTitle: HTMLHeadingElement;
   private readonly matchSubtitle: HTMLParagraphElement;
 
-  private readonly prevPadStateByIndex = new Map<number, PadState>();
+  private menuGamepadIndex: number | null = null;
+  private menuStartButtonDown = false;
   private currentScreen: StartScreen = 'title';
   private rafId = 0;
 
@@ -1329,13 +1313,13 @@ export class StartMenu {
 
   public showHome(): void {
     this.root.hidden = false;
-    this.prevPadStateByIndex.clear();
+    this.resetControllerNavigation();
     this.setScreen('title');
   }
 
   public hideHome(): void {
     this.root.hidden = true;
-    this.prevPadStateByIndex.clear();
+    this.resetControllerNavigation();
   }
 
   public showRoundBanner(winner: PlayerId, subtitle: string): void {
@@ -1365,7 +1349,7 @@ export class StartMenu {
   public showMatchOver(winner: PlayerId, p1Wins: number, p2Wins: number): void {
     this.resetMatchOverActions();
     this.root.hidden = false;
-    this.prevPadStateByIndex.clear();
+    this.resetControllerNavigation();
     this.matchTitle.textContent = `${winner} wins the match`;
     this.matchSubtitle.textContent = `Final rounds: P1 ${p1Wins} - ${p2Wins} P2`;
     this.setMatchSelection(0);
@@ -1389,7 +1373,7 @@ export class StartMenu {
     }
 
     this.root.hidden = false;
-    this.prevPadStateByIndex.clear();
+    this.resetControllerNavigation();
     this.matchTitle.textContent = options.title ?? 'Match Over';
     this.matchSubtitle.textContent = options.subtitle ?? '';
     this.setMatchSelection(0);
@@ -2473,44 +2457,56 @@ export class StartMenu {
     this.refreshRowHighlights();
   }
 
-  private wasPressed(padIndex: number, state: PadState, key: keyof PadState): boolean {
-    const previous = this.prevPadStateByIndex.get(padIndex);
-    return state[key] && !previous?.[key];
+  private resetControllerNavigation(): void {
+    this.menuGamepadIndex = null;
+    this.menuStartButtonDown = false;
   }
 
   private pollGamepads = (): void => {
     if (!this.root.hidden && navigator.getGamepads) {
       const pads = navigator.getGamepads();
-      const primaryPad = pads.find((pad) => Boolean(pad)) ?? null;
+      const primaryPad = this.options.getMenuGamepad?.()
+        ?? pads.find((pad) => Boolean(pad))
+        ?? null;
       if (primaryPad) {
-        const state = readPadState(primaryPad);
-        if (this.wasPressed(primaryPad.index, state, 'up')) {
-          this.moveSelection(-1);
+        if (this.menuGamepadIndex !== primaryPad.index) {
+          this.menuGamepadIndex = primaryPad.index;
+          this.menuStartButtonDown = false;
         }
-        if (this.wasPressed(primaryPad.index, state, 'down')) {
-          this.moveSelection(1);
+        const actions = this.options.getMenuGamepadActions?.(primaryPad, performance.now()) ?? [];
+        const startButtonDown = readButton(primaryPad, 9) || readButton(primaryPad, 16);
+        if (actions.length > 0 || (startButtonDown && !this.menuStartButtonDown)) {
+          this.options.onGamepadActivity?.(primaryPad);
         }
-        if (this.wasPressed(primaryPad.index, state, 'left')) {
-          this.applyHorizontalNavigation(-1);
+        for (const action of actions) {
+          if (action === 'up') {
+            this.moveSelection(-1);
+          } else if (action === 'down') {
+            this.moveSelection(1);
+          } else if (action === 'left' || action === 'page_previous') {
+            this.applyHorizontalNavigation(-1);
+          } else if (action === 'right' || action === 'page_next') {
+            this.applyHorizontalNavigation(1);
+          } else if (action === 'confirm') {
+            this.activateSelection();
+          } else if (action === 'back') {
+            this.handleBackAction();
+          }
         }
-        if (this.wasPressed(primaryPad.index, state, 'right')) {
-          this.applyHorizontalNavigation(1);
-        }
-        if (this.wasPressed(primaryPad.index, state, 'confirm')) {
-          this.activateSelection();
-        }
-        if (this.wasPressed(primaryPad.index, state, 'back')) {
-          this.handleBackAction();
-        }
-        if (this.wasPressed(primaryPad.index, state, 'start')) {
+        if (startButtonDown && !this.menuStartButtonDown) {
           if (this.currentScreen === 'local') {
             this.startLocalMatch();
           } else if (this.currentScreen === 'match_over') {
             this.activateSelection();
           }
         }
-        this.prevPadStateByIndex.set(primaryPad.index, state);
+        this.menuStartButtonDown = startButtonDown;
+      } else {
+        this.menuGamepadIndex = null;
+        this.menuStartButtonDown = false;
       }
+    } else if (this.root.hidden) {
+      this.menuStartButtonDown = false;
     }
 
     this.rafId = window.requestAnimationFrame(this.pollGamepads);

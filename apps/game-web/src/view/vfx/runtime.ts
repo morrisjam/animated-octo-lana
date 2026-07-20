@@ -25,31 +25,69 @@ interface ActiveCombatVfx {
   endScale: number;
   startOpacity: number;
   endOpacity: number;
+  ownedTexture: THREE.Texture | null;
+  flipbook: VfxParticlePreset['flipbook'] | null;
 }
 
 export interface CombatVfxRuntimeOptions {
   onAudioCue?: (event: CombatVfxEvent, cue: VfxSoundCuePreset) => void;
+  resolveTexture?: (textureId: string) => THREE.Texture | null;
 }
 
 export interface CombatVfxRuntime {
   scene: THREE.Scene;
   active: ActiveCombatVfx[];
   onAudioCue?: (event: CombatVfxEvent, cue: VfxSoundCuePreset) => void;
+  resolveTexture?: (textureId: string) => THREE.Texture | null;
 }
 
-function createRingMaterial(color: string, opacity: number): THREE.MeshBasicMaterial {
+function createEffectMaterial(
+  color: string,
+  opacity: number,
+  map: THREE.Texture | null = null,
+): THREE.MeshBasicMaterial {
   return new THREE.MeshBasicMaterial({
     color,
+    map,
     transparent: true,
     opacity,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
+    alphaTest: map ? 0.01 : 0,
   });
 }
 
-function createParticleNode(event: CombatVfxEvent, preset: VfxParticlePreset): ActiveCombatVfx {
-  const geometry = new THREE.SphereGeometry(1, 16, 16);
-  const material = createRingMaterial(preset.color, preset.startOpacity);
+function cloneEffectTexture(
+  runtime: CombatVfxRuntime,
+  preset: VfxParticlePreset,
+): THREE.Texture | null {
+  if (!preset.textureId || !runtime.resolveTexture) {
+    return null;
+  }
+  const source = runtime.resolveTexture(preset.textureId);
+  if (!source) {
+    return null;
+  }
+  const texture = source.clone();
+  texture.needsUpdate = true;
+  if (preset.flipbook) {
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.repeat.set(1 / preset.flipbook.columns, 1 / preset.flipbook.rows);
+  }
+  return texture;
+}
+
+function createParticleNode(
+  runtime: CombatVfxRuntime,
+  event: CombatVfxEvent,
+  preset: VfxParticlePreset,
+): ActiveCombatVfx {
+  const texture = cloneEffectTexture(runtime, preset);
+  const geometry = texture
+    ? new THREE.PlaneGeometry(2, 2)
+    : new THREE.SphereGeometry(1, 16, 16);
+  const material = createEffectMaterial(preset.color, preset.startOpacity, texture);
   const node = new THREE.Mesh(geometry, material);
   node.position.set(event.position.x, event.position.y, 0.28);
   node.scale.setScalar(preset.startScale);
@@ -70,12 +108,14 @@ function createParticleNode(event: CombatVfxEvent, preset: VfxParticlePreset): A
     endScale: preset.endScale,
     startOpacity: preset.startOpacity,
     endOpacity: preset.endOpacity,
+    ownedTexture: texture,
+    flipbook: preset.flipbook ?? null,
   };
 }
 
 function createTrailNode(event: CombatVfxEvent, preset: VfxTrailPreset): ActiveCombatVfx {
   const geometry = new THREE.PlaneGeometry(preset.length, preset.width);
-  const material = createRingMaterial(preset.color, preset.startOpacity);
+  const material = createEffectMaterial(preset.color, preset.startOpacity);
   const node = new THREE.Mesh(geometry, material);
   const angle = Math.atan2(event.direction.y, event.direction.x);
   const halfLength = preset.length * 0.5;
@@ -99,6 +139,8 @@ function createTrailNode(event: CombatVfxEvent, preset: VfxTrailPreset): ActiveC
     endScale: 1.1,
     startOpacity: preset.startOpacity,
     endOpacity: preset.endOpacity,
+    ownedTexture: null,
+    flipbook: null,
   };
 }
 
@@ -108,7 +150,7 @@ function createFlashNode(event: CombatVfxEvent, preset: VfxFlashPreset): ActiveC
     Math.max(0.06, preset.radius + preset.thickness),
     36,
   );
-  const material = createRingMaterial(preset.color, preset.startOpacity);
+  const material = createEffectMaterial(preset.color, preset.startOpacity);
   const node = new THREE.Mesh(geometry, material);
   node.position.set(event.position.x, event.position.y, 0.19);
   node.scale.setScalar(preset.startScale);
@@ -125,6 +167,8 @@ function createFlashNode(event: CombatVfxEvent, preset: VfxFlashPreset): ActiveC
     endScale: preset.endScale,
     startOpacity: preset.startOpacity,
     endOpacity: preset.endOpacity,
+    ownedTexture: null,
+    flipbook: null,
   };
 }
 
@@ -141,6 +185,7 @@ function spawnEffect(runtime: CombatVfxRuntime, effect: ActiveCombatVfx, gameTim
       runtime.scene.remove(oldest.node);
       oldest.geometry.dispose();
       oldest.material.dispose();
+      oldest.ownedTexture?.dispose();
     }
   }
   effect.startTimeSeconds = gameTimeSeconds;
@@ -152,6 +197,7 @@ function disposeEffect(runtime: CombatVfxRuntime, effect: ActiveCombatVfx): void
   runtime.scene.remove(effect.node);
   effect.geometry.dispose();
   effect.material.dispose();
+  effect.ownedTexture?.dispose();
 }
 
 export function createCombatVfxRuntime(scene: THREE.Scene, options?: CombatVfxRuntimeOptions): CombatVfxRuntime {
@@ -159,7 +205,22 @@ export function createCombatVfxRuntime(scene: THREE.Scene, options?: CombatVfxRu
     scene,
     active: [],
     onAudioCue: options?.onAudioCue,
+    resolveTexture: options?.resolveTexture,
   };
+}
+
+function updateFlipbook(effect: ActiveCombatVfx, ageSeconds: number): void {
+  if (!effect.ownedTexture || !effect.flipbook) {
+    return;
+  }
+  const { columns, rows, frameCount, framesPerSecond, loop = false } = effect.flipbook;
+  const rawFrame = Math.max(0, Math.floor(ageSeconds * framesPerSecond));
+  const frame = loop
+    ? rawFrame % frameCount
+    : Math.min(frameCount - 1, rawFrame);
+  const column = frame % columns;
+  const row = Math.floor(frame / columns);
+  effect.ownedTexture.offset.set(column / columns, 1 - ((row + 1) / rows));
 }
 
 export function clearCombatVfxRuntime(runtime: CombatVfxRuntime): void {
@@ -189,6 +250,7 @@ export function updateCombatVfxRuntime(runtime: CombatVfxRuntime, gameTimeSecond
     );
     effect.node.scale.setScalar(scale);
     setEffectOpacity(effect, opacity);
+    updateFlipbook(effect, age);
   }
 }
 
@@ -204,7 +266,7 @@ export function emitCombatVfxEvents(
     }
 
     if (preset.particles) {
-      spawnEffect(runtime, createParticleNode(event, preset.particles), gameTimeSeconds);
+      spawnEffect(runtime, createParticleNode(runtime, event, preset.particles), gameTimeSeconds);
     }
     if (preset.trail) {
       spawnEffect(runtime, createTrailNode(event, preset.trail), gameTimeSeconds);

@@ -48,12 +48,18 @@ reconciled after every disconnect, reconnect, page background return, or platfor
 6. Provide Steam or console shells as `PlatformVirtualKeyboard` adapters. Keep browser password
    fields on masked HTML inputs until a secure browser text-entry surface is supplied.
 
-## Deliberate Non-Changes
+## Runtime Integration
 
-These foundations are not wired into the current start or pause menus in this change. The existing
-gameplay mapper still assigns connected pads exactly as before, so rollback input, replay checksums,
-and simulation behaviour are unchanged. Menu integration should be a separate, visual testable
-change after these APIs are accepted.
+- The start menu uses family-correct confirm/back actions and held-direction repeat.
+- Controllers claim P1 then P2 in connection order, and gameplay reads those stable assignments
+  instead of renumbering the remaining pad after a disconnect.
+- Assigned-controller loss pauses an offline match and shows an accessible recovery notice.
+- Reconnection or replacement input restores ownership, while resume refreshes the registry.
+- Comfortable safe-area variables now drive the HUD and start-menu padding.
+
+Gameplay actions still come from the remappable input profile, so this presentation integration
+does not change deterministic simulation, rollback input, or replay checksums. Native platform
+virtual-keyboard adapters and authored glyph artwork remain platform-shell work.
 
 ## Verification
 

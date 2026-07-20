@@ -18,6 +18,11 @@ import {
 } from './stagePresentation';
 import type { AssetFileEntry } from './assets/types';
 import {
+  createImageTextureLibrary,
+  getImageTexture,
+  type ImageTextureLibrary,
+} from './assets/imageTextureLibrary';
+import {
   applyStageModelSelection,
   createStageModelRuntime,
   type StageModelRuntime,
@@ -28,7 +33,8 @@ import {
   type ActionReadabilityId,
 } from './actionReadability';
 
-const MAX_RENDER_PIXEL_RATIO = 1.25;
+const MIN_RENDER_PIXEL_RATIO = 0.25;
+const MAX_RENDER_PIXEL_RATIO = 2;
 
 type PlayerIndicatorMeshes = Record<ActionReadabilityId, THREE.Group>;
 
@@ -42,6 +48,7 @@ interface WormholeBackdrop {
 
 export interface SceneContext {
   renderer: THREE.WebGLRenderer;
+  renderPixelRatio: number;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   cameraTarget: THREE.Vector3;
@@ -69,6 +76,7 @@ export interface SceneContext {
   arenaBoundary: THREE.LineLoop;
   stars: THREE.Points;
   stageBackgroundImage: THREE.Mesh;
+  imageTextureLibrary: ImageTextureLibrary;
   stageBackgroundModel: StageModelRuntime;
   wormholeBackdrop: WormholeBackdrop;
   stageAtmosphereId: string;
@@ -77,10 +85,18 @@ export interface SceneContext {
 export interface SceneOptions {
   onCombatAudioCue?: (event: CombatVfxEvent, cue: VfxSoundCuePreset) => void;
   stageModelEntries?: AssetFileEntry[];
+  textureEntries?: AssetFileEntry[];
 }
 
-function getClampedPixelRatio(): number {
-  return Math.min(window.devicePixelRatio || 1, MAX_RENDER_PIXEL_RATIO);
+function getClampedPixelRatio(requestedPixelRatio = 1): number {
+  return Math.max(
+    MIN_RENDER_PIXEL_RATIO,
+    Math.min(
+      requestedPixelRatio,
+      window.devicePixelRatio || 1,
+      MAX_RENDER_PIXEL_RATIO,
+    ),
+  );
 }
 
 function createGravityWellMaterial(): THREE.ShaderMaterial {
@@ -402,11 +418,15 @@ function addStageBackgroundImage(scene: THREE.Scene): THREE.Mesh {
       color: '#ffffff',
       transparent: true,
       opacity: 0.35,
+      depthTest: false,
       depthWrite: false,
+      fog: false,
+      toneMapped: false,
     }),
   );
   mesh.position.set(0, 0, -180);
   mesh.visible = false;
+  mesh.renderOrder = -100;
   mesh.userData.textureId = null;
   scene.add(mesh);
   return mesh;
@@ -666,7 +686,8 @@ function createPlayerIndicators(scene: THREE.Scene): PlayersById<PlayerIndicator
 
 export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): SceneContext {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(getClampedPixelRatio());
+  const renderPixelRatio = getClampedPixelRatio();
+  renderer.setPixelRatio(renderPixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
@@ -693,16 +714,19 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
   } = addArena(scene);
   const stars = addStars(scene);
   const stageBackgroundImage = addStageBackgroundImage(scene);
+  const imageTextureLibrary = createImageTextureLibrary(options?.textureEntries ?? []);
   const stageBackgroundModel = createStageModelRuntime(scene, options?.stageModelEntries ?? []);
   const wormholeBackdrop = addWormholeBackdrop(scene);
   const { playerVisuals, playerMeshes } = createPlayerVisuals(scene);
   const playerIndicators = createPlayerIndicators(scene);
   const combatVfxRuntime = createCombatVfxRuntime(scene, {
     onAudioCue: options?.onCombatAudioCue,
+    resolveTexture: (textureId) => getImageTexture(imageTextureLibrary, textureId),
   });
 
   const context: SceneContext = {
     renderer,
+    renderPixelRatio,
     scene,
     camera,
     cameraTarget: camera.position.clone(),
@@ -733,6 +757,7 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
     arenaBoundary: boundary,
     stars,
     stageBackgroundImage,
+    imageTextureLibrary,
     stageBackgroundModel,
     wormholeBackdrop,
     stageAtmosphereId: DEFAULT_STAGE_ATMOSPHERE_ID,
@@ -742,7 +767,7 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
 }
 
 export function resizeScene(context: SceneContext): void {
-  context.renderer.setPixelRatio(getClampedPixelRatio());
+  context.renderer.setPixelRatio(context.renderPixelRatio);
   context.renderer.setSize(window.innerWidth, window.innerHeight);
   context.camera.aspect = window.innerWidth / window.innerHeight;
   context.camera.updateProjectionMatrix();
@@ -845,10 +870,22 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   context.stars.userData.baseOpacity = starsMaterial.opacity;
 
   const imageMaterial = context.stageBackgroundImage.material as THREE.MeshBasicMaterial;
+  const backgroundTexture = getImageTexture(context.imageTextureLibrary, tokens.backgroundImageTextureId);
+  if (imageMaterial.map !== backgroundTexture) {
+    imageMaterial.map = backgroundTexture;
+    imageMaterial.needsUpdate = true;
+  }
   imageMaterial.color.set(tokens.backgroundImageTint);
   imageMaterial.opacity = clampOpacity(tokens.backgroundImageOpacity);
-  context.stageBackgroundImage.visible = Boolean(tokens.backgroundImageTextureId);
+  context.stageBackgroundImage.visible = Boolean(backgroundTexture) && imageMaterial.opacity > 0;
   context.stageBackgroundImage.userData.textureId = tokens.backgroundImageTextureId ?? null;
+  context.stageBackgroundImage.userData.visibleTextureId = backgroundTexture
+    ? tokens.backgroundImageTextureId
+    : null;
+  context.renderer.domElement.dataset.stageTextureId = tokens.backgroundImageTextureId ?? '';
+  context.renderer.domElement.dataset.stageTextureVisibleId = backgroundTexture
+    ? tokens.backgroundImageTextureId ?? ''
+    : '';
 
   applyStageModelSelection(
     context.stageBackgroundModel,
@@ -896,4 +933,12 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   particleMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * 0.72;
 
   return preset.id;
+}
+
+export function setScenePixelRatio(context: SceneContext, pixelRatio: number): number {
+  const resolvedPixelRatio = getClampedPixelRatio(pixelRatio);
+  context.renderPixelRatio = resolvedPixelRatio;
+  context.renderer.setPixelRatio(resolvedPixelRatio);
+  context.renderer.setSize(window.innerWidth, window.innerHeight);
+  return resolvedPixelRatio;
 }

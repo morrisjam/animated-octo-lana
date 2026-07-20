@@ -12,9 +12,11 @@ export interface ProductionBundleLimits {
 }
 
 export const DEFAULT_PRODUCTION_BUNDLE_LIMITS: ProductionBundleLimits = {
-  maxInitialJavaScriptBytes: 1_100_000,
-  maxInitialJavaScriptGzipBytes: 290_000,
-  maxEntryChunkBytes: 460_000,
+  // Alpha runtime persistence and support diagnostics add entry-point coordination,
+  // while their heavier implementations remain isolated in on-demand chunks.
+  maxInitialJavaScriptBytes: 1_115_000,
+  maxInitialJavaScriptGzipBytes: 300_000,
+  maxEntryChunkBytes: 480_000,
   maxJavaScriptChunkBytes: 510_000,
 };
 

@@ -23,6 +23,14 @@ export interface CombatVfxEvent {
 
 export interface VfxParticlePreset {
   color: string;
+  textureId?: string;
+  flipbook?: {
+    columns: number;
+    rows: number;
+    frameCount: number;
+    framesPerSecond: number;
+    loop?: boolean;
+  };
   lifetimeSeconds: number;
   startScale: number;
   endScale: number;

@@ -47,8 +47,9 @@ The old synchronous methods remain as deprecated shims:
 - `writeJson`
 - `remove`
 
-This keeps existing `main.ts` behavior unchanged during migration. The web and Steam async adapters automatically recognise these logical keys:
+The web runtime dual-writes immediate legacy saves and the recoverable scoped store during the rollback-compatible migration window. The web and Steam async adapters automatically recognise these logical keys:
 - `settings` copies from `gravity_well.settings.v1`.
+- `arcade_history` copies from `gravity_well.arcade_history.v1` at the game integration layer.
 - Web `profile` copies from `gravity_well.profile.<userId>`.
 - Steam `profile` copies from `profile.<userId>`.
 
@@ -56,7 +57,8 @@ Legacy values are retained by default so old and new builds can coexist during r
 
 ## Integration Status
 - Web and Steam factories expose the asynchronous service now.
-- Existing synchronous gameplay settings and diagnostics calls are intentionally not rewired in this change.
+- Gameplay settings and arcade history hydrate per user, retain revisions, recover conflicts once,
+  and flush on suspend while preserving immediate offline legacy saves.
 - Profile service behavior is unchanged; migration is available when the parent switches profile persistence to the new contract.
 - A native Steam/console durable-storage adapter, cloud conflict policy, save-slot UI, and certification evidence remain open.
 

@@ -161,11 +161,15 @@ export default defineConfig(({ mode }) => {
     ...process.env,
   };
   const gameEntry = fileURLToPath(new URL('index.html', import.meta.url));
+  const includeAssetWorkshop = mode === 'asset-workshop'
+    || String(environment.VITE_INCLUDE_ASSET_WORKSHOP ?? '').toLowerCase() === 'true';
   const buildInput = mode === 'steam-alpha'
     ? { game: gameEntry }
     : {
         game: gameEntry,
-        assetWorkshop: fileURLToPath(new URL('asset-workshop.html', import.meta.url)),
+        ...(includeAssetWorkshop ? {
+          assetWorkshop: fileURLToPath(new URL('asset-workshop.html', import.meta.url)),
+        } : {}),
         webRtcSmoke: fileURLToPath(new URL('webrtc-smoke.html', import.meta.url)),
         webRtcPeerSmoke: fileURLToPath(new URL('webrtc-peer-smoke.html', import.meta.url)),
       };

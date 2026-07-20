@@ -19,6 +19,7 @@ import {
   emitCombatVfxEvents,
   updateCombatVfxRuntime,
 } from './vfx/runtime';
+import { disposeImageTextureLibrary } from './assets/imageTextureLibrary';
 import {
   resolveStageCameraPitchDegrees,
   resolveStageCameraYOffset,
@@ -469,6 +470,7 @@ export function cleanupRender(context: SceneContext): void {
   context.scene.remove(context.stageBackgroundImage);
   context.stageBackgroundImage.geometry.dispose();
   (context.stageBackgroundImage.material as THREE.Material).dispose();
+  disposeImageTextureLibrary(context.imageTextureLibrary);
 
   disposeStageModelRuntime(context.stageBackgroundModel);
 

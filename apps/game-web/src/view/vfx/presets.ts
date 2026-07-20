@@ -1,9 +1,20 @@
 import { CHARACTER_BY_ID } from '../../sim/characters';
 import type { CombatVfxEvent, CombatVfxEventType, CombatVfxPresetMap } from './types';
 
+const ACTION_BURST_FLIPBOOK = {
+  textureId: 'vfx_action_burst_flipbook_v1',
+  flipbook: {
+    columns: 4,
+    rows: 1,
+    frameCount: 4,
+    framesPerSecond: 20,
+  },
+} as const;
+
 export const COMBAT_VFX_PRESET_LIBRARY: CombatVfxPresetMap = {
   boost_core: {
     particles: {
+      ...ACTION_BURST_FLIPBOOK,
       color: '#7bc2ff',
       lifetimeSeconds: 0.2,
       startScale: 1.1,
@@ -148,6 +159,7 @@ export const COMBAT_VFX_PRESET_LIBRARY: CombatVfxPresetMap = {
   },
   super_boost_core: {
     particles: {
+      ...ACTION_BURST_FLIPBOOK,
       color: '#6d8cff',
       lifetimeSeconds: 0.3,
       startScale: 1.8,

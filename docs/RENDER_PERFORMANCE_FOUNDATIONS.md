@@ -2,13 +2,14 @@
 
 ## Scope
 
-These modules define performance policies and measurements without changing the current renderer:
+These modules define performance policies and measurements used by the current renderer:
 
 - `apps/game-web/src/view/performance/tiers.ts`
 - `apps/game-web/src/view/performance/adaptiveResolution.ts`
 - `apps/game-web/src/view/performance/samples.ts`
 
-No code in `main.ts` or `scene.ts` is wired to these modules yet.
+`browserRuntime.ts` connects the Balanced policy to `main.ts` and `scene.ts` through a lazy-loaded
+adapter. Simulation timing remains fixed; only render pixel ratio is adaptive.
 
 ## Performance Tiers
 
@@ -57,18 +58,16 @@ Each sample can contain:
 
 Samples contain no absolute timestamp, account data, hardware name, URL, or arbitrary metadata. Snapshots are defensive copies and can be passed directly into the crash-bundle builder.
 
-## Future Wiring
+## Runtime Status And Next Work
 
-When the visual pass is ready for integration:
+- Balanced adaptive resolution is enabled by default and bounded by device pixel ratio.
+- Mean/p95 frame time and renderer counters are sampled once per second into the bounded buffer.
+- Background gaps are rejected, and adaptation is disabled while the platform is suspended.
+- Reduced-motion preference is exposed on the document for presentation systems and diagnostics.
 
-1. Add graphics-tier and adaptive-resolution preferences to the settings UI.
-2. Resolve the selected tier during renderer creation.
-3. Feed aggregated render-frame measurements into the controller.
-4. Apply pixel-ratio changes through the controller hook and resize once.
-5. Apply tier visual budgets to particles, wormhole detail, bloom, distortion, and dynamic lights.
-6. Forward reduced-motion changes to camera, stage, VFX, and menu transition policies.
-7. Sample renderer counters at a low fixed cadence and retain them in `PerformanceSampleBuffer`.
-8. Verify frame pacing and readability on the minimum alpha hardware profile before enabling adaptation by default.
+Graphics-tier selection, tier-specific particle/background budgets, and minimum-hardware frame
+pacing evidence remain open. Those are visual-settings and hardware-QA tasks rather than renderer
+architecture blockers.
 
 ## Verification
 

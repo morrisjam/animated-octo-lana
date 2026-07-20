@@ -5,6 +5,15 @@ import { createEmptyFrameInput } from './frame';
 const AXIS_DEADZONE = 0.2;
 const BUTTON_THRESHOLD = 0.35;
 
+export interface GamepadAssignments {
+  P1: number | null;
+  P2: number | null;
+}
+
+export interface GamepadInputOptions {
+  getAssignments?(): GamepadAssignments | null;
+}
+
 function readAxis(value: number | undefined): number {
   if (value === undefined) {
     return 0;
@@ -69,7 +78,10 @@ export function mapPadToPlayerInput(
 export class GamepadInput {
   private readonly frameInput = createEmptyFrameInput();
 
-  constructor(private readonly bindingStore: InputBindingStore) {}
+  constructor(
+    private readonly bindingStore: InputBindingStore,
+    private readonly options: GamepadInputOptions = {},
+  ) {}
 
   getFrameInput(): FrameInput {
     clearPlayerInput(this.frameInput.p1);
@@ -80,8 +92,21 @@ export class GamepadInput {
       return this.frameInput;
     }
 
-    let connectedCount = 0;
     const bindings = this.bindingStore.getProfile().gamepad;
+    const assignments = this.options.getAssignments?.() ?? null;
+    if (assignments) {
+      const p1Pad = assignments.P1 === null ? null : pads[assignments.P1];
+      const p2Pad = assignments.P2 === null ? null : pads[assignments.P2];
+      if (p1Pad) {
+        mapPadToPlayerInput(p1Pad, bindings.P1, this.frameInput.p1);
+      }
+      if (p2Pad) {
+        mapPadToPlayerInput(p2Pad, bindings.P2, this.frameInput.p2);
+      }
+      return this.frameInput;
+    }
+
+    let connectedCount = 0;
     for (let i = 0; i < pads.length; i += 1) {
       const pad = pads[i];
       if (!pad) {
@@ -100,6 +125,9 @@ export class GamepadInput {
   }
 }
 
-export function createGamepadInput(bindingStore: InputBindingStore): GamepadInput {
-  return new GamepadInput(bindingStore);
+export function createGamepadInput(
+  bindingStore: InputBindingStore,
+  options: GamepadInputOptions = {},
+): GamepadInput {
+  return new GamepadInput(bindingStore, options);
 }

@@ -5,6 +5,7 @@ import { createWebPlatformServices } from './web';
 export * from './types';
 export * from './lifecycle';
 export * from './persistence';
+export * from './persistenceKeys';
 
 export function createPlatformServices(): PlatformServices {
   const configuredPlatform = String(import.meta.env.VITE_PLATFORM ?? 'web').toLowerCase();

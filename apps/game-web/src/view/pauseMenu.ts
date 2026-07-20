@@ -137,6 +137,7 @@ export interface PauseMenuOptions {
   onExportTrainingTelemetry?(): Promise<string> | string;
   canExportAiMatchTelemetry?(): boolean;
   onExportAiMatchTelemetry?(): Promise<string> | string;
+  onExportSupportBundle?(): Promise<string> | string;
   canReviewAiRound?(): boolean;
   onReviewAiRound?(request?: AiRoundReviewRequest): void;
   getAiRoundReplay?(): ReplayPayload | null;
@@ -622,6 +623,8 @@ export class PauseMenu {
   private exportTrainingTelemetryButton: HTMLButtonElement | null = null;
   private exportAiMatchTelemetryButton: HTMLButtonElement | null = null;
   private exportBalanceExperimentButton: HTMLButtonElement | null = null;
+  private exportSupportBundleButton: HTMLButtonElement | null = null;
+  private supportExportStatus: HTMLParagraphElement | null = null;
   private restoreBalanceBaselineButton: HTMLButtonElement | null = null;
   private reviewBalanceComparisonButton: HTMLButtonElement | null = null;
   private balanceReplayPairingStatus: HTMLParagraphElement | null = null;
@@ -686,6 +689,7 @@ export class PauseMenu {
   private canRestartTraining = false;
   private exportingTrainingTelemetry = false;
   private exportingAiMatchTelemetry = false;
+  private exportingSupportBundle = false;
   private activeTab: PauseTabId = 'pause';
   private balanceReplayComparison: BalanceReplayComparison | null = null;
   private balanceReplayCandidateSequence: number | null = null;
@@ -956,8 +960,63 @@ export class PauseMenu {
     });
     this.reviewAiRoundButton = reviewAiRound;
 
-    tab.append(resume, reviewAiRound, restartTraining, toAudio, toBindings, toDebug);
+    const exportSupportBundle = document.createElement('button');
+    exportSupportBundle.type = 'button';
+    exportSupportBundle.className = 'pause-action';
+    exportSupportBundle.textContent = 'Export Support Bundle';
+    exportSupportBundle.hidden = !this.options.onExportSupportBundle;
+    exportSupportBundle.addEventListener('click', () => {
+      void this.exportSupportBundle();
+    });
+    this.exportSupportBundleButton = exportSupportBundle;
+
+    const supportStatus = document.createElement('p');
+    supportStatus.className = 'pause-copy-status';
+    supportStatus.setAttribute('aria-live', 'polite');
+    supportStatus.hidden = !this.options.onExportSupportBundle;
+    this.supportExportStatus = supportStatus;
+
+    tab.append(
+      resume,
+      reviewAiRound,
+      restartTraining,
+      toAudio,
+      toBindings,
+      toDebug,
+      exportSupportBundle,
+      supportStatus,
+    );
     return tab;
+  }
+
+  private async exportSupportBundle(): Promise<void> {
+    if (!this.options.onExportSupportBundle || this.exportingSupportBundle) {
+      return;
+    }
+    this.exportingSupportBundle = true;
+    if (this.exportSupportBundleButton) {
+      this.exportSupportBundleButton.disabled = true;
+    }
+    if (this.supportExportStatus) {
+      this.supportExportStatus.textContent = 'Preparing privacy-safe support bundle...';
+    }
+    try {
+      const result = await this.options.onExportSupportBundle();
+      if (this.supportExportStatus) {
+        this.supportExportStatus.textContent = result || 'Support bundle exported.';
+      }
+    } catch (error) {
+      if (this.supportExportStatus) {
+        this.supportExportStatus.textContent = error instanceof Error
+          ? `Support bundle export failed: ${error.message}`
+          : 'Support bundle export failed.';
+      }
+    } finally {
+      this.exportingSupportBundle = false;
+      if (this.exportSupportBundleButton) {
+        this.exportSupportBundleButton.disabled = false;
+      }
+    }
   }
 
   private createAudioTab(): HTMLDivElement {

@@ -99,7 +99,10 @@ export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
     },
     {
       id: 'stage_nebula_texture',
-      src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==',
+      src: '/assets/stages/backgrounds/nebula-twilight-v1.svg',
+      contentTypes: ['image/svg+xml'],
+      image: { width: 1024, height: 512 },
+      readiness: 'alpha',
       budget: {
         estimatedBytes: 768 * 1024,
         estimatedTextureBytes: 768 * 1024,
@@ -107,7 +110,10 @@ export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
     },
     {
       id: 'stage_ion_clouds_texture',
-      src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==',
+      src: '/assets/stages/backgrounds/ion-storm-v1.svg',
+      contentTypes: ['image/svg+xml'],
+      image: { width: 1024, height: 512 },
+      readiness: 'alpha',
       budget: {
         estimatedBytes: 768 * 1024,
         estimatedTextureBytes: 768 * 1024,
@@ -115,10 +121,25 @@ export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
     },
     {
       id: 'stage_sunset_haze_texture',
-      src: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==',
+      src: '/assets/stages/backgrounds/ruins-sunset-v1.svg',
+      contentTypes: ['image/svg+xml'],
+      image: { width: 1024, height: 512 },
+      readiness: 'alpha',
       budget: {
         estimatedBytes: 768 * 1024,
         estimatedTextureBytes: 768 * 1024,
+      },
+    },
+    {
+      id: 'vfx_action_burst_flipbook_v1',
+      src: '/assets/vfx/action-burst-flipbook-v1.svg',
+      contentTypes: ['image/svg+xml'],
+      image: { width: 512, height: 128 },
+      readiness: 'alpha',
+      budget: {
+        estimatedBytes: 32 * 1024,
+        estimatedTextureBytes: 256 * 1024,
+        estimatedVfxEmitters: 1,
       },
     },
   ],

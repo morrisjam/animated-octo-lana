@@ -576,3 +576,7 @@ For this project, default to:
 - AI-generated source material with human cleanup
 
 That is the safest route to a strong look without depending on brittle one-shot generation.
+The local Asset Workshop remains available from the Vite development server at
+`/asset-workshop.html`. It is intentionally excluded from player-facing production
+bundles; use `npm run build:asset-workshop --workspace @gravity-well/game-web` when
+an independently deployable workshop build is required.

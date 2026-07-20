@@ -1,6 +1,8 @@
 import { createInputBindingStore } from './input/bindings';
 import { createEmptyPlayerInput } from './input/frame';
 import { createLazyGameplayInput } from './input/lazyGameplay';
+import type { BrowserControllerRuntime } from './view/controllerUi/browserRuntime';
+import type { BrowserPerformanceRuntime } from './view/performance/browserRuntime';
 import { loadRuntimeConfig, shouldEnableOnlineDiagnostics } from './config/features';
 import {
   fetchLocalFlowReviewCatalog,
@@ -77,7 +79,13 @@ import {
   type WebRtcSignalEnvelope,
   type WebRtcSignalType,
 } from './net/webRtcSession';
-import { CHARACTER_BY_ID, DEFAULT_CHARACTER_LOADOUT, isCharacterId, type CharacterId } from './sim/characters';
+import {
+  CHARACTER_BY_ID,
+  CHARACTER_REGISTRY_FINGERPRINT,
+  DEFAULT_CHARACTER_LOADOUT,
+  isCharacterId,
+  type CharacterId,
+} from './sim/characters';
 import { computeStateChecksum } from './sim/checksum';
 import { fingerprintDeterministicValue } from './sim/fingerprint';
 import { LocalRoundReplayRecorder } from './sim/localRoundReplayRecorder';
@@ -97,7 +105,11 @@ import {
   type RankedInputCommitmentReceipt,
   type RankedInputCommitmentSubmission,
 } from './sim/rankedInputCommitment';
-import { createPlatformServices, type PlatformAuthSession } from './platform';
+import {
+  createPlatformServices,
+  PLATFORM_PERSISTENCE_KEYS,
+  type PlatformAuthSession,
+} from './platform';
 import {
   findFirstChecksumMismatch,
   LOCAL_AI_REPLAY_SCHEMA_VERSION,
@@ -228,6 +240,7 @@ import {
 import { buildAssetBudgetReport, DEFAULT_ASSET_BUDGET_LIMITS } from './view/assets/budget';
 import { DEFAULT_ASSET_MANIFEST } from './view/assets/defaultManifest';
 import { preloadAssetManifest } from './view/assets/loader';
+import { loadImageTextureAssets } from './view/assets/imageTextureLibrary';
 import { loadStageModelAssets } from './view/stageModelRuntime';
 import { getRequiredPackagedAtlasRuntimeReadyPromise } from './view/characterVisual';
 import type { OnlineDiagnosticsUpdate, OnlineDevSectionId } from './view/onlineDevMenu';
@@ -239,8 +252,13 @@ import {
   createLazyReplayViewer,
   type LazyUiSurface,
 } from './view/lazyUiControllers';
-import { renderFrame } from './view/render';
-import { applyStageAtmospherePreset, createScene, resizeScene } from './view/scene';
+import { cleanupRender, renderFrame } from './view/render';
+import {
+  applyStageAtmospherePreset,
+  createScene,
+  resizeScene,
+  setScenePixelRatio,
+} from './view/scene';
 import { buildInputHistoryView } from './view/inputHistory';
 import { createAudioSystem } from './view/audio/system';
 import type { CombatVfxEvent } from './view/vfx/types';
@@ -401,6 +419,7 @@ const voiceCalloutSystem = createVoiceCalloutSystem({
 });
 const sceneContext = createScene(canvas, {
   stageModelEntries: DEFAULT_ASSET_MANIFEST.models,
+  textureEntries: DEFAULT_ASSET_MANIFEST.textures,
   onCombatAudioCue: (event, cue) => {
     audioSystem.emit({
       type: toCombatAudioEventType(event.type),
@@ -434,8 +453,12 @@ const sceneContext = createScene(canvas, {
   },
 });
 const hud = createHud();
+let controllerRuntime: BrowserControllerRuntime | null = null;
+let performanceRuntime: BrowserPerformanceRuntime | null = null;
 const inputBindings = createInputBindingStore();
-const input = createLazyGameplayInput(canvas, inputBindings);
+const input = createLazyGameplayInput(canvas, inputBindings, {
+  getAssignments: () => controllerRuntime?.getAssignments() ?? null,
+});
 function refreshInputBindingLegend(): void {
   void inputBindings.whenReady()
     .then(() => import('./input/bindingLegend'))
@@ -463,6 +486,11 @@ let selectedAiDifficulty: AiDifficultyId = loadedSettings.aiDifficulty;
 let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
 let arcadeHistory: ArcadeRunHistory = loadArcadeHistory();
 let profileSettingsCache: Record<string, unknown> = {};
+let scopedPersistenceUserId = `local:${platform.kind}`;
+const scopedSettingsRevisions = new Map<string, string | null>();
+const scopedArcadeHistoryRevisions = new Map<string, string | null>();
+let scopedSettingsWriteQueue: Promise<void> = Promise.resolve();
+let scopedArcadeHistoryWriteQueue: Promise<void> = Promise.resolve();
 const urlParams = new URLSearchParams(window.location.search);
 const localRankedRootSmokeConfig = resolveLocalRankedRootSmokeConfig({
   buildEnabled: (import.meta.env.VITE_LOCAL_RANKED_ROOT_SMOKE ?? 'false').toLowerCase() === 'true',
@@ -566,6 +594,103 @@ let entitlementGameplayGate: GameplayAccessGateState = {
   message: 'Checking gameplay access...',
 };
 let appPhase: AppPhase = 'home';
+type RuntimeDiagnosticEventType =
+  | 'match_started'
+  | 'round_started'
+  | 'action_accepted'
+  | 'round_ended'
+  | 'rollback_applied'
+  | 'renderer_context_lost'
+  | 'renderer_context_restored'
+  | 'visibility_hidden'
+  | 'visibility_visible'
+  | 'fault_detected';
+interface RuntimeDiagnosticInput {
+  frame: number;
+  player: PlayerId;
+  action: SimulationActionStart['action'];
+  source: 'human' | 'ai' | 'remote' | 'unknown';
+}
+interface RuntimeDiagnosticEvent {
+  type: RuntimeDiagnosticEventType;
+  frame: number | null;
+  player: PlayerId | null;
+  count: number | null;
+  checksum: number | null;
+}
+const recentRuntimeDiagnosticInputs: RuntimeDiagnosticInput[] = [];
+const recentRuntimeDiagnosticEvents: RuntimeDiagnosticEvent[] = [];
+let latestRuntimeFailure = {
+  category: 'unknown',
+  phase: 'unknown',
+  code: 'manual_support_snapshot',
+  recoverable: true,
+};
+
+function appendBounded<T>(target: T[], value: T, limit: number): void {
+  target.push(value);
+  if (target.length > limit) {
+    target.splice(0, target.length - limit);
+  }
+}
+
+function recordRuntimeDiagnosticEvent(
+  type: RuntimeDiagnosticEventType,
+  frame: number | null = null,
+  player: PlayerId | null = null,
+  count: number | null = null,
+  checksum: number | null = null,
+): void {
+  appendBounded(recentRuntimeDiagnosticEvents, { type, frame, player, count, checksum }, 160);
+}
+
+function recordRuntimeActionStarts(events: readonly SimulationActionStart[]): void {
+  for (const event of events) {
+    appendBounded(recentRuntimeDiagnosticInputs, {
+      frame: simulationFrame,
+      player: event.playerId,
+      action: event.action,
+      source: aiControllers[event.playerId] ? 'ai' : 'human',
+    }, 240);
+    recordRuntimeDiagnosticEvent('action_accepted', simulationFrame, event.playerId);
+  }
+}
+
+const handleRuntimeWindowError = (): void => {
+  latestRuntimeFailure = {
+    category: 'unknown',
+    phase: appPhase === 'home' ? 'menu' : 'playing',
+    code: 'window_error',
+    recoverable: true,
+  };
+  recordRuntimeDiagnosticEvent('fault_detected', simulationFrame);
+};
+const handleRuntimeUnhandledRejection = (): void => {
+  latestRuntimeFailure = {
+    category: 'unknown',
+    phase: appPhase === 'home' ? 'menu' : 'playing',
+    code: 'unhandled_rejection',
+    recoverable: true,
+  };
+  recordRuntimeDiagnosticEvent('fault_detected', simulationFrame);
+};
+const handleRendererContextLost = (event: Event): void => {
+  event.preventDefault();
+  latestRuntimeFailure = {
+    category: 'renderer',
+    phase: 'playing',
+    code: 'webgl_context_lost',
+    recoverable: true,
+  };
+  recordRuntimeDiagnosticEvent('renderer_context_lost', simulationFrame);
+};
+const handleRendererContextRestored = (): void => {
+  recordRuntimeDiagnosticEvent('renderer_context_restored', simulationFrame);
+};
+window.addEventListener('error', handleRuntimeWindowError);
+window.addEventListener('unhandledrejection', handleRuntimeUnhandledRejection);
+canvas.addEventListener('webglcontextlost', handleRendererContextLost);
+canvas.addEventListener('webglcontextrestored', handleRendererContextRestored);
 let startupMenuGuardArmed = true;
 let p1RoundWins = 0;
 let p2RoundWins = 0;
@@ -1066,6 +1191,56 @@ const pauseMenu = createLazyPauseMenu({
       return 'AI match telemetry export is only available in AI vs AI mode.';
     }
     return exportAiMatchTelemetrySession();
+  },
+  onExportSupportBundle: async () => {
+    const { exportBrowserSupportBundle } = await import('./diagnostics/browserSupportBundle');
+    const replay = onlineMatchContext?.replayPayload
+      ?? liveAiRoundReplayRecorder?.buildPayload()
+      ?? latestAiRoundReplayPayload;
+    const performance = performanceRuntime?.snapshot() ?? null;
+    return await exportBrowserSupportBundle({
+      renderer: sceneContext.renderer,
+      identity: {
+        buildId: diagnosticsBuildId,
+        rulesetVersion: diagnosticsRulesetVersion,
+        balanceProfileId: activeBalanceProfile.id,
+        tuningFingerprint: fingerprintBalanceTuning(state.tuning),
+        characterBalanceFingerprint: fingerprintCharacterBalanceOverrides(
+          state.characterBalanceOverrides,
+        ),
+        characterRegistryFingerprint: CHARACTER_REGISTRY_FINGERPRINT,
+      },
+      failure: {
+        ...latestRuntimeFailure,
+        phase: appPhase === 'home'
+          ? 'menu'
+          : appPhase === 'match_over'
+            ? 'results'
+            : appPhase === 'playing' || appPhase === 'round_transition'
+              ? 'playing'
+              : 'unknown',
+      },
+      settings: {
+        mode: selectedMode,
+        menuThemeId: selectedMenuThemeId,
+        stageAtmosphereId: selectedStageAtmosphereId,
+        loadout: selectedLoadout,
+        aiDifficulty: selectedAiDifficulty,
+        arcade: selectedArcadeSettings,
+        audio: audioSettings,
+        graphics: {
+          performanceTier: performance?.tierId ?? 'unknown',
+          adaptiveResolutionEnabled: performance?.adaptiveResolutionEnabled ?? false,
+        },
+        accessibility: {
+          reducedMotion: performance?.reducedMotion ?? false,
+        },
+      },
+      recentAcceptedInputs: recentRuntimeDiagnosticInputs,
+      recentEvents: recentRuntimeDiagnosticEvents,
+      replay,
+      performance,
+    });
   },
   canReviewAiRound: () => (
     isLocalAiRoundReviewMode(selectedMode)
@@ -3110,6 +3285,11 @@ const startMenu = createStartMenu({
   initialArcadeSettings: selectedArcadeSettings,
   enabledModes,
   initialAccountSummary: 'Guest Account',
+  getMenuGamepad: () => controllerRuntime?.getMenuGamepad() ?? null,
+  getMenuGamepadActions: (gamepad, nowMs) => (
+    controllerRuntime?.getMenuGamepadActions(gamepad, nowMs) ?? []
+  ),
+  onGamepadActivity: (gamepad) => controllerRuntime?.recordActivity(gamepad),
   onStartMode: (mode, loadout, aiDifficulty, arcadeSettings) => {
     beginUserInitiatedMode(mode, loadout, aiDifficulty, arcadeSettings);
   },
@@ -3202,6 +3382,8 @@ document.documentElement.dataset.assetPreloadState = 'loading';
 document.documentElement.dataset.assetPreloadBytes = '0';
 document.documentElement.dataset.stageModelState = 'loading';
 document.documentElement.dataset.stageModelLoadedIds = '';
+document.documentElement.dataset.imageTextureState = 'loading';
+document.documentElement.dataset.imageTextureLoadedIds = '';
 void Promise.all([
   preloadAssetManifest(DEFAULT_ASSET_MANIFEST, {
     onProgress: (progress) => {
@@ -3209,23 +3391,29 @@ void Promise.all([
         console.info(`[assets] preloaded ${progress.loaded}/${progress.total} manifest entries`);
       }
     },
-  }).then(async (result) => ({
-    result,
-    stageModelResult: await loadStageModelAssets(sceneContext.stageBackgroundModel),
-  })),
+  }).then(async (result) => {
+    const [stageModelResult, imageTextureResult] = await Promise.all([
+      loadStageModelAssets(sceneContext.stageBackgroundModel),
+      loadImageTextureAssets(sceneContext.imageTextureLibrary),
+    ]);
+    return { result, stageModelResult, imageTextureResult };
+  }),
   getRequiredPackagedAtlasRuntimeReadyPromise(),
-]).then(([{ result, stageModelResult }]) => {
+]).then(([{ result, stageModelResult, imageTextureResult }]) => {
   selectedStageAtmosphereId = applyStageAtmospherePreset(sceneContext, selectedStageAtmosphereId);
   assetPreloadBytesLoaded = result.entries.reduce((total, entry) => total + entry.bytes, 0);
   document.documentElement.dataset.assetPreloadBytes = String(assetPreloadBytesLoaded);
   document.documentElement.dataset.stageModelState = 'ready';
   document.documentElement.dataset.stageModelLoadedIds = stageModelResult.loadedIds.join(',');
+  document.documentElement.dataset.imageTextureState = 'ready';
+  document.documentElement.dataset.imageTextureLoadedIds = imageTextureResult.loadedIds.join(',');
   document.documentElement.dataset.assetPreloadState = 'ready';
   assetGameplayGate = { allowed: true, message: null };
   applyGameplayAccessGate();
 }).catch((error) => {
   document.documentElement.dataset.assetPreloadState = 'failed';
   document.documentElement.dataset.stageModelState = 'failed';
+  document.documentElement.dataset.imageTextureState = 'failed';
   assetGameplayGate = {
     allowed: false,
     message: 'Required game assets failed validation. Refresh to retry. [ASSET_PRELOAD_FAILED]',
@@ -3420,6 +3608,7 @@ function persistArcadeHistory(): void {
   if (!writeResult.ok && runtimeConfig.features.debugToolsEnabled) {
     console.warn('[persistence] arcade history write skipped', writeResult);
   }
+  queueScopedArcadeHistoryWrite(arcadeHistory);
 }
 
 function formatArcadeDuration(seconds: number): string {
@@ -3527,6 +3716,132 @@ function persistSettings(): void {
   if (!result.ok && runtimeConfig.features.debugToolsEnabled) {
     console.warn('[persistence] settings write skipped', result);
   }
+  queueScopedSettingsWrite(payload);
+}
+
+function resolveScopedPersistenceUserId(accountId: string | null): string {
+  return accountId?.trim() || `local:${platform.kind}`;
+}
+
+async function ensureScopedRevision(
+  key: string,
+  userId: string,
+  revisions: Map<string, string | null>,
+  legacyKey: string,
+): Promise<string | null> {
+  if (revisions.has(userId)) {
+    return revisions.get(userId) ?? null;
+  }
+  const current = await platform.persistence.read<unknown>(key, {
+    userId,
+    legacySources: [{ key: legacyKey }],
+  });
+  const revision = current.ok ? current.metadata.revision : null;
+  revisions.set(userId, revision);
+  return revision;
+}
+
+async function writeScopedValue(
+  key: string,
+  userId: string,
+  value: unknown,
+  revisions: Map<string, string | null>,
+  legacyKey: string,
+): Promise<void> {
+  let expectedRevision = await ensureScopedRevision(key, userId, revisions, legacyKey);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await platform.persistence.write(key, value, {
+      userId,
+      expectedRevision,
+      intent: 'atomic_replace',
+    });
+    if (result.ok) {
+      revisions.set(userId, result.metadata.revision);
+      return;
+    }
+    if (result.status !== 'conflict' || attempt > 0) {
+      if (runtimeConfig.features.debugToolsEnabled) {
+        console.warn(`[persistence] scoped ${key} write skipped`, result);
+      }
+      return;
+    }
+    const latest = await platform.persistence.read<unknown>(key, { userId });
+    expectedRevision = latest.ok ? latest.metadata.revision : null;
+    revisions.set(userId, expectedRevision);
+  }
+}
+
+function queueScopedSettingsWrite(payload: StoredSettings): void {
+  const userId = scopedPersistenceUserId;
+  scopedSettingsWriteQueue = scopedSettingsWriteQueue
+    .then(() => writeScopedValue(
+      PLATFORM_PERSISTENCE_KEYS.settings,
+      userId,
+      payload,
+      scopedSettingsRevisions,
+      SETTINGS_STORAGE_KEY,
+    ))
+    .catch((error: unknown) => {
+      if (runtimeConfig.features.debugToolsEnabled) {
+        console.warn('[persistence] scoped settings write failed', error);
+      }
+    });
+}
+
+function queueScopedArcadeHistoryWrite(history: ArcadeRunHistory): void {
+  const userId = scopedPersistenceUserId;
+  scopedArcadeHistoryWriteQueue = scopedArcadeHistoryWriteQueue
+    .then(() => writeScopedValue(
+      PLATFORM_PERSISTENCE_KEYS.arcadeHistory,
+      userId,
+      history,
+      scopedArcadeHistoryRevisions,
+      ARCADE_HISTORY_STORAGE_KEY,
+    ))
+    .catch((error: unknown) => {
+      if (runtimeConfig.features.debugToolsEnabled) {
+        console.warn('[persistence] scoped arcade history write failed', error);
+      }
+    });
+}
+
+async function hydrateScopedPersistence(accountId: string | null): Promise<void> {
+  const userId = resolveScopedPersistenceUserId(accountId);
+  scopedPersistenceUserId = userId;
+  platform.lifecycleHooks.userChanged(accountId);
+
+  const [settingsResult, historyResult] = await Promise.all([
+    platform.persistence.read<StoredSettings>(PLATFORM_PERSISTENCE_KEYS.settings, {
+      userId,
+      legacySources: [{ key: SETTINGS_STORAGE_KEY }],
+    }),
+    platform.persistence.read<unknown>(PLATFORM_PERSISTENCE_KEYS.arcadeHistory, {
+      userId,
+      legacySources: [{ key: ARCADE_HISTORY_STORAGE_KEY }],
+    }),
+  ]);
+
+  scopedSettingsRevisions.set(userId, settingsResult.ok ? settingsResult.metadata.revision : null);
+  scopedArcadeHistoryRevisions.set(userId, historyResult.ok ? historyResult.metadata.revision : null);
+
+  if (settingsResult.ok) {
+    const settings = coerceStoredSettings(settingsResult.value);
+    if (settings) {
+      applyLoadedProfileSettings(settings);
+    }
+  }
+  if (historyResult.ok) {
+    const merged = mergeArcadeRunHistories(
+      arcadeHistory,
+      sanitiseArcadeRunHistory(historyResult.value),
+      MAX_ARCADE_HISTORY_ENTRIES,
+    );
+    if (!areArcadeRunHistoriesEqual(arcadeHistory, merged)) {
+      arcadeHistory = merged;
+      persistArcadeHistory();
+      applyArcadeHistoryView();
+    }
+  }
 }
 
 async function syncArcadeHistoryWithProfile(
@@ -3612,6 +3927,7 @@ async function bootstrapPlatformProfile(): Promise<void> {
   }
 
   sessionAccountId = session.accountId;
+  await hydrateScopedPersistence(session.accountId);
   startMenu.setAccountSummary(formatAccountSummary(session));
   startMenu.setAuthState(session.isAuthenticated);
   try {
@@ -3702,6 +4018,7 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
   }
 
   sessionAccountId = session.accountId;
+  await hydrateScopedPersistence(session.accountId);
   startMenu.setAccountSummary(formatAccountSummary(session));
   startMenu.setAuthState(session.isAuthenticated);
   await refreshEntitlementGate('session');
@@ -3746,6 +4063,7 @@ async function refreshEntitlementGate(stage: 'startup' | 'session'): Promise<voi
     applyGameplayAccessGate();
     throw error;
   });
+  platform.lifecycleHooks.entitlementChanged(sessionAccountId, access);
   if (access.allowed) {
     entitlementGameplayGate = { allowed: true, message: null };
     applyGameplayAccessGate();
@@ -4087,6 +4405,7 @@ function resetRoundState(options: { advanceOfflineRound?: boolean } = {}): void 
     });
     trainingTelemetry.startRound(state);
   }
+  recordRuntimeDiagnosticEvent('round_started', 0);
 }
 
 function beginMode(
@@ -4138,6 +4457,7 @@ function beginMode(
   roundTransitionRemaining = 0;
   resetRoundState();
   appPhase = 'playing';
+  recordRuntimeDiagnosticEvent('match_started', 0);
   hud.setControlsVisible(selectedMode !== 'cpu_vs_cpu');
   setTrainingFrameDataVisibility(selectedMode === 'training');
   if (!onlineMatchContext) {
@@ -6254,6 +6574,7 @@ function onRoundWin(winner: PlayerId): void {
 }
 
 function commitRoundWin(winner: PlayerId): void {
+  recordRuntimeDiagnosticEvent('round_ended', simulationFrame, winner);
   if (selectedMode === 'training') {
     restartTrainingRound('round_win');
     return;
@@ -6556,6 +6877,7 @@ function tick(nowMs: number): void {
   const nowSeconds = nowMs / 1000;
   const elapsedSeconds = nowSeconds - lastTimeSeconds;
   lastTimeSeconds = nowSeconds;
+  performanceRuntime?.recordFrame(elapsedSeconds * 1_000, nowMs);
 
   const pauseDown = isPauseButtonDown();
   if (
@@ -6686,6 +7008,9 @@ function tick(nowMs: number): void {
               rollbackFrames,
             });
           }
+          if (rollbackFrames > 0) {
+            recordRuntimeDiagnosticEvent('rollback_applied', simulationFrame, null, rollbackFrames);
+          }
           if (runtimeConfig.features.debugToolsEnabled) {
             const correctionEvents = rollbackSession.drainPendingCorrectionEvents();
             for (const event of correctionEvents) {
@@ -6771,6 +7096,14 @@ function tick(nowMs: number): void {
               rollbackFrames: rollbackResult.rollbackFrames,
             });
           }
+          if (rollbackResult.rollbackFrames > 0) {
+            recordRuntimeDiagnosticEvent(
+              'rollback_applied',
+              simulationFrame,
+              null,
+              rollbackResult.rollbackFrames,
+            );
+          }
           if (runtimeConfig.features.debugToolsEnabled) {
             const correctionEvents = rollbackSession.drainPendingCorrectionEvents();
             for (const event of correctionEvents) {
@@ -6787,6 +7120,7 @@ function tick(nowMs: number): void {
             onLaunchClash: (event) => launchClashes?.push(event),
             onControlReturnReset: (event) => controlReturnResets?.push(event),
           });
+          recordRuntimeActionStarts(acceptedActionStarts ?? []);
         }
         aiDecisionTelemetry.recordFrame(simulationFrame, aiDecisions);
         matchTelemetry.recordFrame(
@@ -7157,6 +7491,82 @@ hudRoot.style.visibility = 'hidden';
 syncTrainingFrameDataVisibility();
 ensureDevOpenMenuButton();
 ensureDevDebugPanel();
+let controllerNoticeTimeout = 0;
+const showControllerNotice = (message: {
+  tone: 'warning' | 'success';
+  title: string;
+  body: string;
+  announcement: string;
+  pauseRecommended: boolean;
+}): void => {
+  let notice = document.querySelector<HTMLDivElement>('#controllerRecoveryNotice');
+  if (!notice) {
+    notice = document.createElement('div');
+    notice.id = 'controllerRecoveryNotice';
+    notice.className = 'controller-recovery-notice';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'assertive');
+    document.body.append(notice);
+  }
+  notice.dataset.tone = message.tone;
+  notice.setAttribute('aria-label', message.announcement);
+  notice.replaceChildren();
+  const title = document.createElement('strong');
+  title.textContent = message.title;
+  const body = document.createElement('span');
+  body.textContent = message.body;
+  notice.append(title, body);
+  notice.hidden = false;
+  window.clearTimeout(controllerNoticeTimeout);
+  controllerNoticeTimeout = window.setTimeout(() => {
+    if (notice) {
+      notice.hidden = true;
+    }
+  }, message.tone === 'warning' ? 8_000 : 3_500);
+  if (
+    message.pauseRecommended
+    && appPhase === 'playing'
+    && onlineMatchContext === null
+    && !pauseMenu.isPaused()
+  ) {
+    requestGameplayPauseToggle();
+  }
+};
+void import('./view/controllerUi/browserRuntime')
+  .then(({ createBrowserControllerRuntime }) => {
+    controllerRuntime = createBrowserControllerRuntime({
+      onRecoveryMessage: showControllerNotice,
+      onControllerDisconnected: (controllerIndex, controllerId) => {
+        platform.lifecycleHooks.controllerDisconnected(controllerIndex, controllerId);
+      },
+    });
+  })
+  .catch((error: unknown) => {
+    console.warn('[input] Controller hot-plug support failed to load.', error);
+  });
+void import('./view/performance/browserRuntime')
+  .then(({ createBrowserPerformanceRuntime }) => {
+    performanceRuntime = createBrowserPerformanceRuntime({
+      tierId: 'balanced',
+      getRendererCounts: () => ({
+        drawCalls: sceneContext.renderer.info.render.calls,
+        triangles: sceneContext.renderer.info.render.triangles,
+        geometries: sceneContext.renderer.info.memory.geometries,
+        textures: sceneContext.renderer.info.memory.textures,
+      }),
+      onPixelRatioChange: (pixelRatio) => {
+        const applied = setScenePixelRatio(sceneContext, pixelRatio);
+        document.documentElement.dataset.performancePixelRatio = applied.toFixed(3);
+      },
+      onReducedMotionChange: (reducedMotion) => {
+        document.documentElement.dataset.reducedMotion = reducedMotion ? 'true' : 'false';
+      },
+    });
+    document.documentElement.dataset.performanceTier = 'balanced';
+  })
+  .catch((error: unknown) => {
+    console.warn('[render] Adaptive performance support failed to load.', error);
+  });
 void bootstrapPlatformProfile();
 void platform.presence.setStatus('home');
 startMenu.showHome();
@@ -7183,15 +7593,38 @@ const disposeOnlineSessionLifecycleListeners = installOnlineSessionLifecycleList
   controller: onlineSessionLifecycle,
   canManage: canLifecycleManageOnlineSession,
 });
+const disposePlatformLifecycleListener = platform.lifecycle.subscribe((event) => {
+  if (event.type === 'suspend') {
+    recordRuntimeDiagnosticEvent('visibility_hidden', simulationFrame);
+    persistSettings();
+    persistArcadeHistory();
+    performanceRuntime?.suspend();
+    return;
+  }
+  if (event.type === 'resume') {
+    recordRuntimeDiagnosticEvent('visibility_visible', simulationFrame);
+    controllerRuntime?.refresh();
+    performanceRuntime?.resume();
+  }
+});
 
 window.addEventListener('beforeunload', () => {
   disposeLocalRankedRootSmokeBridge();
   disposeOnlineSessionLifecycleListeners();
+  disposePlatformLifecycleListener();
+  window.clearTimeout(controllerNoticeTimeout);
+  controllerRuntime?.dispose();
+  performanceRuntime?.dispose();
+  window.removeEventListener('error', handleRuntimeWindowError);
+  window.removeEventListener('unhandledrejection', handleRuntimeUnhandledRejection);
+  canvas.removeEventListener('webglcontextlost', handleRendererContextLost);
+  canvas.removeEventListener('webglcontextrestored', handleRendererContextRestored);
   startMenu.dispose();
   onlineDevMenu?.dispose();
   replayViewer.dispose();
   diagnosticsOverlay?.dispose();
   input.dispose();
   audioSystem.dispose();
+  cleanupRender(sceneContext);
   platform.dispose?.();
 });

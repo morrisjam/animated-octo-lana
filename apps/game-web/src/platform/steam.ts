@@ -1,10 +1,8 @@
 import type { PlatformServices, PlatformStorageService } from './types';
 import { createConfiguredEntitlementService, parseEntitlementMode } from './entitlement';
 import { createBrowserPlatformLifecycleAdapter } from './lifecycle';
-import {
-  createStorageBackedPersistenceService,
-  PLATFORM_PERSISTENCE_KEYS,
-} from './persistence';
+import { createLazyStorageBackedPersistenceService } from './lazyPersistence';
+import { PLATFORM_PERSISTENCE_KEYS } from './persistenceKeys';
 import {
   parseSteamWebApiTicketLease,
   readSteamRuntimeBridge,
@@ -113,7 +111,7 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
     ? readSteamRuntimeBridge()
     : options.runtimeBridge;
   const getRuntimeSteamTicket = options?.getRuntimeSteamTicket ?? (() => null);
-  const persistence = createStorageBackedPersistenceService(storage, {
+  const persistence = createLazyStorageBackedPersistenceService(storage, {
     supportedScopes: ['local'],
     legacySourceResolver(key, userId) {
       if (key === PLATFORM_PERSISTENCE_KEYS.settings) {

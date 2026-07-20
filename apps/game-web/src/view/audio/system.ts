@@ -9,7 +9,7 @@ import type {
   AudioSamplePreloadResult,
   AudioSinkDiagnostics,
 } from './types';
-import { WebAudioEventSink, type WebAudioEventSinkOptions } from './webAudioSink';
+import type { WebAudioEventSinkOptions } from './webAudioSink';
 
 const DEFAULT_ROUTE_TABLE: AudioRouteTable = {
   'combat.boost': {
@@ -95,17 +95,118 @@ export interface AudioSystem {
   dispose(): void;
 }
 
+const EMPTY_SINK_DIAGNOSTICS: AudioSinkDiagnostics = {
+  sampledPlays: 0,
+  tonePlays: 0,
+  sampleFallbacks: 0,
+  sampleConcurrencyDrops: 0,
+  sampleLoadFailures: 0,
+  unlockAttempts: 0,
+  unlockSuccesses: 0,
+};
+
+class DeferredWebAudioEventSink implements AudioEventSink {
+  private readonly busVolumes: Record<AudioBusId, number> = {
+    master: 1,
+    music: 1,
+    sfx: 1,
+    voice: 1,
+  };
+  private sink: AudioEventSink | null = null;
+  private sinkPromise: Promise<AudioEventSink | null> | null = null;
+  private disposed = false;
+
+  constructor(
+    private readonly options: WebAudioEventSinkOptions,
+    private readonly logger: Pick<Console, 'warn'>,
+  ) {}
+
+  play(event: AudioEvent, route: AudioRoute): void {
+    void this.getSink().then((sink) => sink?.play(event, route));
+  }
+
+  setBusVolume(bus: AudioBusId, volume: number): void {
+    this.busVolumes[bus] = volume;
+    this.sink?.setBusVolume(bus, volume);
+  }
+
+  async preload(sampleIds?: readonly string[]): Promise<AudioSamplePreloadResult> {
+    const sink = await this.getSink();
+    if (sink?.preload) {
+      return sink.preload(sampleIds);
+    }
+    const requestedSampleIds = sampleIds ? [...new Set(sampleIds)] : [];
+    return {
+      requestedSampleIds,
+      loadedVariants: 0,
+      failures: requestedSampleIds.map((sampleId) => ({
+        sampleId,
+        variantId: null,
+        reason: 'WebAudio could not be loaded.',
+      })),
+    };
+  }
+
+  async unlock(): Promise<boolean> {
+    const sink = await this.getSink();
+    return sink?.unlock?.() ?? false;
+  }
+
+  getDiagnostics(): AudioSinkDiagnostics {
+    return this.sink?.getDiagnostics?.() ?? { ...EMPTY_SINK_DIAGNOSTICS };
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.sink?.dispose();
+    this.sink = null;
+  }
+
+  private getSink(): Promise<AudioEventSink | null> {
+    if (this.disposed) {
+      return Promise.resolve(null);
+    }
+    if (this.sink) {
+      return Promise.resolve(this.sink);
+    }
+    if (!this.sinkPromise) {
+      this.sinkPromise = import('./webAudioSink')
+        .then(({ WebAudioEventSink }) => {
+          if (this.disposed) {
+            return null;
+          }
+          const sink = new WebAudioEventSink(this.options);
+          for (const [bus, volume] of Object.entries(this.busVolumes)) {
+            sink.setBusVolume(bus as AudioBusId, volume);
+          }
+          this.sink = sink;
+          return sink;
+        })
+        .catch((error: unknown) => {
+          this.logger.warn(
+            `[audio] WebAudio module failed to load: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        });
+    }
+    return this.sinkPromise;
+  }
+}
+
 export function createAudioSystem(options?: AudioSystemOptions): AudioSystem {
   const eventBus = createAudioEventBus();
   const routeTable = options?.routeTable ?? DEFAULT_ROUTE_TABLE;
   const missingEventPolicy = options?.missingEventPolicy ?? 'warn';
   const logger = options?.logger ?? console;
-  const sink = options?.sink ?? new WebAudioEventSink({
-    ...options?.webAudioSinkOptions,
-    sampleLibrary: options?.sampleLibrary,
-    maxConcurrentSamples: options?.maxConcurrentSamples,
+  const sink = options?.sink ?? new DeferredWebAudioEventSink(
+    {
+      ...options?.webAudioSinkOptions,
+      sampleLibrary: options?.sampleLibrary,
+      maxConcurrentSamples: options?.maxConcurrentSamples,
+      logger,
+    },
     logger,
-  });
+  );
 
   const diagnostics: AudioDiagnostics = {
     emittedEvents: 0,

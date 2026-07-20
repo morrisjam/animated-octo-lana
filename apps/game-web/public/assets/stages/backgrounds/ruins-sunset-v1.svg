@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="512" viewBox="0 0 1024 512">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12080d"/>
+      <stop offset="0.52" stop-color="#773b42"/>
+      <stop offset="0.76" stop-color="#e49165"/>
+      <stop offset="1" stop-color="#1a0b12"/>
+    </linearGradient>
+    <radialGradient id="sun">
+      <stop offset="0" stop-color="#fff2c6" stop-opacity="0.94"/>
+      <stop offset="0.2" stop-color="#ffb46f" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#f05e64" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="haze" x="-20%" y="-100%" width="140%" height="300%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.012 0.075" numOctaves="2" seed="7"/>
+      <feDisplacementMap in="SourceGraphic" scale="26"/>
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="512" fill="url(#sky)"/>
+  <ellipse cx="700" cy="315" rx="290" ry="210" fill="url(#sun)"/>
+  <path d="M-60 290 C190 245 300 350 520 276 C700 215 860 292 1090 232" fill="none" stroke="#ffd49c" stroke-width="34" stroke-opacity="0.16" filter="url(#haze)"/>
+  <path d="M0 430 L90 398 L148 412 L210 350 L292 390 L365 332 L440 384 L520 347 L590 382 L676 326 L760 370 L850 318 L940 380 L1024 344 L1024 512 L0 512 Z" fill="#110911" opacity="0.74"/>
+  <path d="M0 464 L140 418 L250 452 L390 403 L540 452 L700 406 L840 447 L1024 394 L1024 512 L0 512 Z" fill="#07070d" opacity="0.9"/>
+</svg>

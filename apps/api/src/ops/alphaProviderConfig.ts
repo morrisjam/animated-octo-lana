@@ -134,6 +134,13 @@ export function auditAlphaProviderConfig(
   );
   addCheck(
     checks,
+    'migration_rollback_window',
+    isTrue(env.MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX),
+    'The API can start against a verified additive migration suffix during rollback.',
+    'Set MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX=true before using this release as a rollback baseline.',
+  );
+  addCheck(
+    checks,
     'release_sha',
     SHA_REGEX.test(releaseSha),
     'API release identity is an exact commit SHA.',
@@ -353,8 +360,23 @@ export function auditAlphaProviderConfig(
   addCheck(
     checks,
     'operations_keys',
-    ['SLO_ADMIN_KEY', 'RANKED_ANOMALY_ADMIN_KEY', 'ENFORCEMENT_ADMIN_KEY', 'RANKED_SEASON_RESET_ADMIN_KEY']
-      .every((key) => String(env[key] ?? '').trim().length >= 24),
+    (() => {
+      const operationKeys = [
+        'SLO_ADMIN_KEY',
+        'RANKED_ANOMALY_ADMIN_KEY',
+        'ENFORCEMENT_ADMIN_KEY',
+        'RANKED_SEASON_RESET_ADMIN_KEY',
+      ].map((key) => String(env[key] ?? '').trim());
+      const purposeSecrets = [
+        authSessionSecret,
+        authRateLimitSecret,
+        ...(authSessionPreviousSecret ? [authSessionPreviousSecret] : []),
+        ...(authIdentityAdminKey ? [authIdentityAdminKey] : []),
+      ];
+      return operationKeys.every((key) => key.length >= 24)
+        && new Set(operationKeys).size === operationKeys.length
+        && operationKeys.every((key) => !purposeSecrets.includes(key));
+    })(),
     'Operations and enforcement endpoints have separate strong credentials.',
     'Configure 24+ character SLO, anomaly, enforcement, and season-reset admin keys.',
   );

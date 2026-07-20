@@ -1,4 +1,4 @@
-export const MAX_STAGE_CAMERA_PITCH_DEGREES = 28;
+export const MAX_STAGE_CAMERA_PITCH_DEGREES = 34;
 export const WORMHOLE_NEAR_DEPTH = -14;
 export const WORMHOLE_FAR_DEPTH = -198;
 export const ARENA_GUIDE_DEPTH = 0.24;

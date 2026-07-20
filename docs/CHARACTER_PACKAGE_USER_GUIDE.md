@@ -7,6 +7,7 @@ This guide is for creating and validating character packages without editing cor
 - It defines one fighter's:
   - identity and display fields
   - gameplay stats and move data
+  - local AI neutral-pacing defaults
   - visual ids and audio ids
   - special move metadata
 
@@ -38,6 +39,7 @@ Template reference (commented JSONC, not loaded at runtime):
 - In `moves.special`, set allow-listed `behaviorId` and matching `kind`.
 - Tune `moves.dunk.startupPursuitSpeed` and `moves.dunk.startupTracking` for the character's launched-target chase identity. Use `0` for either value to disable startup pursuit.
 - Tune `stats.naturalRecoveryResetMultiplier` only when the class should receive more or less of the global natural-recovery spacing reset. Keep `1` for neutral behavior; test changes with the Human recovery agency probe before promotion.
+- Keep `ai.neutralApproachMultiplier` at `1`, `ai.neutralBoostDistanceOffset` at `0`, and `ai.postControlSpacingFrames` at `0` unless a fixed-seed AI-vs-AI comparison and human replay review justify a class-specific pacing change. These values affect evaluator choices, not human or online physics.
 - Tune only `moves.break.recoveryFrames` and `moves.break.velocityRetain` for the current launch-break runtime. Startup and active fields are reserved but do not yet change simulation behavior.
 - Keep unused model, VFX, projectile, SFX, voice, or music profile slots as `null`. Do not invent ids to fill optional fields.
 - Register every required file in `src/view/assets/defaultManifest.ts` and mark an alpha candidate `readiness: "alpha"` only after review.

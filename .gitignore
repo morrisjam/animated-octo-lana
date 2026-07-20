@@ -2,6 +2,7 @@ node_modules/
 dist/
 **/node_modules/
 **/dist/
+**/dist-release/
 apps/game-web/steam-artifact/
 apps/steam-shell/web/
 apps/steam-shell/release/
@@ -14,3 +15,6 @@ output/
 .playwright-cli/
 *.log
 .env
+.env.steam-alpha
+__pycache__/
+*.py[cod]

@@ -37,6 +37,7 @@ test('atomically replaces the hashed participant projection for one namespace', 
   assert.equal(projections.length, 2);
   assert.deepEqual(projections.map((entry) => entry.account_id), [P1, P2]);
   assert.equal(projections[0]?.peer_account_id, P2);
+  assert.deepEqual(projections.map((entry) => entry.player_side), ['P1', 'P2']);
   assert.equal(projections[0]?.session_token_hash_hex, hashSessionToken('p1-token').toString('hex'));
   assert.equal(projections[0]?.signal_access_expires_at, new Date(NOW + 60_000).toISOString());
   assert.equal(JSON.stringify(projections).includes('p1-token'), false);
@@ -66,7 +67,24 @@ test('validates a live participant token and current transport attempt', async (
     transportAttemptId: ATTEMPT_ID,
   }), {
     ok: true,
-    value: { peerAccountId: P2 },
+    value: { peerAccountId: P2, side: 'P1' },
+  });
+});
+
+test('validates a live participant token without binding commitment uploads to a transport attempt', async () => {
+  const database = new QueryRecorder([{
+    rowCount: 1,
+    rows: [accessRow({ transport_attempt_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' })],
+  }]);
+  const store = createMatchmakingSessionAccessStore(database, { now: () => NOW });
+
+  assert.deepEqual(await store.validateLiveSessionAccess({
+    sessionId: SESSION_ID,
+    accountId: P1,
+    sessionToken: 'p1-token',
+  }), {
+    ok: true,
+    value: { peerAccountId: P2, side: 'P1' },
   });
 });
 
@@ -166,6 +184,7 @@ function accessRow(overrides: Record<string, unknown> = {}): Record<string, unkn
     session_exists: true,
     account_id: P1,
     peer_account_id: P2,
+    player_side: 'P1',
     session_token_hash: hashSessionToken('p1-token'),
     session_token_expires_at: new Date(NOW + 30_000),
     transport_attempt_id: ATTEMPT_ID,

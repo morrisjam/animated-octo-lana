@@ -3,10 +3,21 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      network_soak_profile:
+        description: WebRTC network evidence duration for direct and forced-relay profiles
+        required: true
+        default: smoke-1-second
+        type: choice
+        options:
+          - smoke-1-second
+          - release-30-minute
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 150
     env:
       SMOKE_EXPECT_API_HOSTNAME: 127.0.0.1
       SMOKE_EXPECT_DATABASE_ID: local
@@ -85,7 +96,7 @@ jobs:
       - name: API unit tests
         run: npm run api:test
 
-      - name: Build production web assets
+      - name: Build immutable production web release
         run: npm run build
         env:
           VITE_APP_ENV: production
@@ -97,7 +108,30 @@ jobs:
           VITE_FEATURE_ONLINE_DEV_MENU: "false"
           VITE_PROFILE_API_BASE: http://127.0.0.1:8787
           VITE_MATCHMAKING_API_BASE: http://127.0.0.1:8787
-          VITE_APP_BUILD: ci-ranked-root-smoke
+          VITE_APP_BUILD: ${{ github.sha }}
+          VITE_RULESET_VERSION: prototype-2026.02
+          VITE_BALANCE_PROFILE_ID: default
+          CF_PAGES: "1"
+          CF_PAGES_COMMIT_SHA: ${{ github.sha }}
+
+      - name: Preserve provider-equivalent release bundle
+        run: mv apps/game-web/dist apps/game-web/dist-release
+
+      - name: Build instrumented production-root browser smoke bundle
+        run: npm run build:browser-smoke-bundle --workspace @gravity-well/game-web
+        env:
+          VITE_APP_ENV: production
+          VITE_FEATURE_ONLINE: "true"
+          VITE_FEATURE_RANKED: "true"
+          VITE_FEATURE_ONLINE_MATCH_RUNTIME: "true"
+          VITE_FEATURE_DEBUG_TOOLS: "false"
+          VITE_FEATURE_ONLINE_DIAGNOSTICS: "false"
+          VITE_FEATURE_ONLINE_DEV_MENU: "false"
+          VITE_PROFILE_API_BASE: http://127.0.0.1:8787
+          VITE_MATCHMAKING_API_BASE: http://127.0.0.1:8787
+          VITE_APP_BUILD: ${{ github.sha }}
+          VITE_RULESET_VERSION: prototype-2026.02
+          VITE_BALANCE_PROFILE_ID: default
           VITE_LOCAL_RANKED_ROOT_SMOKE: "true"
 
       - name: Production-root visual and replay smoke
@@ -114,6 +148,12 @@ jobs:
           CONTROLLED_ALPHA_ACCESS_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
           CONTROLLED_ALPHA_ACCESS_MANAGE_POSTGRES: "0"
           CONTROLLED_ALPHA_ACCESS_SMOKE_REPORT_PATH: apps/api/build-artifacts/ci-controlled-alpha-access.json
+
+      - name: Signed-session rotation smoke
+        run: npm run api:smoke:auth-session-rotation
+
+      - name: Reverse-proxy source-boundary smoke
+        run: npm run api:smoke:auth-proxy-source
 
       - name: Durable authentication rate-limit smoke
         run: npm run api:smoke:auth-rate-limit
@@ -172,10 +212,15 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/gravity_well
           PORT: "8787"
           NODE_ENV: test
+          RELEASE_SHA: ${{ github.sha }}
+          DEPLOYMENT_ENVIRONMENT: test
+          DEPLOYMENT_DATABASE_ID: local
+          MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX: "true"
           AUTH_SESSION_SECRET: ci-auth-session-secret-0123456789-abcdefghijklmnopqrstuvwxyz
           AUTH_RATE_LIMIT_SECRET: ci-auth-rate-limit-secret-0123456789-abcdefghijklmnopqrstuvwxyz
           AUTH_RATE_LIMIT_GUEST_SOURCE_MAX_ATTEMPTS: "40"
           MATCHMAKING_ACCESS_MODE: open
+          MATCHMAKING_ALPHA_BUILD_VERSIONS: ${{ github.sha }}
           MATCHMAKING_RECONNECT_GRACE_SECONDS: "20"
           MATCHMAKING_SNAPSHOT_INTERVAL_MS: "60000"
           PGAPPNAME: gravity-well-ci-api
@@ -183,6 +228,16 @@ jobs:
           MATCHMAKING_TURN_URLS: turn:127.0.0.1:3478?transport=udp
           MATCHMAKING_TURN_SHARED_SECRET: ci-local-coturn-shared-secret-0123456789abcdef
           MATCHMAKING_TURN_CREDENTIAL_TTL_SECONDS: "300"
+          SLO_ADMIN_KEY: ci-release-identity-ops-key-0123456789
+
+      - name: Exact web, API, schema, and build-allowlist identity smoke
+        run: npm run api:smoke:exact-release-identity
+        env:
+          API_BASE_URL: http://127.0.0.1:8787
+          API_OPS_ADMIN_KEY: ci-release-identity-ops-key-0123456789
+          EXACT_RELEASE_EXPECT_SHA: ${{ github.sha }}
+          EXACT_RELEASE_WEB_ATTESTATION_PATH: apps/game-web/dist-release/release.json
+          EXACT_RELEASE_IDENTITY_REPORT_PATH: apps/api/build-artifacts/ci-exact-release-identity.json
 
       - name: Authentication ownership and abuse smoke
         run: npm run api:smoke:auth-security
@@ -229,7 +284,9 @@ jobs:
           WEBRTC_SMOKE_URL: http://127.0.0.1:5190/webrtc-smoke.html
           API_BASE_URL: http://127.0.0.1:8787
           WEBRTC_BROWSER_SMOKE_TIMEOUT_MS: "30000"
-          WEBRTC_BROWSER_SOAK_DURATION_SECONDS: "1"
+          WEBRTC_BROWSER_SOAK_DURATION_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.network_soak_profile == 'release-30-minute' && '1800' || '1' }}
+          WEBRTC_BROWSER_SMOKE_BUILD_VERSION: ${{ github.sha }}
+          WEBRTC_BROWSER_SMOKE_EXPECT_RELEASE_SHA: ${{ github.sha }}
           WEBRTC_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-webrtc-direct.json
 
       - name: Forced-relay rollback and isolated two-client WebRTC smoke
@@ -239,8 +296,30 @@ jobs:
           API_BASE_URL: http://127.0.0.1:8787
           WEBRTC_BROWSER_SMOKE_TIMEOUT_MS: "60000"
           WEBRTC_BROWSER_SMOKE_FORCE_RELAY: "1"
-          WEBRTC_BROWSER_SOAK_DURATION_SECONDS: "1"
+          WEBRTC_BROWSER_SOAK_DURATION_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.network_soak_profile == 'release-30-minute' && '1800' || '1' }}
+          WEBRTC_BROWSER_SMOKE_BUILD_VERSION: ${{ github.sha }}
+          WEBRTC_BROWSER_SMOKE_EXPECT_RELEASE_SHA: ${{ github.sha }}
           WEBRTC_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-webrtc-relay.json
+
+      - name: Bind 30-minute network soak evidence to the exact release
+        if: github.event_name == 'workflow_dispatch' && inputs.network_soak_profile == 'release-30-minute'
+        run: npm run webrtc:release-soak-evidence
+        env:
+          RELEASE_NETWORK_SOAK_EXPECT_SHA: ${{ github.sha }}
+          RELEASE_NETWORK_SOAK_WEB_ATTESTATION_PATH: apps/game-web/dist-release/release.json
+          RELEASE_NETWORK_SOAK_DIRECT_REPORT_PATH: apps/game-web/build-artifacts/ci-webrtc-direct.json
+          RELEASE_NETWORK_SOAK_RELAY_REPORT_PATH: apps/game-web/build-artifacts/ci-webrtc-relay.json
+          RELEASE_NETWORK_SOAK_EVIDENCE_PATH: apps/game-web/build-artifacts/ci-release-network-soak.json
+
+      - name: Record network soak scope
+        if: github.event_name == 'workflow_dispatch' && inputs.network_soak_profile == 'release-30-minute'
+        run: |
+          {
+            echo "### Exact-SHA network soak"
+            echo ""
+            echo "Direct and forced-relay profiles each completed the 30-minute gate."
+            echo "This is disposable runner-local infrastructure evidence only. It does not contact the deployed game, API, database, or TURN service and does not satisfy the cross-network or two-device staging gate."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Production-root ranked rollback, settlement, and replay smoke
         run: npm run ranked:root-browser-smoke
@@ -248,6 +327,9 @@ jobs:
           RANKED_ROOT_SMOKE_URL: http://127.0.0.1:5190/
           API_BASE_URL: http://127.0.0.1:8787
           RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS: "180000"
+          RANKED_ROOT_EXPECT_BUILD_ID: ${{ github.sha }}
+          RANKED_ROOT_EXPECT_RULESET_VERSION: prototype-2026.02
+          RANKED_ROOT_EXPECT_BALANCE_PROFILE_ID: default
           RANKED_ROOT_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-ranked-root.json
           RANKED_ROOT_BROWSER_SMOKE_FAILURE_SCREENSHOT: build-artifacts/ranked-root-browser-smoke-failure.png
 
@@ -257,6 +339,9 @@ jobs:
           RANKED_ROOT_SMOKE_URL: http://127.0.0.1:5190/
           API_BASE_URL: http://127.0.0.1:8787
           RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS: "180000"
+          RANKED_ROOT_EXPECT_BUILD_ID: ${{ github.sha }}
+          RANKED_ROOT_EXPECT_RULESET_VERSION: prototype-2026.02
+          RANKED_ROOT_EXPECT_BALANCE_PROFILE_ID: default
           RANKED_ROOT_BROWSER_SMOKE_FORCE_RELAY: "1"
           RANKED_ROOT_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-ranked-root-relay.json
           RANKED_ROOT_BROWSER_SMOKE_FAILURE_SCREENSHOT: build-artifacts/ranked-root-browser-smoke-failure-relay.png
@@ -336,6 +421,9 @@ jobs:
       - name: Replay checksum check
         run: npm run replay:check
 
+      - name: Replay archive size check
+        run: npm run replay:size-check --workspace @gravity-well/game-web
+
       - name: Deterministic rollback network soak
         run: npm run rollback:soak
 
@@ -351,6 +439,8 @@ jobs:
         with:
           name: local-verification-evidence-${{ github.sha }}
           path: |
+            apps/game-web/dist-release/release.json
+            apps/game-web/dist-release/_headers
             apps/game-web/build-artifacts/*.json
             apps/game-web/build-artifacts/*.md
             apps/game-web/build-artifacts/visual-alpha-smoke
@@ -361,6 +451,8 @@ jobs:
   steam-package:
     runs-on: windows-latest
     needs: verify
+    env:
+      STEAM_REQUIRE_CLEAN_RELEASE: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -374,12 +466,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build, test, package, and smoke-test native Steam client
+      - name: Build, attest, package, and smoke-test native Steam alpha client
         run: npm run steam:native:ci
 
       - name: Upload Steam artifact
         uses: actions/upload-artifact@v4
         with:
-          name: steam-package-${{ github.sha }}
+          name: steam-alpha-package-${{ github.sha }}
           path: apps/steam-shell/release/GravityWell-win32-x64
           if-no-files-found: error

@@ -170,6 +170,7 @@ interface StartMenuOptions {
   onRefreshRankedSnapshot?(): Promise<RankedSnapshotViewState> | RankedSnapshotViewState;
   onOpenOnlineDevMenu?(target?: OnlineDevMenuTarget): void;
   onOpenReplayReview?(): void;
+  onOpenControls?(): void;
   onMenuThemeChange?(themeId: string): void;
   onStageAtmosphereChange?(atmosphereId: string): void;
   onReturnHome(): void;
@@ -1178,6 +1179,10 @@ export class StartMenu {
       this.cycleStageAtmosphere(1);
     });
     this.settingsStageAtmosphereButton = settingsStageAtmosphereRow.button;
+    const settingsControlsRow = this.createActionRow('Controls', () => {
+      this.options.onOpenControls?.();
+    });
+    settingsControlsRow.button.disabled = !this.options.onOpenControls;
     const settingsBackRow = this.createActionRow('Back', () => {
       this.setScreen('main');
     });
@@ -1209,6 +1214,7 @@ export class StartMenu {
       settingsThemeRow.row,
       settingsStageAtmosphereInfoRow,
       settingsStageAtmosphereRow.row,
+      settingsControlsRow.row,
     );
     settingsLayout.append(settingsAccountColumn, settingsPresentationColumn);
     settingsActions.append(settingsBackRow.row);
@@ -1219,6 +1225,7 @@ export class StartMenu {
       settingsSocialRow.row,
       settingsThemeRow.row,
       settingsStageAtmosphereRow.row,
+      settingsControlsRow.row,
       settingsBackRow.row,
     ]);
 

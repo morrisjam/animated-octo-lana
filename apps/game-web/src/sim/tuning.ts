@@ -36,9 +36,11 @@ export function createDefaultTuning(): GameTuning {
     playerVelocityDamping: PLAYER_VELOCITY_DAMPING,
     actionRecoveryControlMultiplier: 1,
     combatBoostReacquireDelaySeconds: 0,
+    committedLocomotionInputAuthority: 0,
     helplessVelocityDamping: HELPLESS_VELOCITY_DAMPING,
     helplessReleaseSpeedRatio: DEFAULT_HELPLESS_RELEASE_SPEED_RATIO,
     boostHoldSpeed: BOOST_HOLD_SPEED,
+    ordinaryBoostAccelerationSeconds: 0,
     superBoostHoldSpeed: SUPER_BOOST_HOLD_SPEED,
     superBoostSteerLerp: SUPER_BOOST_STEER_LERP,
     superBoostVelocityBlend: SUPER_BOOST_VELOCITY_BLEND,
@@ -78,9 +80,11 @@ export function sanitiseTuning(tuning: Partial<GameTuning>): GameTuning {
     playerVelocityDamping: clamp(value('playerVelocityDamping'), 0.5, 0.9995),
     actionRecoveryControlMultiplier: clamp(value('actionRecoveryControlMultiplier'), 0, 1),
     combatBoostReacquireDelaySeconds: clamp(value('combatBoostReacquireDelaySeconds'), 0, 1),
+    committedLocomotionInputAuthority: clamp(value('committedLocomotionInputAuthority'), 0, 1),
     helplessVelocityDamping: clamp(value('helplessVelocityDamping'), 0.5, 0.9999),
     helplessReleaseSpeedRatio: clamp(value('helplessReleaseSpeedRatio'), 0.05, 2),
     boostHoldSpeed: clamp(value('boostHoldSpeed'), 1, 300),
+    ordinaryBoostAccelerationSeconds: clamp(value('ordinaryBoostAccelerationSeconds'), 0, 1),
     superBoostHoldSpeed: clamp(value('superBoostHoldSpeed'), 1, 300),
     superBoostSteerLerp: clamp(value('superBoostSteerLerp'), 0.01, 1),
     superBoostVelocityBlend: clamp(value('superBoostVelocityBlend'), 0.01, 1),
@@ -118,6 +122,12 @@ export function createGameTuningFingerprintInput(tuning: GameTuning): Partial<Ga
   }
   if (fingerprintInput.combatBoostReacquireDelaySeconds === 0) {
     delete fingerprintInput.combatBoostReacquireDelaySeconds;
+  }
+  if (fingerprintInput.committedLocomotionInputAuthority === 0) {
+    delete fingerprintInput.committedLocomotionInputAuthority;
+  }
+  if (fingerprintInput.ordinaryBoostAccelerationSeconds === 0) {
+    delete fingerprintInput.ordinaryBoostAccelerationSeconds;
   }
   return fingerprintInput;
 }

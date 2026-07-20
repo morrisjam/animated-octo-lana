@@ -89,17 +89,33 @@ describe('combat VFX event extraction', () => {
     expect(projectileEvent?.projectileVisualId).toBe('character_vanguard_projectile');
   });
 
-  test('extracts boost events from fuel spend and movement bursts', () => {
+  test('extracts ordinary Boost from its accepted state without requiring fuel spend', () => {
     const previous = makeSnapshot(2);
     const current = makeSnapshot(2 + 1 / 60);
     current.players.P1.pos = { x: -17.4, y: 0.2 };
-    current.players.P1.fuel = 99.75;
+    current.players.P1.boostActive = true;
+    current.players.P1.presentationAction = 'boost';
+    current.players.P1.presentationPhase = 'sustain';
 
     const events = extractCombatVfxEvents(previous, current);
 
     const boost = findEvent(events, 'boost', 'P1');
     expect(boost).toBeTruthy();
     expect(boost?.direction.x).toBeGreaterThan(0);
+  });
+
+  test('extracts Super Boost as a distinct effect without also emitting ordinary Boost', () => {
+    const previous = makeSnapshot(3);
+    const current = makeSnapshot(3 + 1 / 60);
+    current.players.P2.pos = { x: 17.2, y: 1.1 };
+    current.players.P2.superBoost = 0.32;
+    current.players.P2.presentationAction = 'boost';
+    current.players.P2.presentationPhase = 'sustain';
+
+    const events = extractCombatVfxEvents(previous, current);
+
+    expect(findEvent(events, 'super_boost', 'P2')).toBeTruthy();
+    expect(findEvent(events, 'boost', 'P2')).toBeUndefined();
   });
 
   test('drops event extraction when timeline rewinds', () => {

@@ -11,10 +11,21 @@ import {
 } from './ai';
 import type {
   CombatAction,
+  CombatControlReturnActiveAction,
+  CombatControlReturnOutcome,
+  CombatControlReturnParticipantEvidence,
+  CombatControlReturnWindowEvidence,
   CombatDistanceBand,
   CombatDistanceTransitionContext,
   CombatMovementIntent,
+  CombatOrdinaryBoostOutcome,
   CombatTelemetryEvent,
+} from './combatEventTelemetry';
+import {
+  COMBAT_CONTROL_RETURN_ACTIVE_ACTIONS,
+  COMBAT_CONTROL_RETURN_MOVEMENT_INTENTS,
+  COMBAT_CONTROL_RETURN_OUTCOMES,
+  COMBAT_ORDINARY_BOOST_OUTCOMES,
 } from './combatEventTelemetry';
 import type { BalanceTestRecipeId } from './balanceTestRecipes';
 import {
@@ -46,7 +57,8 @@ export type {
 const LEGACY_BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v1';
 const PREVIOUS_BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v2';
 export const BALANCE_LAB_DRAFT_SCHEMA_VERSION = 'gw.balance-lab-draft.v3';
-export const BALANCE_LAB_EXPERIMENT_SCHEMA_VERSION = 'gw.balance-lab-experiment.v8';
+export const PREVIOUS_BALANCE_LAB_EXPERIMENT_SCHEMA_VERSION = 'gw.balance-lab-experiment.v9';
+export const BALANCE_LAB_EXPERIMENT_SCHEMA_VERSION = 'gw.balance-lab-experiment.v10';
 
 export type BalanceLabDiagnosticSeverity = 'info' | 'warning' | 'critical';
 export type BalanceLabAiBehaviorControl = Exclude<keyof AiBehaviorTuning, 'schemaVersion'>;
@@ -165,12 +177,60 @@ export interface BalanceLabControlReturnActionFlow {
   movementIntents: Record<BalanceLabPostControlMovementIntent, number>;
 }
 
+export interface BalanceLabControlReturnParticipantReview {
+  closingDistance: number;
+  openingDistance: number;
+  netClosingDistance: number;
+  dominantMovementIntent: CombatMovementIntent | null;
+  dominantActiveAction: CombatControlReturnActiveAction | null;
+  firstAcceptedAction: CombatAction | null;
+  firstActionDelaySeconds: number | null;
+}
+
+export type BalanceLabControlReturnCausalMovementIntent = CombatMovementIntent | 'unobserved';
+export type BalanceLabControlReturnCausalActiveAction = CombatControlReturnActiveAction | 'unobserved';
+export type BalanceLabControlReturnCausalFirstAction = CombatAction | 'none';
+
+export interface BalanceLabControlReturnCausalRoleFlow {
+  dominantMovementIntents: Record<BalanceLabControlReturnCausalMovementIntent, number>;
+  dominantActiveActions: Record<BalanceLabControlReturnCausalActiveAction, number>;
+  firstAcceptedActions: Record<BalanceLabControlReturnCausalFirstAction, number>;
+}
+
+export interface BalanceLabControlReturnCausalFlow {
+  windows: number;
+  outcomes: Record<CombatControlReturnOutcome, number>;
+  controlGrantedInPressure: number;
+  safeAtGrant: number;
+  controlGrantedDistanceTotal: number;
+  maximumDistanceTotal: number;
+  averageControlGrantedDistance: number | null;
+  averageMaximumDistance: number | null;
+  returnedPlayerClosingDistance: number;
+  opponentClosingDistance: number;
+  returnedPlayerClosingShare: number | null;
+  returnedPlayerClosedMore: number;
+  opponentClosedMore: number;
+  balancedClosure: number;
+  returnedPlayerFirstActions: number;
+  opponentFirstActions: number;
+  returnedPlayerDominantApproachWindows: number;
+  opponentDominantApproachWindows: number;
+  roles: {
+    returner: BalanceLabControlReturnCausalRoleFlow;
+    opponent: BalanceLabControlReturnCausalRoleFlow;
+  };
+}
+
 export interface BalanceLabControlReturnReview {
   playerId: PlayerId;
   returnFrame: number;
   returnSeconds: number;
   returnKind: 'natural' | 'launch_break';
+  preResetDistance: number | null;
   returnDistance: number | null;
+  maximumDistance: number | null;
+  outcome: CombatControlReturnOutcome | null;
   startedInPressure: boolean;
   firstAcceptedAction: CombatAction | null;
   firstActionFrame: number | null;
@@ -183,6 +243,7 @@ export interface BalanceLabControlReturnReview {
   controlWindowSeconds: number | null;
   sustainedResetAfterReturn: boolean;
   sustainedResetAfterFirstAction: boolean;
+  players: PlayersById<BalanceLabControlReturnParticipantReview> | null;
 }
 
 export interface BalanceLabControlReturnFlow {
@@ -205,6 +266,7 @@ export interface BalanceLabControlReturnFlow {
   sustainedResetsAfterFirstAction: number;
   postReturnResetRatio: number;
   firstAcceptedActions: Record<CombatAction, BalanceLabControlReturnActionFlow>;
+  causal: BalanceLabControlReturnCausalFlow | null;
   reviews: BalanceLabControlReturnReview[];
 }
 
@@ -285,6 +347,25 @@ export interface BalanceLabPlayerFlow {
   averageLaunchToDunkSeconds: number | null;
   firstDunkAttemptSeconds: number | null;
   movementIntent: BalanceLabMovementIntentFlow;
+}
+
+export interface BalanceLabOrdinaryBoostCounterplayPlayerFlow {
+  opportunities: number;
+  completedOpportunities: number;
+  firstResponses: number;
+  targetSuperBoostResponses: number;
+  firstResponseActions: Record<CombatAction | 'none', number>;
+  outcomes: Record<CombatOrdinaryBoostOutcome, number>;
+  responseCoverageRatio: number;
+  superBoostResponseRatio: number;
+  averageFirstResponseSeconds: number | null;
+  averageAvailableReactionSeconds: number | null;
+  averageStartDistance: number | null;
+}
+
+export interface BalanceLabOrdinaryBoostCounterplayFlow {
+  opportunities: number;
+  players: PlayersById<BalanceLabOrdinaryBoostCounterplayPlayerFlow>;
 }
 
 export interface BalanceLabSpacingSegment {
@@ -780,10 +861,21 @@ export type BalanceLabLoopStageId = typeof BALANCE_LAB_LOOP_STAGE_IDS[number];
 
 export type BalanceLabLoopStageStatus = 'waiting' | 'observed' | 'watch' | 'blocked';
 
+export type BalanceLabLoopStageReasonId = `${BalanceLabLoopStageId}.${string}`;
+
+export interface BalanceLabLoopStageIssueReasonAggregate {
+  reasonId: BalanceLabLoopStageReasonId;
+  watchRounds: number;
+  blockedRounds: number;
+  rounds: number;
+  issueRatio: number;
+}
+
 export interface BalanceLabLoopStage {
   id: BalanceLabLoopStageId;
   label: string;
   status: BalanceLabLoopStageStatus;
+  reasonId?: BalanceLabLoopStageReasonId;
   detail: string;
   relatedGlobalTuning?: readonly (keyof GameTuning)[];
   relatedAiBehavior?: readonly BalanceLabAiBehaviorControl[];
@@ -808,6 +900,7 @@ export interface BalanceLabLoopStageAggregate {
   blockedRounds: number;
   waitingRatio: number;
   issueRatio: number;
+  issueReasons?: readonly BalanceLabLoopStageIssueReasonAggregate[];
 }
 
 export type BalanceLabLoopStageAggregates = Record<
@@ -875,6 +968,7 @@ export interface BalanceLabFlowModel {
   moments: BalanceLabFlowMoment[];
   exchanges: BalanceLabExchangeReview[];
   players: PlayersById<BalanceLabPlayerFlow>;
+  ordinaryBoostCounterplay: BalanceLabOrdinaryBoostCounterplayFlow | null;
   diagnostics: BalanceLabDiagnostic[];
   loopStages: BalanceLabLoopStage[];
 }
@@ -900,6 +994,7 @@ type BalanceLabFightStorySource = Pick<
   | 'neutralResets'
   | 'sharedAgency'
   | 'exchanges'
+  | 'ordinaryBoostCounterplay'
   | 'loopStages'
 >;
 
@@ -933,6 +1028,16 @@ const FIGHT_STORY_PROBE_BY_STAGE: Record<
   },
 };
 
+const FIGHT_STORY_PROBE_BY_REASON: Partial<Record<
+  BalanceLabLoopStageReasonId,
+  { recipeId: BalanceTestRecipeId; reason: string }
+>> = {
+  'commitment.shared_agency_saturation': {
+    recipeId: 'shared_commitment_cadence',
+    reason: 'Start both complete controllers in close pressure and judge whether commitments create a visible answer and shared reset window.',
+  },
+};
+
 export function buildBalanceLabFightStory(
   flow: BalanceLabFightStorySource,
 ): BalanceLabFightStory {
@@ -940,9 +1045,21 @@ export function buildBalanceLabFightStory(
   const resolvedExchanges = flow.exchanges.filter((exchange) => exchange.resolved).length;
   const resetExchanges = flow.exchanges.filter((exchange) => exchange.createdReset).length;
   const sharedWindowSummary = `${flow.sharedAgency.sustainedNeutralWindows} shared decision window${flow.sharedAgency.sustainedNeutralWindows === 1 ? '' : 's'} lasted at least ${flow.sharedAgency.sustainedWindowThresholdSeconds.toFixed(2)}s`;
-  const overview = exchangeCount > 0
+  const boostReads = flow.ordinaryBoostCounterplay;
+  const boostReadSummary = boostReads && boostReads.opportunities >= 3
+    ? (() => {
+        const responses = boostReads.players.P1.firstResponses + boostReads.players.P2.firstResponses;
+        const superBoosts = boostReads.players.P1.targetSuperBoostResponses
+          + boostReads.players.P2.targetSuperBoostResponses;
+        const contacts = boostReads.players.P1.outcomes.contact + boostReads.players.P2.outcomes.contact;
+        const conversions = boostReads.players.P1.outcomes.combat_conversion
+          + boostReads.players.P2.outcomes.combat_conversion;
+        return ` Ordinary Boost reads: ${responses}/${boostReads.opportunities} answered; ${contacts} contacts, ${conversions} combat conversions, and ${superBoosts} paid Super Boost responses.`;
+      })()
+    : '';
+  const overview = (exchangeCount > 0
     ? `${resolvedExchanges} of ${exchangeCount} exchanges produced a concrete outcome; ${resetExchanges} created a sustained spacing reset, and ${sharedWindowSummary}. The fighters spent ${Math.round(flow.pressureBandRatio * 100)}% of the sample in pressure and ${Math.round(flow.contactRatio * 100)}% physically overlapping.`
-    : `No pressure exchange has completed yet; ${sharedWindowSummary}. The fighters spent ${Math.round(flow.pressureBandRatio * 100)}% of the sample in pressure and ${Math.round(flow.contactRatio * 100)}% physically overlapping.`;
+    : `No pressure exchange has completed yet; ${sharedWindowSummary}. The fighters spent ${Math.round(flow.pressureBandRatio * 100)}% of the sample in pressure and ${Math.round(flow.contactRatio * 100)}% physically overlapping.`) + boostReadSummary;
 
   if (flow.elapsedSeconds < 10) {
     return {
@@ -976,12 +1093,15 @@ export function buildBalanceLabFightStory(
   }
 
   const defaultProbe = FIGHT_STORY_PROBE_BY_STAGE[focusStage.id];
+  const reasonProbe = focusStage.reasonId
+    ? FIGHT_STORY_PROBE_BY_REASON[focusStage.reasonId]
+    : undefined;
   const probe = focusStage.id === 'separation' && flow.launchClashes > 0
     ? {
         recipeId: 'post_clash_reset' as const,
         reason: 'Start in deterministic clash recoil and judge whether separation survives the next decision.',
       }
-    : defaultProbe;
+    : reasonProbe ?? defaultProbe;
   return {
     status: focusStage.status === 'blocked' ? 'blocked' : 'watch',
     headline: `${focusStage.label} is ${focusStage.status}`,
@@ -1299,8 +1419,8 @@ export function buildBalanceLabRuleChanges(
       changes,
       'character',
       characterId,
-      { stats: baseline.stats, moves: baseline.moves },
-      { stats: candidate.stats, moves: candidate.moves },
+      { stats: baseline.stats, ai: baseline.ai, moves: baseline.moves },
+      { stats: candidate.stats, ai: candidate.ai, moves: candidate.moves },
     );
   }
   return changes;
@@ -1552,6 +1672,141 @@ function createsSustainedPressureExit(
   });
 }
 
+function buildControlReturnParticipantReview(
+  participant: CombatControlReturnParticipantEvidence,
+): BalanceLabControlReturnParticipantReview {
+  return {
+    closingDistance: participant.closingDistance,
+    openingDistance: participant.openingDistance,
+    netClosingDistance: participant.netClosingDistance,
+    dominantMovementIntent: participant.dominantMovementIntent,
+    dominantActiveAction: participant.dominantActiveAction,
+    firstAcceptedAction: participant.firstAcceptedAction?.action ?? null,
+    firstActionDelaySeconds: participant.firstAcceptedAction?.delaySeconds ?? null,
+  };
+}
+
+function createControlReturnCausalRoleFlow(): BalanceLabControlReturnCausalRoleFlow {
+  return {
+    dominantMovementIntents: Object.fromEntries([
+      ...COMBAT_CONTROL_RETURN_MOVEMENT_INTENTS,
+      'unobserved',
+    ].map((intent) => [intent, 0])) as Record<BalanceLabControlReturnCausalMovementIntent, number>,
+    dominantActiveActions: Object.fromEntries([
+      ...COMBAT_CONTROL_RETURN_ACTIVE_ACTIONS,
+      'unobserved',
+    ].map((action) => [action, 0])) as Record<BalanceLabControlReturnCausalActiveAction, number>,
+    firstAcceptedActions: Object.fromEntries([
+      ...BALANCE_LAB_CONTROL_RETURN_ACTIONS,
+      'none',
+    ].map((action) => [action, 0])) as Record<BalanceLabControlReturnCausalFirstAction, number>,
+  };
+}
+
+function recordControlReturnCausalRole(
+  role: BalanceLabControlReturnCausalRoleFlow,
+  participant: CombatControlReturnParticipantEvidence,
+): void {
+  role.dominantMovementIntents[participant.dominantMovementIntent ?? 'unobserved'] += 1;
+  role.dominantActiveActions[participant.dominantActiveAction ?? 'unobserved'] += 1;
+  role.firstAcceptedActions[participant.firstAcceptedAction?.action ?? 'none'] += 1;
+}
+
+function buildControlReturnCausalFlow(
+  windows: readonly CombatControlReturnWindowEvidence[] | undefined,
+  playerId: PlayerId,
+): BalanceLabControlReturnCausalFlow | null {
+  if (!windows) {
+    return null;
+  }
+  const matching = windows.filter((window) => window.returnedPlayerId === playerId);
+  const opponentId = playerId === 'P1' ? 'P2' : 'P1';
+  const outcomes = Object.fromEntries(
+    COMBAT_CONTROL_RETURN_OUTCOMES.map((outcome) => [outcome, 0]),
+  ) as Record<CombatControlReturnOutcome, number>;
+  let returnedPlayerClosingDistance = 0;
+  let opponentClosingDistance = 0;
+  let returnedPlayerClosedMore = 0;
+  let opponentClosedMore = 0;
+  let balancedClosure = 0;
+  let returnedPlayerFirstActions = 0;
+  let opponentFirstActions = 0;
+  let returnedPlayerDominantApproachWindows = 0;
+  let opponentDominantApproachWindows = 0;
+  const roles = {
+    returner: createControlReturnCausalRoleFlow(),
+    opponent: createControlReturnCausalRoleFlow(),
+  };
+
+  for (const window of matching) {
+    outcomes[window.outcome] += 1;
+    const returned = window.players[playerId];
+    const opponent = window.players[opponentId];
+    returnedPlayerClosingDistance += returned.closingDistance;
+    opponentClosingDistance += opponent.closingDistance;
+    if (returned.closingDistance > opponent.closingDistance + 0.01) {
+      returnedPlayerClosedMore += 1;
+    } else if (opponent.closingDistance > returned.closingDistance + 0.01) {
+      opponentClosedMore += 1;
+    } else {
+      balancedClosure += 1;
+    }
+    if (returned.firstAcceptedAction) {
+      returnedPlayerFirstActions += 1;
+    }
+    if (opponent.firstAcceptedAction) {
+      opponentFirstActions += 1;
+    }
+    if (returned.dominantMovementIntent === 'approach') {
+      returnedPlayerDominantApproachWindows += 1;
+    }
+    if (opponent.dominantMovementIntent === 'approach') {
+      opponentDominantApproachWindows += 1;
+    }
+    recordControlReturnCausalRole(roles.returner, returned);
+    recordControlReturnCausalRole(roles.opponent, opponent);
+  }
+  const totalClosingDistance = returnedPlayerClosingDistance + opponentClosingDistance;
+  const controlGrantedDistanceTotal = matching.reduce(
+    (sum, window) => sum + window.controlGrantedDistance,
+    0,
+  );
+  const maximumDistanceTotal = matching.reduce(
+    (sum, window) => sum + window.maximumDistance,
+    0,
+  );
+  const controlGrantedInPressure = matching.filter(
+    (window) => window.controlGrantedDistance <= 24,
+  ).length;
+  return {
+    windows: matching.length,
+    outcomes,
+    controlGrantedInPressure,
+    safeAtGrant: matching.length - controlGrantedInPressure,
+    controlGrantedDistanceTotal: roundMetric(controlGrantedDistanceTotal, 2),
+    maximumDistanceTotal: roundMetric(maximumDistanceTotal, 2),
+    averageControlGrantedDistance: matching.length > 0
+      ? roundMetric(controlGrantedDistanceTotal / matching.length, 2)
+      : null,
+    averageMaximumDistance: matching.length > 0
+      ? roundMetric(maximumDistanceTotal / matching.length, 2)
+      : null,
+    returnedPlayerClosingDistance: roundMetric(returnedPlayerClosingDistance, 2),
+    opponentClosingDistance: roundMetric(opponentClosingDistance, 2),
+    returnedPlayerClosingShare: totalClosingDistance > 0
+      ? roundMetric(returnedPlayerClosingDistance / totalClosingDistance, 3)
+      : null,
+    returnedPlayerClosedMore,
+    opponentClosedMore,
+    balancedClosure,
+    returnedPlayerFirstActions,
+    opponentFirstActions,
+    returnedPlayerDominantApproachWindows,
+    opponentDominantApproachWindows,
+    roles,
+  };
+}
+
 function analyseControlReturns(
   summary: MatchTelemetrySummary,
   playerId: PlayerId,
@@ -1562,6 +1817,7 @@ function analyseControlReturns(
   const returns = events.filter((event) => (
     event.type === 'control_return' && event.actorId === playerId
   ));
+  const causalWindows = summary.combat.controlReturnWindows;
   const controlWindows: number[] = [];
   const firstActionDelays: number[] = [];
   const reviews: BalanceLabControlReturnReview[] = [];
@@ -1586,6 +1842,10 @@ function analyseControlReturns(
   let sustainedResetsAfterFirstAction = 0;
 
   for (const controlReturn of returns) {
+    const causalWindow = causalWindows?.find((window) => (
+      window.returnedPlayerId === playerId
+      && window.returnFrame === controlReturn.frame
+    ));
     const laterEvents = events.filter((event) => event.sequence > controlReturn.sequence);
     const nextRoundEndIndex = laterEvents.findIndex((event) => event.type === 'round_end');
     const scopedEvents = nextRoundEndIndex >= 0
@@ -1597,15 +1857,23 @@ function analyseControlReturns(
     const resetBoundarySeconds = relaunch?.timeSeconds
       ?? laterEvents[nextRoundEndIndex]?.timeSeconds
       ?? summary.elapsedSeconds;
-    const returnStartDistance = controlReturn.controlReturnStartDistance ?? controlReturn.distance;
-    const returnStartsInPressure = returnStartDistance !== undefined
-      ? returnStartDistance <= 24
+    const preResetDistance = causalWindow?.preResetDistance
+      ?? controlReturn.controlReturnStartDistance;
+    const controlGrantedDistance = causalWindow?.controlGrantedDistance
+      ?? controlReturn.distance
+      ?? preResetDistance;
+    const returnStartsInPressure = controlGrantedDistance !== undefined
+      ? controlGrantedDistance <= 24
       : false;
-    const sustainedResetAfterReturn = returnStartsInPressure && createsSustainedPressureExit(
-      events,
-      controlReturn,
-      returnStartsInPressure,
-      resetBoundarySeconds,
+    const sustainedResetAfterReturn = returnStartsInPressure && (
+      causalWindow
+        ? causalWindow.outcome === 'sustained_exit'
+        : createsSustainedPressureExit(
+            events,
+            controlReturn,
+            returnStartsInPressure,
+            resetBoundarySeconds,
+          )
     );
     if (returnStartsInPressure) {
       controlReturnsInPressure += 1;
@@ -1664,7 +1932,10 @@ function analyseControlReturns(
       returnFrame: controlReturn.frame,
       returnSeconds: controlReturn.timeSeconds,
       returnKind: controlReturn.action === 'launch_break' ? 'launch_break' : 'natural',
-      returnDistance: returnStartDistance ?? null,
+      preResetDistance: preResetDistance ?? null,
+      returnDistance: controlGrantedDistance ?? null,
+      maximumDistance: causalWindow?.maximumDistance ?? null,
+      outcome: causalWindow?.outcome ?? null,
       startedInPressure: returnStartsInPressure,
       firstAcceptedAction: firstAcceptedAction?.action ?? null,
       firstActionFrame: firstAcceptedAction?.frame ?? null,
@@ -1681,6 +1952,12 @@ function analyseControlReturns(
         : roundMetric(controlWindowSeconds, 2),
       sustainedResetAfterReturn,
       sustainedResetAfterFirstAction: firstActionCreatedSustainedReset,
+      players: causalWindow
+        ? {
+            P1: buildControlReturnParticipantReview(causalWindow.players.P1),
+            P2: buildControlReturnParticipantReview(causalWindow.players.P2),
+          }
+        : null,
     });
     if (controlWindowSeconds === null) {
       continue;
@@ -1728,6 +2005,7 @@ function analyseControlReturns(
       sustainedResetsAfterFirstAction / Math.max(1, firstActionsInPressure),
     ),
     firstAcceptedActions,
+    causal: buildControlReturnCausalFlow(causalWindows, playerId),
     reviews,
   };
 }
@@ -2052,12 +2330,15 @@ function describeClashFollowUps(flow: BalanceLabClashFollowUpFlow): string {
 }
 
 function describePostReturnDecisions(control: BalanceLabControlReturnFlow): string {
+  const causalDetail = control.causal && control.causal.windows > 0
+    ? `${control.causal.returnedPlayerClosedMore}/${control.causal.windows} windows were closed more by the returning fighter and ${control.causal.opponentClosedMore}/${control.causal.windows} by the opponent`
+    : 'two-player closure attribution was unavailable';
   const dominant = BALANCE_LAB_CONTROL_RETURN_ACTIONS
     .map((action) => ({ action, ...control.firstAcceptedActions[action] }))
     .filter(({ starts }) => starts > 0)
     .sort((first, second) => second.starts - first.starts || first.action.localeCompare(second.action))[0];
   if (!dominant) {
-    return 'no accepted post-return action was recorded';
+    return `no accepted post-return action was recorded; ${causalDetail}`;
   }
   const returnResetDetail = control.controlReturnsInPressure > 0
     ? `${control.sustainedResetsAfterControlReturn}/${control.controlReturnsInPressure} pressure-range control returns created a sustained reset`
@@ -2072,7 +2353,92 @@ function describePostReturnDecisions(control: BalanceLabControlReturnFlow): stri
   const movementDetail = dominantMovement
     ? `${dominantMovement.intent} movement accompanied ${dominantMovement.starts}/${dominant.starts}`
     : 'movement direction was unavailable';
-  return `${dominant.action} was the first action after ${dominant.starts}/${control.returnsWithAcceptedAction} acted returns; ${movementDetail}; ${returnResetDetail}; ${actionResetDetail}`;
+  return `${dominant.action} was the first action after ${dominant.starts}/${control.returnsWithAcceptedAction} acted returns; ${movementDetail}; ${returnResetDetail}; ${actionResetDetail}; ${causalDetail}`;
+}
+
+function analyseOrdinaryBoostCounterplay(
+  summary: MatchTelemetrySummary,
+): BalanceLabOrdinaryBoostCounterplayFlow | null {
+  const windows = summary.combat.ordinaryBoostCounterplay;
+  if (!windows) {
+    return null;
+  }
+  const createPlayer = (): BalanceLabOrdinaryBoostCounterplayPlayerFlow => ({
+    opportunities: 0,
+    completedOpportunities: 0,
+    firstResponses: 0,
+    targetSuperBoostResponses: 0,
+    firstResponseActions: {
+      boost: 0,
+      super_boost: 0,
+      special: 0,
+      launch: 0,
+      dunk: 0,
+      parry: 0,
+      launch_break: 0,
+      none: 0,
+    },
+    outcomes: Object.fromEntries(
+      COMBAT_ORDINARY_BOOST_OUTCOMES.map((outcome) => [outcome, 0]),
+    ) as Record<CombatOrdinaryBoostOutcome, number>,
+    responseCoverageRatio: 0,
+    superBoostResponseRatio: 0,
+    averageFirstResponseSeconds: null,
+    averageAvailableReactionSeconds: null,
+    averageStartDistance: null,
+  });
+  const players: PlayersById<BalanceLabOrdinaryBoostCounterplayPlayerFlow> = {
+    P1: createPlayer(),
+    P2: createPlayer(),
+  };
+  const responseSeconds: PlayersById<number> = { P1: 0, P2: 0 };
+  const availableSeconds: PlayersById<number> = { P1: 0, P2: 0 };
+  const startDistances: PlayersById<number> = { P1: 0, P2: 0 };
+
+  for (const window of windows) {
+    const player = players[window.targetId];
+    player.opportunities += 1;
+    player.outcomes[window.outcome] += 1;
+    availableSeconds[window.targetId] += window.availableReactionSeconds;
+    startDistances[window.targetId] += window.startDistance;
+    if (window.outcome !== 'sample_end') {
+      player.completedOpportunities += 1;
+    }
+    if (window.targetFirstAcceptedAction) {
+      player.firstResponses += 1;
+      player.firstResponseActions[window.targetFirstAcceptedAction.action] += 1;
+      responseSeconds[window.targetId] += window.targetFirstAcceptedAction.delaySeconds;
+    } else {
+      player.firstResponseActions.none += 1;
+    }
+    if (window.targetSuperBoostResponse) {
+      player.targetSuperBoostResponses += 1;
+    }
+  }
+
+  for (const playerId of ['P1', 'P2'] as const) {
+    const player = players[playerId];
+    player.responseCoverageRatio = roundMetric(
+      player.firstResponses / Math.max(1, player.opportunities),
+    );
+    player.superBoostResponseRatio = roundMetric(
+      player.targetSuperBoostResponses / Math.max(1, player.opportunities),
+    );
+    player.averageFirstResponseSeconds = player.firstResponses > 0
+      ? roundMetric(responseSeconds[playerId] / player.firstResponses, 3)
+      : null;
+    player.averageAvailableReactionSeconds = player.opportunities > 0
+      ? roundMetric(availableSeconds[playerId] / player.opportunities, 3)
+      : null;
+    player.averageStartDistance = player.opportunities > 0
+      ? roundMetric(startDistances[playerId] / player.opportunities, 2)
+      : null;
+  }
+
+  return {
+    opportunities: windows.length,
+    players,
+  };
 }
 
 function buildPlayerFlow(
@@ -2858,9 +3224,11 @@ function buildBalanceLabLoopStages(
   const sharedAgencySampleReady = flow.sharedAgency.actionReadySeconds >= 5;
 
   let neutralStatus: BalanceLabLoopStageStatus = 'observed';
+  let neutralReasonId: BalanceLabLoopStageReasonId = 'neutral.healthy';
   let neutralDetail = `${flow.neutralResets} sustained spacing reset${flow.neutralResets === 1 ? '' : 's'}; ${flow.sharedAgency.sustainedNeutralWindows} shared action-ready window${flow.sharedAgency.sustainedNeutralWindows === 1 ? '' : 's'} lasted at least ${flow.sharedAgency.sustainedWindowThresholdSeconds.toFixed(2)}s.`;
   if (flow.elapsedSeconds < 10) {
     neutralStatus = 'waiting';
+    neutralReasonId = 'neutral.sample_short';
     neutralDetail = `Only ${flow.elapsedSeconds.toFixed(1)}s observed; wait for pressure and a credible disengagement.`;
   } else if (
     flow.elapsedSeconds >= 20
@@ -2869,9 +3237,11 @@ function buildBalanceLabLoopStages(
     && flow.sharedAgency.pressureRatio >= 0.85
   ) {
     neutralStatus = 'blocked';
+    neutralReasonId = 'neutral.no_shared_decision_window';
     neutralDetail = `No shared action-ready window lasted ${flow.sharedAgency.sustainedWindowThresholdSeconds.toFixed(2)}s; ${Math.round(flow.sharedAgency.pressureRatio * 100)}% of the ${flow.sharedAgency.actionReadySeconds.toFixed(1)}s where both fighters could commit remained in pressure.`;
   } else if (flow.pressureBandRatio >= 0.92 || flow.longestPressureSequenceSeconds >= 20) {
     neutralStatus = 'blocked';
+    neutralReasonId = 'neutral.pressure_lock';
     neutralDetail = `${Math.round(flow.pressureBandRatio * 100)}% pressure occupancy with a ${flow.longestPressureSequenceSeconds.toFixed(1)}s longest sequence leaves no reliable neutral loop.`;
   } else if (
     flow.pressureBandRatio >= 0.82
@@ -2884,23 +3254,28 @@ function buildBalanceLabLoopStages(
     )
   ) {
     neutralStatus = 'watch';
+    neutralReasonId = 'neutral.pressure_warning';
     neutralDetail = `${Math.round(flow.pressureBandRatio * 100)}% pressure occupancy; ${flow.neutralResets} spacing resets, ${flow.sharedAgency.sustainedNeutralWindows} shared action-ready windows, and a ${flow.longestPressureSequenceSeconds.toFixed(1)}s longest pressure sequence.`;
   }
 
   let commitmentStatus: BalanceLabLoopStageStatus = 'observed';
+  let commitmentReasonId: BalanceLabLoopStageReasonId = 'commitment.healthy';
   let commitmentDetail = playerIds.map((playerId) => (
     `${playerId} ${flow.players[playerId].acceptedTacticalActions.length}/6 actions, ${Math.round(flow.players[playerId].inputAcceptanceRatio * 100)}% accepted`
   )).join('; ');
   if (flow.elapsedSeconds < 10) {
     commitmentStatus = 'waiting';
+    commitmentReasonId = 'commitment.sample_short';
     commitmentDetail = 'The sample is too short to judge whether both fighters are making varied, accepted commitments.';
   } else if (flow.elapsedSeconds >= 15 && noCommitmentPlayers.length > 0) {
     commitmentStatus = 'blocked';
+    commitmentReasonId = 'commitment.no_accepted_actions';
     commitmentDetail = `${noCommitmentPlayers.join(' and ')} recorded no accepted tactical action starts.`;
   } else if (lowAcceptancePlayers.some((playerId) => (
     actionRequests(playerId) >= 8 && flow.players[playerId].inputAcceptanceRatio < 0.25
   ))) {
     commitmentStatus = 'blocked';
+    commitmentReasonId = 'commitment.input_rejection';
     commitmentDetail = `${lowAcceptancePlayers.join(' and ')} are requesting actions that the simulation rejects most of the time.`;
   } else if (
     commitmentSaturation
@@ -2908,6 +3283,7 @@ function buildBalanceLabLoopStages(
     && flow.sharedAgency.controlPressureRatio >= 0.85
   ) {
     commitmentStatus = 'blocked';
+    commitmentReasonId = 'commitment.shared_agency_saturation';
     commitmentDetail = `${Math.round(flow.sharedAgency.controlPressureRatio * 100)}% of shared movement-control time remained in pressure while ${totalTacticalActionStarts} accepted tactical starts left both fighters simultaneously free to choose for only ${Math.round(flow.sharedAgency.actionReadyShareOfControlFrames * 100)}%.`;
   } else if (
     lowAcceptancePlayers.length > 0
@@ -2916,6 +3292,13 @@ function buildBalanceLabLoopStages(
     || commitmentSaturation
   ) {
     commitmentStatus = 'watch';
+    commitmentReasonId = commitmentSaturation
+      ? 'commitment.shared_agency_saturation'
+      : lowAcceptancePlayers.length > 0
+        ? 'commitment.input_rejection'
+        : narrowKitPlayers.length > 0
+          ? 'commitment.narrow_kit'
+          : 'commitment.repeated_actions';
     const affectedPlayers = [...new Set([
       ...lowAcceptancePlayers,
       ...narrowKitPlayers,
@@ -2927,15 +3310,19 @@ function buildBalanceLabLoopStages(
   }
 
   let exchangeStatus: BalanceLabLoopStageStatus = 'observed';
+  let exchangeReasonId: BalanceLabLoopStageReasonId = 'exchange.healthy';
   let exchangeDetail = `${resolvedExchanges}/${flow.exchanges.length} pressure exchanges produced a concrete outcome.`;
   if (flow.exchanges.length === 0) {
     exchangeStatus = 'waiting';
+    exchangeReasonId = 'exchange.not_reached';
     exchangeDetail = 'No pressure exchange has formed yet.';
   } else if (launchClashLoopBlocked) {
     exchangeStatus = 'blocked';
+    exchangeReasonId = 'exchange.launch_clash_loop';
     exchangeDetail = `${flow.launchClashes} launch clashes (${flow.clashesPerMinute.toFixed(1)}/min) are repeatedly resolving contact without producing varied outcomes or durable separation.`;
   } else if (launchClashLoopWatch) {
     exchangeStatus = 'watch';
+    exchangeReasonId = 'exchange.launch_clash_loop';
     exchangeDetail = `${flow.launchClashes} launch clashes (${flow.clashesPerMinute.toFixed(1)}/min) may be replacing meaningful attack, defense, and chase decisions.`;
   } else if (
     flow.exchanges.length >= 6
@@ -2943,6 +3330,7 @@ function buildBalanceLabLoopStages(
     && averageUnresolvedSeconds >= 1.5
   ) {
     exchangeStatus = 'blocked';
+    exchangeReasonId = 'exchange.unresolved_pressure';
     exchangeDetail = `${unresolvedExchanges.length}/${flow.exchanges.length} exchanges produced no hit, clash, defense, special resolution, or finish.`;
   } else if (
     flow.exchanges.length >= 6
@@ -2950,10 +3338,12 @@ function buildBalanceLabLoopStages(
     && averageUnresolvedSeconds >= 1.5
   ) {
     exchangeStatus = 'watch';
+    exchangeReasonId = 'exchange.unresolved_pressure';
     exchangeDetail = `${unresolvedExchanges.length}/${flow.exchanges.length} exchanges are unresolved at ${averageUnresolvedSeconds.toFixed(1)}s average pressure.`;
   }
 
   let separationStatus: BalanceLabLoopStageStatus = 'observed';
+  let separationReasonId: BalanceLabLoopStageReasonId = 'separation.healthy';
   let separationDetail = `${Math.round(flow.contactRatio * 100)}% physical contact overall, ${Math.round(flow.sharedAgency.controlContactRatio * 100)}% while both could steer, and ${Math.round(flow.sharedAgency.contactRatio * 100)}% while both were action-ready; ${flow.resetOutcomes.all.successes}/${flow.resetOutcomes.all.attempts} defensive resets and ${briefExitCount} brief exits.`;
   if (
     flow.contactRatio >= 0.35
@@ -2970,6 +3360,7 @@ function buildBalanceLabLoopStages(
     || (flow.resetOutcomes.all.attempts >= 3 && flow.resetOutcomes.all.successRatio < 0.2)
   ) {
     separationStatus = 'blocked';
+    separationReasonId = 'separation.contact_or_reset_failure';
     separationDetail = `${Math.round(flow.contactRatio * 100)}% physical contact overall, ${Math.round(flow.sharedAgency.controlContactRatio * 100)}% while both could steer, ${Math.round(flow.sharedAgency.contactRatio * 100)}% during shared action-ready time, and a ${flow.sharedAgency.maximumContactEpisodeSeconds.toFixed(2)}s longest action-ready contact episode; ${briefExitCount}/${flow.exchanges.length} brief exits and ${flow.resetOutcomes.all.successes}/${flow.resetOutcomes.all.attempts} defensive resets.`;
   } else if (
     flow.contactRatio >= 0.2
@@ -2985,15 +3376,19 @@ function buildBalanceLabLoopStages(
     || (flow.resetOutcomes.all.attempts >= 3 && flow.resetOutcomes.all.successRatio < 0.35)
   ) {
     separationStatus = 'watch';
+    separationReasonId = 'separation.contact_or_reset_failure';
   } else if (flow.exchanges.length < 2 && flow.resetOutcomes.all.attempts === 0) {
     separationStatus = 'waiting';
+    separationReasonId = 'separation.insufficient_exchanges';
     separationDetail = 'More than one exchange is needed to judge whether outcomes create space.';
   }
 
   let chaseStatus: BalanceLabLoopStageStatus = 'observed';
+  let chaseReasonId: BalanceLabLoopStageReasonId = 'chase.healthy';
   let chaseDetail = `${launchHits} launch hit${launchHits === 1 ? '' : 's'}, ${dunkStarts} dunk start${dunkStarts === 1 ? '' : 's'}${launchToDunkSeconds === null ? '' : `, ${launchToDunkSeconds.toFixed(2)}s average launch-to-dunk`}.`;
   if (launchHits === 0) {
     chaseStatus = 'waiting';
+    chaseReasonId = 'chase.not_reached';
     chaseDetail = 'No launch hit has created a chase state yet.';
   } else if (primaryImmediateRelaunchPlayer) {
     const control = flow.players[primaryImmediateRelaunchPlayer].controlReturn;
@@ -3003,6 +3398,7 @@ function buildBalanceLabLoopStages(
       && control.immediateRelaunchRatio >= 0.7
     );
     chaseStatus = critical ? 'blocked' : 'watch';
+    chaseReasonId = 'chase.immediate_relaunch';
     chaseDetail = `${primaryImmediateRelaunchPlayer} was launched again within 1s after ${control.relaunchesWithinOneSecond}/${control.controlReturns} control returns; ${control.relaunchesWithAcceptedAction}/${control.relaunchesAfterControlReturn} re-launches allowed an accepted action first; ${describePostReturnDecisions(control)}.`;
   } else if (primaryPostControlResetFailurePlayer) {
     const control = flow.players[primaryPostControlResetFailurePlayer].controlReturn;
@@ -3011,45 +3407,61 @@ function buildBalanceLabLoopStages(
       && control.sustainedResetsAfterControlReturn === 0
     );
     chaseStatus = critical ? 'blocked' : 'watch';
+    chaseReasonId = 'chase.control_return_reset_failure';
     chaseDetail = `${primaryPostControlResetFailurePlayer} regained control inside pressure ${control.controlReturnsInPressure} times, but only ${control.sustainedResetsAfterControlReturn}/${control.controlReturnsInPressure} returns created a sustained reset; ${describePostReturnDecisions(control)}.`;
   } else if (mostHelplessRatio >= 0.5) {
     chaseStatus = 'blocked';
+    chaseReasonId = 'chase.helpless_lock';
     chaseDetail = `${mostHelplessPlayer} spent ${Math.round(mostHelplessRatio * 100)}% of the sample helpless after ${helplessAttribution}; compare hit frequency before changing global duration.`;
   } else if (zeroFuelLaunchHits > 0 && finishDunkStarts === 0) {
     chaseStatus = 'watch';
+    chaseReasonId = 'chase.missing_finish_dunk';
     chaseDetail = `${zeroFuelLaunchHits} launch hit${zeroFuelLaunchHits === 1 ? '' : 's'} created a finish chase against an empty target without an accepted finish-state dunk start.`;
   } else if (flow.elapsedSeconds < 10) {
     chaseStatus = 'waiting';
+    chaseReasonId = 'chase.sample_short';
     chaseDetail = `${launchHits} launch hit${launchHits === 1 ? '' : 's'} created early chase evidence; continue observing before treating ${dunkStarts} dunk start${dunkStarts === 1 ? '' : 's'} as a pursuit failure.`;
   } else if (flow.elapsedSeconds >= 15 && launchHits >= 3 && dunkStarts === 0) {
     chaseStatus = 'blocked';
+    chaseReasonId = 'chase.no_dunk_attempt';
     chaseDetail = `${launchHits} launch hits over ${flow.elapsedSeconds.toFixed(1)}s produced no accepted dunk attempt.`;
   } else if (mostHelplessRatio >= 0.3 || (launchHits >= 2 && launchToDunkSeconds === null)) {
     chaseStatus = 'watch';
+    chaseReasonId = mostHelplessRatio >= 0.3
+      ? 'chase.high_helpless_time'
+      : 'chase.no_launch_to_dunk_conversion';
     chaseDetail = `${launchHits} launch hits; ${dunkStarts} dunk starts, with ${mostHelplessPlayer} helpless for ${Math.round(mostHelplessRatio * 100)}% after ${helplessAttribution}.`;
   }
 
   let finishStatus: BalanceLabLoopStageStatus = 'waiting';
+  let finishReasonId: BalanceLabLoopStageReasonId = 'finish.not_reached';
   let finishDetail = 'No finish window has resolved yet; keep observing fuel depletion, launch, and dunk conversion.';
   if (flow.roundFinished) {
     finishStatus = 'observed';
+    finishReasonId = 'finish.round_resolved';
     finishDetail = `${dunkHits} dunk hit${dunkHits === 1 ? '' : 's'} and a recorded round finish.`;
   } else if (
     (flow.elapsedSeconds >= 45 && dunkHits === 0)
     || (flow.elapsedSeconds >= 20 && zeroFuelPlayers.length > 0 && dunkHits === 0)
   ) {
     finishStatus = 'blocked';
+    finishReasonId = zeroFuelPlayers.length > 0
+      ? 'finish.zero_fuel_stall'
+      : 'finish.no_dunk_connection';
     finishDetail = zeroFuelPlayers.length > 0
       ? `${zeroFuelPlayers.join(' and ')} spent substantial time empty without a converted dunk.`
       : `No dunk connected during ${flow.elapsedSeconds.toFixed(1)}s of play.`;
   } else if (zeroFuelLaunchHits > 0 && finishDunkStarts === 0) {
     finishStatus = 'watch';
+    finishReasonId = 'finish.missing_finish_dunk';
     finishDetail = `${zeroFuelLaunchHits} launch hit${zeroFuelLaunchHits === 1 ? '' : 's'} on an empty target produced no finish-state dunk start.`;
   } else if (dunkHits > 0) {
     finishStatus = 'observed';
+    finishReasonId = 'finish.dunk_connected';
     finishDetail = `${dunkHits} dunk hit${dunkHits === 1 ? '' : 's'} connected; the current sample has not ended the round.`;
   } else if (dunkStarts > 0) {
     finishStatus = 'watch';
+    finishReasonId = 'finish.dunk_not_connected';
     finishDetail = `${dunkStarts} dunk attempt${dunkStarts === 1 ? '' : 's'} started without a connection yet.`;
   }
 
@@ -3058,10 +3470,12 @@ function buildBalanceLabLoopStages(
       id: 'neutral',
       label: 'Neutral',
       status: neutralStatus,
+      reasonId: neutralReasonId,
       detail: neutralDetail,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
         'combatBoostReacquireDelaySeconds',
+        'ordinaryBoostAccelerationSeconds',
         'closeRangeSeparationImpulse',
         'defensiveResetDistance',
         'defensiveResetImpulse',
@@ -3081,9 +3495,10 @@ function buildBalanceLabLoopStages(
       id: 'commitment',
       label: 'Commitment',
       status: commitmentStatus,
+      reasonId: commitmentReasonId,
       detail: commitmentDetail,
       relatedGlobalTuning: commitmentSaturation
-        ? ['combatBoostReacquireDelaySeconds']
+        ? ['combatBoostReacquireDelaySeconds', 'ordinaryBoostAccelerationSeconds']
         : ['startupClashGraceSeconds', 'postControlCounterLaunchClashGraceSeconds'],
       relatedAiBehavior: [
         'reactionDelayScale',
@@ -3093,7 +3508,9 @@ function buildBalanceLabLoopStages(
         'commitmentPressFrames',
         'commitmentResetFrames',
         'opponentControlReturnObserveFrames',
+        'postControlChaseLockFrames',
         'repositionWeightScale',
+        'exchangeRepositionWeightScale',
         'launchWeightScale',
         'specialWeightScale',
         'dunkWeightScale',
@@ -3111,6 +3528,7 @@ function buildBalanceLabLoopStages(
       id: 'exchange',
       label: 'Exchange',
       status: exchangeStatus,
+      reasonId: exchangeReasonId,
       detail: exchangeDetail,
       relatedGlobalTuning: [
         'startupClashGraceSeconds',
@@ -3128,16 +3546,19 @@ function buildBalanceLabLoopStages(
         'commitmentPressFrames',
         'commitmentResetFrames',
         'postClashSpacingFrames',
+        'exchangeRepositionWeightScale',
       ],
     },
     {
       id: 'separation',
       label: 'Separation',
       status: separationStatus,
+      reasonId: separationReasonId,
       detail: separationDetail,
       relatedGlobalTuning: [
         'actionRecoveryControlMultiplier',
         'combatBoostReacquireDelaySeconds',
+        'ordinaryBoostAccelerationSeconds',
         'launchClashSeparationPadding',
         'launchClashRecoilMultiplier',
         'closeRangeSeparationPadding',
@@ -3160,15 +3581,18 @@ function buildBalanceLabLoopStages(
         'postRecoverySpacingFrames',
         'postControlSteeringFrames',
         'postControlCounterstepScale',
+        'postControlChaseLockFrames',
         'opponentControlReturnObserveFrames',
         'postEventRetreatChanceOffset',
         'repositionWeightScale',
+        'exchangeRepositionWeightScale',
       ],
     },
     {
       id: 'chase',
       label: 'Chase',
       status: chaseStatus,
+      reasonId: chaseReasonId,
       detail: chaseDetail,
       relatedGlobalTuning: primaryImmediateRelaunchPlayer || primaryPostControlResetFailurePlayer
         ? [
@@ -3193,6 +3617,7 @@ function buildBalanceLabLoopStages(
         'postRecoverySpacingFrames',
         'postControlSteeringFrames',
         'postControlCounterstepScale',
+        'postControlChaseLockFrames',
         'opponentControlReturnObserveFrames',
         'postEventRetreatChanceOffset',
         'postRecoverySuperBoostChance',
@@ -3201,6 +3626,7 @@ function buildBalanceLabLoopStages(
         'postRecoveryThreatParryChance',
         'committedLaunchGuardChance',
         'repositionWeightScale',
+        'exchangeRepositionWeightScale',
         'launchWeightScale',
         'dunkWeightScale',
         'launchBreakWeightScale',
@@ -3213,6 +3639,7 @@ function buildBalanceLabLoopStages(
       id: 'finish',
       label: 'Finish',
       status: finishStatus,
+      reasonId: finishReasonId,
       detail: finishDetail,
       relatedGlobalTuning: [
         'launchBasePower',
@@ -3230,14 +3657,47 @@ export function aggregateBalanceLabLoopStages(
   flows: readonly BalanceLabFlowModel[],
 ): BalanceLabLoopStageAggregates {
   return Object.fromEntries(BALANCE_LAB_LOOP_STAGE_IDS.map((stageId) => {
-    const statuses = flows.map((flow) => (
-      flow.loopStages.find((stage) => stage.id === stageId)?.status ?? 'waiting'
-    ));
+    const stages = flows.map((flow): Pick<BalanceLabLoopStage, 'status' | 'reasonId'> => {
+      const stage = flow.loopStages.find((entry) => entry.id === stageId);
+      return stage ?? {
+        status: 'waiting',
+        reasonId: `${stageId}.unclassified`,
+      };
+    });
+    const statuses = stages.map((stage) => stage.status);
     const waitingRounds = statuses.filter((status) => status === 'waiting').length;
     const observedRounds = statuses.filter((status) => status === 'observed').length;
     const watchRounds = statuses.filter((status) => status === 'watch').length;
     const blockedRounds = statuses.filter((status) => status === 'blocked').length;
     const rounds = statuses.length;
+    const reasonCounts = new Map<BalanceLabLoopStageReasonId, {
+      watchRounds: number;
+      blockedRounds: number;
+    }>();
+    for (const stage of stages) {
+      if (stage.status !== 'watch' && stage.status !== 'blocked') {
+        continue;
+      }
+      const reasonId = stage.reasonId ?? `${stageId}.unclassified`;
+      const counts = reasonCounts.get(reasonId) ?? { watchRounds: 0, blockedRounds: 0 };
+      counts[stage.status === 'watch' ? 'watchRounds' : 'blockedRounds'] += 1;
+      reasonCounts.set(reasonId, counts);
+    }
+    const issueReasons = [...reasonCounts.entries()]
+      .map(([reasonId, counts]): BalanceLabLoopStageIssueReasonAggregate => {
+        const issueRounds = counts.watchRounds + counts.blockedRounds;
+        return {
+          reasonId,
+          ...counts,
+          rounds: issueRounds,
+          issueRatio: roundMetric(issueRounds / Math.max(1, rounds)),
+        };
+      })
+      .sort((first, second) => (
+        second.blockedRounds - first.blockedRounds
+        || second.rounds - first.rounds
+        || first.reasonId.localeCompare(second.reasonId)
+      ));
     return [stageId, {
       rounds,
       waitingRounds,
@@ -3246,8 +3706,9 @@ export function aggregateBalanceLabLoopStages(
       blockedRounds,
       waitingRatio: roundMetric(waitingRounds / Math.max(1, rounds)),
       issueRatio: roundMetric((watchRounds + blockedRounds) / Math.max(1, rounds)),
+      issueReasons,
     }];
-  })) as BalanceLabLoopStageAggregates;
+  })) as unknown as BalanceLabLoopStageAggregates;
 }
 
 export function compareBalanceLabLoopStages(
@@ -3668,6 +4129,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
   const exchanges = buildExchangeReview(summary, spacingTimeline);
   const neutralExitFollowUp = analyseNeutralExitFollowUp(exchanges);
   const resetOutcomes = analyseResetOutcomes(summary);
+  const ordinaryBoostCounterplay = analyseOrdinaryBoostCounterplay(summary);
   const launchClashes = summary.combat.eventCounts.launch_clash;
   const recoveryCounterLaunchClashes =
     summary.combat.launchClashCauses.post_control_counter_launch;
@@ -3914,6 +4376,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
         'postRecoverySpacingFrames',
         'postControlSteeringFrames',
         'postControlCounterstepScale',
+        'postControlChaseLockFrames',
         'opponentControlReturnObserveFrames',
         'postEventRetreatChanceOffset',
       ],
@@ -4039,6 +4502,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
           'neutralHoldDistance',
           'commitmentObserveFrames',
           'commitmentResetFrames',
+          'postControlChaseLockFrames',
           'postEventRetreatChanceOffset',
         ];
         break;
@@ -4056,6 +4520,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
         carriedCauseAiBehavior = [
           'postRecoverySpacingFrames',
           'postControlSteeringFrames',
+          'postControlChaseLockFrames',
           'opponentControlReturnObserveFrames',
           'commitmentResetFrames',
           'postEventRetreatChanceOffset',
@@ -4074,6 +4539,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
           'postClashSpacingFrames',
           'postRecoverySpacingFrames',
           'postControlSteeringFrames',
+          'postControlChaseLockFrames',
           'opponentControlReturnObserveFrames',
         ];
         break;
@@ -4251,6 +4717,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
         'postRecoverySpacingFrames',
         'postControlSteeringFrames',
         'postControlCounterstepScale',
+        'postControlChaseLockFrames',
         'opponentControlReturnObserveFrames',
         'postEventRetreatChanceOffset',
         'postRecoveryDefenseFrames',
@@ -4304,6 +4771,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
         'postRecoverySpacingFrames',
         'postControlSteeringFrames',
         'postControlCounterstepScale',
+        'postControlChaseLockFrames',
         'opponentControlReturnObserveFrames',
         'postEventRetreatChanceOffset',
         'postRecoverySuperBoostChance',
@@ -4434,6 +4902,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
     moments: buildFlowMoments(summary),
     exchanges,
     players,
+    ordinaryBoostCounterplay,
     diagnostics,
   };
   const loopStages = buildBalanceLabLoopStages(summary, flow);

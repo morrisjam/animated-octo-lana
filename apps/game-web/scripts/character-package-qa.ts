@@ -101,6 +101,7 @@ function toCharacterDefinition(payload: unknown): CharacterDefinition {
     blurb: parsed.blurb,
     mechanicsTag: parsed.mechanicsTag,
     stats: parsed.stats,
+    ai: parsed.ai,
     visuals: parsed.visuals,
     audio: parsed.audio,
     moves: parsed.moves,

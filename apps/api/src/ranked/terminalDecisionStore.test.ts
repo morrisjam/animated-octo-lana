@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   MAX_RANKED_TERMINAL_DECISION_CLAIM_LIMIT,
   MAX_RANKED_TERMINAL_DECISION_LAST_ERROR_BYTES,
+  RANKED_SESSION_TRANSACTION_LOCK_SQL,
   RankedTerminalDecisionConflictError,
   createRankedTerminalDecisionStore,
   type EnqueueRankedTerminalDecisionInput,
@@ -45,19 +46,25 @@ class ScriptedClient implements RankedTerminalDecisionQueryClient {
 }
 
 test('enqueues valid forfeit and no-contest shapes through the supplied transaction client', async () => {
-  const forfeitClient = new ScriptedClient([{
-    rowCount: 1,
-    rows: [decisionRow()],
-  }]);
-  const noContestClient = new ScriptedClient([{
-    rowCount: 1,
-    rows: [decisionRow({
-      decision_type: 'no_contest',
-      winner_account_id: null,
-      forfeiting_account_id: null,
-      reason: 'reconnect_timeout',
-    })],
-  }]);
+  const forfeitClient = new ScriptedClient([
+    { rowCount: 1, rows: [] },
+    {
+      rowCount: 1,
+      rows: [decisionRow()],
+    },
+  ]);
+  const noContestClient = new ScriptedClient([
+    { rowCount: 1, rows: [] },
+    {
+      rowCount: 1,
+      rows: [decisionRow({
+        decision_type: 'no_contest',
+        winner_account_id: null,
+        forfeiting_account_id: null,
+        reason: 'reconnect_timeout',
+      })],
+    },
+  ]);
   const store = createRankedTerminalDecisionStore(new ScriptedClient());
 
   const forfeit = await store.enqueue(forfeitClient, forfeitInput());
@@ -76,7 +83,11 @@ test('enqueues valid forfeit and no-contest shapes through the supplied transact
   assert.equal(noContest.decisionType, 'no_contest');
   assert.equal(noContest.winnerAccountId, null);
   assert.equal(noContest.forfeitingAccountId, null);
-  assert.deepEqual(forfeitClient.queries[0]?.values, [
+  assert.equal(forfeitClient.queries[0]?.sql, RANKED_SESSION_TRANSACTION_LOCK_SQL);
+  assert.deepEqual(forfeitClient.queries[0]?.values, [SESSION_ID]);
+  assert.equal(noContestClient.queries[0]?.sql, RANKED_SESSION_TRANSACTION_LOCK_SQL);
+  assert.deepEqual(noContestClient.queries[0]?.values, [SESSION_ID]);
+  assert.deepEqual(forfeitClient.queries[1]?.values, [
     SESSION_ID,
     'forfeit',
     P1_ACCOUNT_ID,
@@ -87,7 +98,7 @@ test('enqueues valid forfeit and no-contest shapes through the supplied transact
     DUE_AT,
     DECIDED_AT,
   ]);
-  assert.deepEqual(noContestClient.queries[0]?.values.slice(0, 7), [
+  assert.deepEqual(noContestClient.queries[1]?.values.slice(0, 7), [
     SESSION_ID,
     'no_contest',
     P1_ACCOUNT_ID,
@@ -96,7 +107,7 @@ test('enqueues valid forfeit and no-contest shapes through the supplied transact
     null,
     'reconnect_timeout',
   ]);
-  assert.match(forfeitClient.queries[0]?.sql ?? '', /ON CONFLICT \(session_id\) DO NOTHING/);
+  assert.match(forfeitClient.queries[1]?.sql ?? '', /ON CONFLICT \(session_id\) DO NOTHING/);
 
   const invalidClient = new ScriptedClient();
   await assert.rejects(
@@ -119,6 +130,7 @@ test('enqueues valid forfeit and no-contest shapes through the supplied transact
 
 test('treats an existing byte-equivalent decision as an idempotent enqueue', async () => {
   const client = new ScriptedClient([
+    { rowCount: 1, rows: [] },
     { rowCount: 0, rows: [] },
     {
       rowCount: 1,
@@ -131,14 +143,17 @@ test('treats an existing byte-equivalent decision as an idempotent enqueue', asy
 
   assert.equal(result.status, 'settled');
   assert.equal(result.settledMatchId, MATCH_ID);
-  assert.equal(client.queries.length, 2);
-  assert.match(client.queries[0]?.sql ?? '', /ON CONFLICT \(session_id\) DO NOTHING/);
-  assert.match(client.queries[1]?.sql ?? '', /WHERE session_id = \$1 LIMIT 1/);
-  assert.deepEqual(client.queries[1]?.values, [SESSION_ID]);
+  assert.equal(client.queries.length, 3);
+  assert.equal(client.queries[0]?.sql, RANKED_SESSION_TRANSACTION_LOCK_SQL);
+  assert.deepEqual(client.queries[0]?.values, [SESSION_ID]);
+  assert.match(client.queries[1]?.sql ?? '', /ON CONFLICT \(session_id\) DO NOTHING/);
+  assert.match(client.queries[2]?.sql ?? '', /WHERE session_id = \$1 LIMIT 1/);
+  assert.deepEqual(client.queries[2]?.values, [SESSION_ID]);
 });
 
 test('fails closed when an existing session has a conflicting immutable decision', async () => {
   const client = new ScriptedClient([
+    { rowCount: 1, rows: [] },
     { rowCount: 0, rows: [] },
     { rowCount: 1, rows: [decisionRow({ reason: 'peer_left' })] },
   ]);
@@ -149,7 +164,9 @@ test('fails closed when an existing session has a conflicting immutable decision
     (error: unknown) => error instanceof RankedTerminalDecisionConflictError
       && error.sessionId === SESSION_ID,
   );
-  assert.equal(client.queries.length, 2);
+  assert.equal(client.queries.length, 3);
+  assert.equal(client.queries[0]?.sql, RANKED_SESSION_TRANSACTION_LOCK_SQL);
+  assert.deepEqual(client.queries[0]?.values, [SESSION_ID]);
 });
 
 test('claims a hard-capped batch atomically and maps returned lease rows', async () => {

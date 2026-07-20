@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
@@ -41,6 +41,7 @@ interface StepResult {
 interface JsonResponse<T> {
   status: number;
   body: T;
+  cacheControl: string | null;
 }
 
 interface SignedAccount {
@@ -73,6 +74,11 @@ interface IceConfig {
 interface SmokeProofs {
   signedSessionsRequired: boolean;
   accessStatusPrivate: boolean;
+  exactBuildCheckAdminGated: boolean;
+  exactReleaseBuildAllowlisted: boolean;
+  securityPostureAdminGated: boolean;
+  securityPosturePrivacySafe: boolean;
+  deploymentHealthGatePassed: boolean;
   networkStatusPrivate: boolean;
   outsiderDenialCode: string | null;
   missingBuildDenialCode: string | null;
@@ -104,6 +110,13 @@ function tail(value: string, length = 8_000): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function deriveLocalPurposeSecret(rootSecret: string, purpose: string): string {
+  return createHmac('sha256', rootSecret)
+    .update('gravity-well-controlled-alpha-security-v1\0')
+    .update(purpose)
+    .digest('hex');
 }
 
 function appendFailure(current: string | null, next: unknown, prefix?: string): string {
@@ -464,7 +477,11 @@ async function requestJson<T>(
   } catch {
     // Preserve text for a bounded, redacted error summary.
   }
-  return { status: response.status, body: body as T };
+  return {
+    status: response.status,
+    body: body as T,
+    cacheControl: response.headers.get('cache-control'),
+  };
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
@@ -765,6 +782,7 @@ function buildApiEnvironment(options: {
   deploymentEnvironment: string;
   authSessionSecret: string;
   authRateLimitSecret: string;
+  opsAdminKey: string;
   turnSharedSecret: string;
   runtimeNamespace: string;
   accessMode: 'closed' | 'allowlist';
@@ -793,14 +811,19 @@ function buildApiEnvironment(options: {
     AUTH_SESSION_PREVIOUS_SECRET: '',
     AUTH_SESSION_TTL_SECONDS: '300',
     AUTH_RATE_LIMIT_SECRET: options.authRateLimitSecret,
+    SLO_ADMIN_KEY: options.opsAdminKey,
+    AUTH_IDENTITY_ADMIN_KEY: deriveLocalPurposeSecret(options.opsAdminKey, 'identity-admin'),
+    RANKED_ANOMALY_ADMIN_KEY: deriveLocalPurposeSecret(options.opsAdminKey, 'ranked-anomaly-admin'),
+    ENFORCEMENT_ADMIN_KEY: deriveLocalPurposeSecret(options.opsAdminKey, 'enforcement-admin'),
+    RANKED_SEASON_RESET_ADMIN_KEY: deriveLocalPurposeSecret(options.opsAdminKey, 'season-reset-admin'),
     AUTH_RATE_LIMIT_GLOBAL_SOURCE_MAX_ATTEMPTS: '100',
     AUTH_RATE_LIMIT_GLOBAL_SOURCE_WINDOW_SECONDS: '60',
     AUTH_RATE_LIMIT_GUEST_SOURCE_MAX_ATTEMPTS: '10',
     AUTH_RATE_LIMIT_GUEST_SOURCE_WINDOW_SECONDS: '60',
     ALLOW_INSECURE_ACCOUNT_HEADER: 'false',
     ALLOW_REMOTE_DATABASE_SMOKE: '0',
-    API_TRUST_PROXY_HOPS: '',
-    API_CORS_ORIGINS: 'http://127.0.0.1:*',
+    API_TRUST_PROXY_HOPS: '1',
+    API_CORS_ORIGINS: 'https://alpha.gravitywell.space',
     REPLAY_BLOB_PROVIDER: 'postgres',
     MATCHMAKING_ACCESS_MODE: options.accessMode,
     MATCHMAKING_ALPHA_ACCOUNT_IDS: (options.allowlistedAccountIds ?? []).join(','),
@@ -814,8 +837,11 @@ function buildApiEnvironment(options: {
     MATCHMAKING_ICE_TRANSPORT_POLICY: 'all',
     MATCHMAKING_ENABLE_LEGACY_HTTP_FRAME_RELAY: 'false',
     STEAM_ALLOW_DEV_TICKETS: 'false',
-    STEAM_WEB_API_KEY: '',
-    STEAM_WEB_API_BASE: 'http://127.0.0.1:9',
+    STEAM_APP_ID: '480',
+    STEAM_WEB_API_KEY: deriveLocalPurposeSecret(options.opsAdminKey, 'steam-config-only'),
+    STEAM_WEB_API_IDENTITY: 'gravity-well-local-config-proof',
+    STEAM_WEB_API_BASE: 'https://partner.steam-api.com',
+    STEAM_WEB_API_TIMEOUT_MS: '5000',
     ROOM_WEB_INVITE_BASE_URL: `http://127.0.0.1:${options.port}`,
     PGAPPNAME: `gravity-well-controlled-alpha-access-${process.pid}`,
   };
@@ -839,19 +865,29 @@ async function run(): Promise<void> {
   const configuredDatabaseTarget = classifyDatabaseTarget(databaseUrl);
   const runId = `${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`;
   const databaseId = `local-controlled-alpha-access-${runId}`;
-  const deploymentEnvironment = 'local-controlled-alpha-smoke';
+  const deploymentEnvironment = 'canary';
   const bootstrapNamespace = `smoke:controlled-alpha-bootstrap-${runId}`;
   const allowlistNamespace = `smoke:controlled-alpha-access-${runId}`;
   const runtimeNamespaces = [bootstrapNamespace, allowlistNamespace];
   const authSessionSecret = randomBytes(48).toString('base64url');
   const authRateLimitSecret = randomBytes(48).toString('base64url');
+  const opsAdminKey = randomBytes(48).toString('base64url');
   const turnSharedSecret = randomBytes(32).toString('hex');
   const approvedBuild = randomBytes(20).toString('hex');
   const staleBuild = `${approvedBuild.slice(0, -1)}${approvedBuild.endsWith('0') ? '1' : '0'}`;
-  const sensitiveValues = new Set([
+  const secretValues = [
     authSessionSecret,
     authRateLimitSecret,
+    opsAdminKey,
     turnSharedSecret,
+    deriveLocalPurposeSecret(opsAdminKey, 'identity-admin'),
+    deriveLocalPurposeSecret(opsAdminKey, 'ranked-anomaly-admin'),
+    deriveLocalPurposeSecret(opsAdminKey, 'enforcement-admin'),
+    deriveLocalPurposeSecret(opsAdminKey, 'season-reset-admin'),
+    deriveLocalPurposeSecret(opsAdminKey, 'steam-config-only'),
+  ];
+  const sensitiveValues = new Set([
+    ...secretValues,
     approvedBuild,
     staleBuild,
   ]);
@@ -871,6 +907,11 @@ async function run(): Promise<void> {
   const proofs: SmokeProofs = {
     signedSessionsRequired: false,
     accessStatusPrivate: false,
+    exactBuildCheckAdminGated: false,
+    exactReleaseBuildAllowlisted: false,
+    securityPostureAdminGated: false,
+    securityPosturePrivacySafe: false,
+    deploymentHealthGatePassed: false,
     networkStatusPrivate: false,
     outsiderDenialCode: null,
     missingBuildDenialCode: null,
@@ -932,6 +973,7 @@ async function run(): Promise<void> {
       deploymentEnvironment,
       authSessionSecret,
       authRateLimitSecret,
+      opsAdminKey,
       turnSharedSecret,
       runtimeNamespace: bootstrapNamespace,
       accessMode: 'closed',
@@ -967,6 +1009,7 @@ async function run(): Promise<void> {
         deploymentEnvironment,
         authSessionSecret,
         authRateLimitSecret,
+        opsAdminKey,
         turnSharedSecret,
         runtimeNamespace: allowlistNamespace,
         accessMode: 'allowlist',
@@ -1026,6 +1069,154 @@ async function run(): Promise<void> {
         throw new Error('Matchmaking network status exposed relay connection details.');
       }
       proofs.networkStatusPrivate = true;
+    });
+
+    await recordStep(steps, 'prove exact release build access without exposing the allowlist', async () => {
+      const route = '/ops/matchmaking/access/build-check';
+      const unauthorized = await requestJson(baseUrl, route, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ buildVersion: approvedBuild }),
+      });
+      expectStatus('Unauthenticated exact-build check', unauthorized, 401);
+      proofs.exactBuildCheckAdminGated = true;
+
+      const [approvedResponse, staleResponse] = await Promise.all([
+        requestJson<Record<string, unknown>>(baseUrl, route, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-admin-key': opsAdminKey },
+          body: JSON.stringify({ buildVersion: approvedBuild.toUpperCase() }),
+        }),
+        requestJson<Record<string, unknown>>(baseUrl, route, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-admin-key': opsAdminKey },
+          body: JSON.stringify({ buildVersion: staleBuild }),
+        }),
+      ]);
+      const approvedCheck = expectExactKeys(
+        'Approved exact-build check',
+        expectStatus('Approved exact-build check', approvedResponse, 200),
+        ['allowlisted'],
+      );
+      const staleCheck = expectExactKeys(
+        'Stale exact-build check',
+        expectStatus('Stale exact-build check', staleResponse, 200),
+        ['allowlisted'],
+      );
+      if (approvedCheck.allowlisted !== true || staleCheck.allowlisted !== false) {
+        throw new Error('Exact-build access check did not distinguish the approved release from a stale SHA.');
+      }
+      const serializedChecks = JSON.stringify([approvedCheck, staleCheck]);
+      if (serializedChecks.includes(approvedBuild) || serializedChecks.includes(staleBuild)) {
+        throw new Error('Exact-build access check exposed a submitted build identifier.');
+      }
+      proofs.exactReleaseBuildAllowlisted = true;
+    });
+
+    await recordStep(steps, 'prove runtime security posture is private and admin-gated', async () => {
+      const route = '/ops/security/posture';
+      const unauthorized = await requestJson(baseUrl, route);
+      expectStatus('Unauthenticated runtime security posture', unauthorized, 401);
+      proofs.securityPostureAdminGated = true;
+
+      const response = await requestJson<Record<string, unknown>>(baseUrl, route, {
+        headers: { 'x-admin-key': opsAdminKey },
+      });
+      const posture = expectExactKeys(
+        'Runtime security posture',
+        expectStatus('Runtime security posture', response, 200),
+        [
+          'schemaVersion',
+          'configurationReady',
+          'productionMode',
+          'hostedDeployment',
+          'signedSessionAuthReady',
+          'sessionRotationReady',
+          'authThrottleIsolationReady',
+          'insecureAccountHeaderDisabled',
+          'proxySourceBoundaryReady',
+          'corsBoundaryReady',
+          'identityAdminBoundaryReady',
+          'operationsCredentialsReady',
+          'steamTicketVerifierConfigured',
+          'steamDevelopmentTicketsDisabled',
+        ],
+      );
+      if (
+        posture.schemaVersion !== 'gw.runtime-security-posture.v1'
+        || posture.productionMode !== true
+        || posture.signedSessionAuthReady !== true
+        || posture.authThrottleIsolationReady !== true
+        || posture.hostedDeployment !== true
+        || posture.steamTicketVerifierConfigured !== true
+        || posture.configurationReady !== true
+      ) {
+        throw new Error('Runtime security posture did not confirm the synthetic alpha configuration.');
+      }
+      if (!String(response.cacheControl ?? '').toLowerCase().includes('no-store')) {
+        throw new Error('Runtime security posture response was cacheable.');
+      }
+      const serializedPosture = JSON.stringify(posture);
+      if ([...sensitiveValues].some((value) => value && serializedPosture.includes(value))) {
+        throw new Error('Runtime security posture exposed a secret or allowlist value.');
+      }
+      proofs.securityPosturePrivacySafe = true;
+    });
+
+    await recordStep(steps, 'run production deployment health gate against loopback', async () => {
+      const gateReportPath = path.join(defaultArtifactDir, 'deployment-health-gate.json');
+      await runCommand(
+        'Deployment health gate',
+        process.execPath,
+        ['--import', 'tsx', 'scripts/deploymentHealthGate.ts'],
+        {
+          cwd: apiWorkspaceRoot,
+          env: {
+            API_BASE_URL: baseUrl,
+            API_SLO_ADMIN_KEY: opsAdminKey,
+            API_OPS_ADMIN_KEY: opsAdminKey,
+            DEPLOY_ALLOW_INSECURE_LOCALHOST: 'true',
+            DEPLOY_EXPECT_API_HOSTNAME: '127.0.0.1',
+            DEPLOY_EXPECT_RELEASE_SHA: approvedBuild,
+            DEPLOY_EXPECT_MIGRATION_HEAD: '032_steam_ticket_exchange_replay_guard.sql',
+            DEPLOY_EXPECT_MIGRATION_COUNT: '32',
+            DEPLOY_EXPECT_DATABASE_TARGET: 'local',
+            DEPLOY_EXPECT_DATABASE_ID: databaseId,
+            DEPLOY_EXPECT_ENVIRONMENT: deploymentEnvironment,
+            DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: allowlistNamespace,
+            DEPLOY_EXPECT_MATCHMAKING_DRAINING: 'false',
+            DEPLOY_MAX_ACTIVE_SESSIONS: '0',
+            DEPLOY_REQUIRE_ADMIN_CHECKS: 'true',
+            DEPLOY_REQUIRE_ALPHA_ALLOWLIST: 'true',
+            DEPLOY_REQUIRE_TURN: 'true',
+            DEPLOY_REQUIRE_DURABLE_REPLAY_STORE: 'true',
+            DEPLOY_REQUIRE_WEB_RELEASE_ATTESTATION: 'false',
+            DEPLOY_REQUIRE_SECURE_AUTH: 'true',
+            DEPLOY_HEALTH_REPORT_PATH: gateReportPath,
+          },
+          timeoutMs: 30_000,
+          echo: false,
+        },
+      );
+      const gateReport = JSON.parse(readFileSync(gateReportPath, 'utf8')) as {
+        schemaVersion?: string;
+        ok?: boolean;
+        checks?: Record<string, unknown>;
+      };
+      if (
+        gateReport.schemaVersion !== 'gw.deployment-health-gate.v2'
+        || gateReport.ok !== true
+        || gateReport.checks?.runtimeSecurityConfigurationReady !== true
+        || gateReport.checks?.steamTicketVerifierConfigured !== true
+        || gateReport.checks?.exactReleaseBuildAllowlisted !== true
+      ) {
+        throw new Error('Deployment health gate report did not bind the secure exact release.');
+      }
+      const serializedGateReport = JSON.stringify(gateReport);
+      if (secretValues.some((value) => value && serializedGateReport.includes(value))) {
+        throw new Error('Deployment health gate report exposed an authentication secret.');
+      }
+      proofs.deploymentHealthGatePassed = true;
     });
 
     await recordStep(steps, 'require signed sessions in production mode', async () => {

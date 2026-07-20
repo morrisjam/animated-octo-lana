@@ -13,6 +13,7 @@ import {
 } from './ai';
 import { createMatchTelemetryTracker } from './matchTelemetry';
 import { framesToSeconds } from './moveData';
+import { createCharacterBalanceConfig } from './characterBalance';
 import { createInitialState, step, type SimulationActionStart } from './sim';
 import type { PlayerFrameInput } from './types';
 import type { CharacterId } from './characters';
@@ -108,7 +109,10 @@ describe('sim AI behaviour framework', () => {
     expect(defaults.postControlSteeringFrames).toBe(0);
     expect(defaults.opponentControlReturnObserveFrames).toBe(0);
     expect(defaults.repositionWeightScale).toBe(0);
+    expect(defaults.exchangeRepositionWeightScale).toBe(0);
     expect(defaults.postControlCounterstepScale).toBe(0);
+    expect(defaults.postControlChaseLockFrames).toBe(0);
+    expect(defaults.postControlRepeatDashWeightScale).toBe(1);
     expect(resolveAiDifficultyProfile('veteran', defaults)).toEqual(
       AI_DIFFICULTY_PROFILES.veteran,
     );
@@ -131,7 +135,10 @@ describe('sim AI behaviour framework', () => {
       committedLaunchGuardChance: 5,
       finishPursuitReachScale: 99,
       repositionWeightScale: 99,
+      exchangeRepositionWeightScale: 99,
       postControlCounterstepScale: 99,
+      postControlChaseLockFrames: 999,
+      postControlRepeatDashWeightScale: -1,
     })).toMatchObject({
       engagementDistanceScale: 3,
       neutralApproachScale: 0,
@@ -151,12 +158,15 @@ describe('sim AI behaviour framework', () => {
       committedLaunchGuardChance: 1,
       finishPursuitReachScale: 2,
       repositionWeightScale: 4,
+      exchangeRepositionWeightScale: 4,
       postControlCounterstepScale: 1,
+      postControlChaseLockFrames: 120,
+      postControlRepeatDashWeightScale: 0,
     });
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v6',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -165,7 +175,7 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v7',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -174,7 +184,7 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v8',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       postCommitmentDecisionScale: 0,
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
@@ -183,26 +193,127 @@ describe('sim AI behaviour framework', () => {
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v9',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       postCommitmentDecisionScale: 0,
       finishPursuitReachScale: 0.7,
     });
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v10',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       repositionWeightScale: 0,
       finishPursuitReachScale: 0.7,
     });
     expect(sanitiseAiBehaviorTuning({
       schemaVersion: 'gw.ai-behavior-tuning.v11',
     })).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       postControlCounterstepScale: 0,
+    });
+    expect(sanitiseAiBehaviorTuning({
+      schemaVersion: 'gw.ai-behavior-tuning.v12',
+    })).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
+      postControlChaseLockFrames: 0,
+    });
+    expect(sanitiseAiBehaviorTuning({
+      schemaVersion: 'gw.ai-behavior-tuning.v13',
+    })).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
+      postControlRepeatDashWeightScale: 1,
+    });
+    expect(sanitiseAiBehaviorTuning({
+      schemaVersion: 'gw.ai-behavior-tuning.v14',
+    })).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
+      exchangeRepositionWeightScale: 0,
     });
     expect(fingerprintAiBehaviorTuning(defaults)).not.toBe(
       fingerprintAiBehaviorTuning({ ...defaults, engagementDistanceScale: 1.1 }),
     );
+  });
+
+  test('applies package-balance AI pacing without changing character physics', () => {
+    const baseline = createInitialState({ seed: 127 });
+    const vanguard = createCharacterBalanceConfig('vanguard');
+    const baselineStats = structuredClone(vanguard.stats);
+    vanguard.ai.neutralApproachMultiplier = 0;
+    vanguard.ai.neutralBoostDistanceOffset = 60;
+    const candidate = createInitialState({
+      seed: 127,
+      characterBalanceOverrides: { vanguard },
+    });
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: -20, y: 0 };
+      state.players.P2.pos = { x: 20, y: 0 };
+      state.players.P1.fuel = 0;
+    }
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const controller = createAiController({
+      seed: 127,
+      profileId: 'veteran',
+      behaviorTuning,
+    });
+
+    const baselineTick = tickAiController(baseline, 'P1', controller);
+    const candidateTick = tickAiController(candidate, 'P1', controller);
+
+    expect(baselineTick.decision.movementIntent).toBe('long_range_approach');
+    expect(candidateTick.decision.movementIntent).toBe('long_range_approach');
+    expect(baselineTick.input.moveX).toBeGreaterThan(0.8);
+    expect(Math.abs(candidateTick.input.moveX)).toBeLessThan(0.01);
+    expect(vanguard.stats).toEqual(baselineStats);
+  });
+
+  test('applies package post-control spacing only to the configured character', () => {
+    const duelist = createCharacterBalanceConfig('duelist');
+    duelist.ai.postControlSpacingFrames = 8;
+    const baseline = createInitialState({
+      seed: 128,
+      loadout: { P1: 'duelist', P2: 'vanguard' },
+    });
+    const candidate = createInitialState({
+      seed: 128,
+      loadout: { P1: 'duelist', P2: 'vanguard' },
+      characterBalanceOverrides: { duelist },
+    });
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: 0, y: 0 };
+      state.players.P2.pos = { x: 30, y: 0 };
+    }
+    const controller = {
+      ...createAiController({
+        seed: 128,
+        profileId: 'veteran',
+        behaviorTuning: {
+          ...createDefaultAiBehaviorTuning(),
+          errorRateScale: 0,
+        },
+      }),
+      wasHelpless: true,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+    };
+
+    const baselineTick = tickAiController(baseline, 'P1', controller);
+    const candidateTick = tickAiController(candidate, 'P1', controller);
+
+    expect(baselineTick.next.postControlSteeringFramesRemaining).toBe(0);
+    expect(baselineTick.decision.gates.postEventSpacingActive).toBe(false);
+    expect(candidateTick.next.postControlSteeringFramesRemaining).toBe(8);
+    expect(candidateTick.decision.gates.postEventSpacingActive).toBe(true);
+    expect(candidateTick.decision.movementIntent).toBe('post_event_spacing');
+    expect(candidateTick.input.moveX).toBeLessThan(0);
+    expect(candidateTick.input.boost).toBe(false);
+    expect(candidateTick.input.superBoost).toBe(false);
+    expect(candidateTick.input.special).toBe(false);
   });
 
   test('can deliberately choose a deterministic neutral reposition without an attack input', () => {
@@ -257,6 +368,140 @@ describe('sim AI behaviour framework', () => {
     expect(threatened.next.tacticalRepositionFramesRemaining).toBe(0);
     expect(threatened.next.decisionLockFrames).toBe(0);
     expect(threatened.next.reactionFramesRemaining).toBe(0);
+  });
+
+  test('carries a between-exchange reposition choice through authored end lag', () => {
+    const state = createInitialState({ seed: 123 });
+    state.players.P1.pos = { x: -8, y: 0 };
+    state.players.P2.pos = { x: 8, y: 0 };
+    state.players.P1.endLag = framesToSeconds(8);
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      exchangeRepositionWeightScale: 4,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const controller = {
+      ...createAiController({ seed: 123, profileId: 'veteran', behaviorTuning }),
+      decisionLockFrames: 0,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasStrikeCommitted: true,
+    };
+
+    const duringRecovery = tickAiController(state, 'P1', controller);
+
+    expect(duringRecovery.input.launch).toBe(false);
+    expect(duringRecovery.next.exchangeRepositionOpportunityFramesRemaining).toBeGreaterThan(8);
+    expect(duringRecovery.next.tacticalRepositionFramesRemaining).toBe(0);
+
+    state.players.P1.endLag = 0;
+    const selected = tickAiController(state, 'P1', duringRecovery.next);
+
+    expect(selected.decision.selectedReason).toBe('weighted_reposition_choice');
+    expect(selected.decision.movementIntent).toBe('tactical_reposition');
+    expect(selected.decision.candidates.reposition).toMatchObject({
+      eligible: true,
+      reason: 'ready',
+    });
+    expect(selected.next.exchangeRepositionOpportunityFramesRemaining).toBe(0);
+    expect(selected.next.tacticalRepositionFramesRemaining).toBeGreaterThan(0);
+  });
+
+  test('defers a pending between-exchange reposition while the opponent threatens', () => {
+    const state = createInitialState({ seed: 124 });
+    state.players.P1.pos = { x: -6, y: 0 };
+    state.players.P2.pos = { x: 6, y: 0 };
+    state.players.P1.endLag = framesToSeconds(6);
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      exchangeRepositionWeightScale: 4,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const armed = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 124, profileId: 'veteran', behaviorTuning }),
+      decisionLockFrames: 0,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasStrikeCommitted: true,
+    });
+
+    state.players.P1.endLag = 0;
+    state.players.P2.launchStartup = framesToSeconds(4);
+    const threatened = tickAiController(state, 'P1', armed.next);
+
+    expect(threatened.decision.movementIntent).not.toBe('tactical_reposition');
+    expect(threatened.decision.candidates.reposition.eligible).toBe(false);
+    expect(threatened.next.exchangeRepositionOpportunityFramesRemaining).toBeGreaterThan(0);
+    expect(threatened.next.tacticalRepositionFramesRemaining).toBe(0);
+
+    state.players.P2.launchStartup = 0;
+    const afterThreat = tickAiController(state, 'P1', threatened.next);
+    expect(afterThreat.decision.selectedReason).toBe('weighted_reposition_choice');
+    expect(afterThreat.decision.movementIntent).toBe('tactical_reposition');
+  });
+
+  test('clears a pending between-exchange reposition after losing control', () => {
+    const state = createInitialState({ seed: 125 });
+    state.players.P1.pos = { x: -6, y: 0 };
+    state.players.P2.pos = { x: 6, y: 0 };
+    state.players.P1.endLag = framesToSeconds(6);
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      exchangeRepositionWeightScale: 4,
+    };
+    const armed = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 125, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 0,
+      wasStrikeCommitted: true,
+    });
+
+    state.players.P1.endLag = 0;
+    state.players.P1.helpless = framesToSeconds(12);
+    const interrupted = tickAiController(state, 'P1', armed.next);
+
+    expect(interrupted.next.exchangeRepositionOpportunityFramesRemaining).toBe(0);
+    expect(interrupted.next.tacticalRepositionFramesRemaining).toBe(0);
+  });
+
+  test('can decline the one-shot between-exchange reposition without locking actions', () => {
+    const state = createInitialState({ seed: 126 });
+    state.players.P1.pos = { x: -8, y: 0 };
+    state.players.P2.pos = { x: 8, y: 0 };
+    state.players.P1.endLag = framesToSeconds(6);
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      exchangeRepositionWeightScale: 0.000001,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const armed = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 126, profileId: 'veteran', behaviorTuning }),
+      decisionLockFrames: 0,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasStrikeCommitted: true,
+    });
+
+    state.players.P1.endLag = 0;
+    const declined = tickAiController(state, 'P1', armed.next);
+
+    expect(declined.decision.selectedReason).toBe('weighted_reposition_declined');
+    expect(declined.next.exchangeRepositionOpportunityFramesRemaining).toBe(0);
+    expect(declined.next.tacticalRepositionFramesRemaining).toBe(0);
+    expect(declined.next.decisionLockFrames).toBe(0);
+    expect(declined.next.reactionFramesRemaining).toBe(0);
   });
 
   test.each([
@@ -346,6 +591,412 @@ describe('sim AI behaviour framework', () => {
     expect(tick.decision.movementIntent).not.toBe('post_control_counterstep');
     expect(tick.next.postControlCounterstepOpportunityFramesRemaining).toBe(0);
     expect(tick.next.postControlCounterstepFramesRemaining).toBe(0);
+  });
+
+  test('post-control chase lock suppresses ordinary boost without reversing steering', () => {
+    const state = createInitialState({ seed: 121 });
+    state.players.P1.pos = { x: -9, y: 0 };
+    state.players.P1.fuel = 60;
+    state.players.P2.pos = { x: 9, y: 0 };
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlChaseLockFrames: 12,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const controller = {
+      ...createAiController({
+        seed: 121,
+        profileId: 'veteran',
+        behaviorTuning,
+        recoveryPolicyId: 'legacy',
+      }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+    };
+
+    const locked = tickAiController(state, 'P1', controller);
+    const baseline = tickAiController(state, 'P1', {
+      ...controller,
+      behaviorTuning: {
+        ...behaviorTuning,
+        postControlChaseLockFrames: 0,
+      },
+    });
+
+    expect(baseline.input.boost).toBe(true);
+    expect(locked.input.boost).toBe(false);
+    expect(locked.input.moveX).toBeGreaterThan(0);
+    expect(locked.input.superBoost).toBe(false);
+    expect(locked.diagnostics).toMatchObject({
+      postControlChaseLockActive: true,
+      postControlBoostSuppressed: true,
+      postControlDashSuppressed: false,
+      postControlChaseLockConsumed: false,
+    });
+    expect(locked.decision.selectedReason).toBe('post_control_chase_lock_boost_suppressed');
+    expect(locked.next.postControlChaseLockFramesRemaining).toBe(12);
+
+    const baselineStarts: SimulationActionStart[] = [];
+    step(structuredClone(state), { p1: baseline.input, p2: createIdleInput() }, 1 / 60, {
+      onActionStart: (event) => baselineStarts.push(event),
+    });
+    const lockedStarts: SimulationActionStart[] = [];
+    step(structuredClone(state), { p1: locked.input, p2: createIdleInput() }, 1 / 60, {
+      onActionStart: (event) => lockedStarts.push(event),
+    });
+    expect(baselineStarts).toContainEqual({ playerId: 'P1', action: 'boost' });
+    expect(lockedStarts).not.toContainEqual({ playerId: 'P1', action: 'boost' });
+  });
+
+  test('post-control chase lock waits for shared action readiness before counting down', () => {
+    const state = createInitialState({ seed: 124 });
+    state.players.P1.pos = { x: -9, y: 0 };
+    state.players.P1.fuel = 60;
+    state.players.P2.pos = { x: 9, y: 0 };
+    state.players.P2.endLag = 1;
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlChaseLockFrames: 12,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const controller = {
+      ...createAiController({ seed: 124, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+    };
+
+    const pending = tickAiController(state, 'P1', controller);
+
+    expect(pending.input.boost).toBe(true);
+    expect(pending.diagnostics).toMatchObject({
+      postControlChaseLockPending: true,
+      postControlChaseLockActive: false,
+      postControlBoostSuppressed: false,
+    });
+    expect(pending.next.postControlChaseLockFramesRemaining).toBe(0);
+
+    state.players.P2.endLag = 0;
+    const active = tickAiController(state, 'P1', pending.next);
+
+    expect(active.input.boost).toBe(false);
+    expect(active.diagnostics).toMatchObject({
+      postControlChaseLockPending: false,
+      postControlChaseLockActive: true,
+      postControlBoostSuppressed: true,
+    });
+    expect(active.next.postControlChaseLockFramesRemaining).toBe(12);
+  });
+
+  test('post-control chase lock preserves outward low-fuel escape boost', () => {
+    const state = createInitialState({ seed: 125 });
+    state.players.P1.pos = { x: -5, y: 0 };
+    state.players.P1.fuel = 40;
+    state.players.P2.pos = { x: 5, y: 0 };
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlChaseLockFrames: 12,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+
+    const tick = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 125, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+    });
+
+    expect(tick.decision.movementIntent).toBe('low_fuel_retreat');
+    expect(tick.input.moveX).toBeLessThan(0);
+    expect(tick.input.boost).toBe(true);
+    expect(tick.diagnostics).toMatchObject({
+      postControlChaseLockActive: true,
+      postControlBoostSuppressed: false,
+    });
+  });
+
+  test('post-control chase lock reads packaged movement dash behavior but preserves combat actions', () => {
+    const state = createInitialState({
+      seed: 122,
+      loadout: { P1: 'duelist', P2: 'vanguard' },
+    });
+    state.players.P1.pos = { x: -4, y: 0 };
+    state.players.P2.pos = { x: 4, y: 0 };
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlChaseLockFrames: 18,
+      launchWeightScale: 4,
+      specialWeightScale: 4,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+
+    const tick = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 122, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+    });
+
+    expect(tick.input.launch).toBe(true);
+    expect(tick.input.special).toBe(false);
+    expect(tick.decision.candidates.special.reason)
+      .toBe('post_control_chase_lock_dash_suppressed');
+    expect(tick.diagnostics.postControlDashSuppressed).toBe(true);
+    expect(tick.diagnostics.postControlChaseLockConsumed).toBe(true);
+    expect(tick.next.postControlChaseLockFramesRemaining).toBe(0);
+  });
+
+  test('post-control chase lock allows paid super boost and consumes the opportunity', () => {
+    const state = createInitialState({ seed: 123 });
+    state.players.P1.pos = { x: -17, y: 0 };
+    state.players.P2.pos = { x: 17, y: 0 };
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlChaseLockFrames: 24,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+
+    const tick = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 123, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+    });
+
+    expect(tick.input.superBoost).toBe(true);
+    expect(tick.input.boost).toBe(false);
+    expect(tick.diagnostics.postControlBoostSuppressed).toBe(false);
+    expect(tick.diagnostics.postControlChaseLockConsumed).toBe(true);
+    expect(tick.next.postControlChaseLockFramesRemaining).toBe(0);
+  });
+
+  test('post-control chase lock ignores non-launch stun or recovery transitions', () => {
+    const state = createInitialState({ seed: 126 });
+    state.players.P1.pos = { x: -9, y: 0 };
+    state.players.P2.pos = { x: 9, y: 0 };
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlChaseLockFrames: 12,
+      launchWeightScale: 0,
+      specialWeightScale: 0,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+
+    const tick = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 126, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasPlayerWithoutControl: true,
+      wasHelpless: false,
+    });
+
+    expect(tick.input.boost).toBe(true);
+    expect(tick.diagnostics).toMatchObject({
+      postControlChaseLockPending: false,
+      postControlChaseLockActive: false,
+      postControlBoostSuppressed: false,
+      postControlDashSuppressed: false,
+      postControlChaseLockConsumed: false,
+    });
+    expect(tick.next.postControlChaseLockFramesRemaining).toBe(0);
+  });
+
+  test('scales only a repeated packaged movement dash after close control return', () => {
+    const state = createInitialState({
+      seed: 127,
+      loadout: { P1: 'duelist', P2: 'vanguard' },
+    });
+    state.players.P1.pos = { x: -4, y: 0 };
+    state.players.P2.pos = { x: 4, y: 0 };
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlRepeatDashWeightScale: 0,
+      launchWeightScale: 4,
+      specialWeightScale: 4,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+
+    const tick = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 127, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+      lastPostControlFirstChoiceWasDash: true,
+    });
+
+    expect(tick.input.launch).toBe(true);
+    expect(tick.input.special).toBe(false);
+    expect(tick.input.moveX).toBeGreaterThan(0);
+    expect(tick.decision.candidates.special).toMatchObject({
+      eligible: true,
+      weight: 0,
+      reason: 'ready',
+    });
+    expect(tick.diagnostics).toMatchObject({
+      postControlRepeatDashPending: true,
+      postControlRepeatDashWeightApplied: true,
+      postControlRepeatDashConsumed: true,
+      postControlRepeatDashSelected: false,
+    });
+    expect(tick.next.postControlFirstChoiceFramesRemaining).toBe(0);
+    expect(tick.next.lastPostControlFirstChoiceWasDash).toBe(false);
+  });
+
+  test('leaves a first movement-dash choice and the neutral scale behavior-compatible', () => {
+    const state = createInitialState({
+      seed: 128,
+      loadout: { P1: 'duelist', P2: 'vanguard' },
+    });
+    state.players.P1.pos = { x: -4, y: 0 };
+    state.players.P2.pos = { x: 4, y: 0 };
+    const firstChoiceTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlRepeatDashWeightScale: 0,
+      launchWeightScale: 0,
+      specialWeightScale: 4,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const first = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 128, profileId: 'veteran', behaviorTuning: firstChoiceTuning }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+    });
+
+    expect(first.input.special).toBe(true);
+    expect(first.diagnostics.postControlRepeatDashPending).toBe(false);
+    expect(first.diagnostics.postControlRepeatDashWeightApplied).toBe(false);
+    expect(first.next.lastPostControlFirstChoiceWasDash).toBe(true);
+
+    const neutralTuning = {
+      ...firstChoiceTuning,
+      postControlRepeatDashWeightScale: 1,
+    };
+    const shared = {
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+      lastPostControlFirstChoiceWasDash: true,
+    };
+    const neutral = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 128, profileId: 'veteran', behaviorTuning: neutralTuning }),
+      ...shared,
+    });
+    const noHistory = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 128, profileId: 'veteran', behaviorTuning: neutralTuning }),
+      ...shared,
+      lastPostControlFirstChoiceWasDash: false,
+    });
+
+    expect(neutral.input).toEqual(noHistory.input);
+    expect(neutral.next.rngState).toBe(noHistory.next.rngState);
+    expect(neutral.diagnostics.postControlRepeatDashPending).toBe(false);
+    expect(neutral.diagnostics.postControlRepeatDashWeightApplied).toBe(false);
+  });
+
+  test('keeps movement available while waiting for the first post-control choice', () => {
+    const state = createInitialState({
+      seed: 129,
+      loadout: { P1: 'duelist', P2: 'vanguard' },
+    });
+    state.players.P1.pos = { x: -4, y: 0 };
+    state.players.P2.pos = { x: 4, y: 0 };
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlRepeatDashWeightScale: 0,
+      launchWeightScale: 4,
+      specialWeightScale: 4,
+      dunkWeightScale: 0,
+      parryWeightScale: 0,
+    };
+    const waiting = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 129, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 2,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+      lastPostControlFirstChoiceWasDash: true,
+    });
+
+    expect(waiting.decision.selectedAction).toBeNull();
+    expect(waiting.input.moveX).toBeGreaterThan(0);
+    expect(waiting.diagnostics).toMatchObject({
+      postControlRepeatDashPending: true,
+      postControlRepeatDashWeightApplied: false,
+      postControlRepeatDashConsumed: false,
+    });
+    expect(waiting.next.postControlFirstChoiceFramesRemaining).toBe(60);
+
+    const ready = tickAiController(state, 'P1', {
+      ...waiting.next,
+      reactionFramesRemaining: 0,
+      decisionLockFrames: 0,
+    });
+    expect(ready.input.launch).toBe(true);
+    expect(ready.diagnostics.postControlRepeatDashWeightApplied).toBe(true);
+    expect(ready.diagnostics.postControlRepeatDashConsumed).toBe(true);
+  });
+
+  test('preserves a threat-confirmed parry while scaling a repeated movement dash', () => {
+    const state = createInitialState({
+      seed: 130,
+      loadout: { P1: 'duelist', P2: 'vanguard' },
+    });
+    state.players.P1.pos = { x: -4, y: 0 };
+    state.players.P2.pos = { x: 4, y: 0 };
+    state.players.P2.launchStartup = framesToSeconds(4);
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlRepeatDashWeightScale: 0,
+      launchWeightScale: 0,
+      specialWeightScale: 4,
+      dunkWeightScale: 0,
+      parryWeightScale: 4,
+    };
+
+    const tick = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 130, profileId: 'veteran', behaviorTuning }),
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+      wasHelpless: true,
+      lastPostControlFirstChoiceWasDash: true,
+    });
+
+    expect(tick.input.parry).toBe(true);
+    expect(tick.input.special).toBe(false);
+    expect(tick.diagnostics).toMatchObject({
+      postControlRepeatDashPending: true,
+      postControlRepeatDashWeightApplied: true,
+      postControlRepeatDashConsumed: true,
+      postControlRepeatDashSelected: false,
+    });
+    expect(tick.next.lastPostControlFirstChoiceWasDash).toBe(false);
   });
 
   test('starts an offense-only decision read after authored attack recovery', () => {
@@ -1214,7 +1865,7 @@ describe('sim AI behaviour framework', () => {
     expect(tick.input.dunk).toBe(false);
   });
 
-  test('post-control steering creates space without suppressing defensive counters', () => {
+  test('post-control steering creates a bait window without suppressing defensive counters', () => {
     const behaviorTuning = {
       ...createDefaultAiBehaviorTuning(),
       errorRateScale: 0,
@@ -1257,9 +1908,39 @@ describe('sim AI behaviour framework', () => {
     });
 
     expect(neutral.input.moveX).toBeLessThan(0);
+    expect(neutral.input.launch).toBe(false);
     expect(neutral.input.special).toBe(false);
-    expect(neutral.decision.candidates.launch.reason).toBe('ready');
+    expect(neutral.decision.candidates.launch.reason).toBe('post_control_bait');
     expect(neutral.decision.candidates.special.reason).toBe('post_control_dash_suppressed');
+
+    const counterLaunchState = createInitialState({
+      seed: 485,
+      loadout: { P1: 'duelist', P2: 'vanguard' },
+    });
+    counterLaunchState.players.P1.pos = { x: 0, y: 0 };
+    counterLaunchState.players.P2.pos = { x: 8, y: 0 };
+    counterLaunchState.players.P2.launchStartup = 1;
+    const counterLaunch = tickAiController(counterLaunchState, 'P1', {
+      ...createAiController({
+        seed: 485,
+        profileId: 'veteran',
+        behaviorTuning: {
+          ...behaviorTuning,
+          postRecoveryDefenseFrames: 0,
+          postRecoveryThreatParryChance: 0,
+          launchWeightScale: 4,
+          specialWeightScale: 0,
+          dunkWeightScale: 0,
+          parryWeightScale: 0,
+        },
+      }),
+      wasHelpless: true,
+      reactionFramesRemaining: 0,
+      maneuverFramesRemaining: 100,
+    });
+
+    expect(counterLaunch.input.launch).toBe(true);
+    expect(counterLaunch.decision.candidates.launch.reason).toBe('ready');
   });
 
   test('post-control steering only starts for a close control return', () => {
@@ -1731,6 +2412,58 @@ describe('sim AI behaviour framework', () => {
     );
     expect(initialRange.next.neutralHoldPending).toBe(false);
     expect(initialRange.next.neutralHoldFramesRemaining).toBe(0);
+  });
+
+  test('neutral hold can begin when safe control returns outside pressure', () => {
+    const state = createInitialState({ seed: 474 });
+    state.players.P1.pos = { x: -13, y: 0 };
+    state.players.P2.pos = { x: 13, y: 0 };
+    const returned = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 474, profileId: 'veteran', pursuitPolicyId: 'neutral_hold' }),
+      wasHelpless: true,
+      wasInPressureBand: false,
+      reactionFramesRemaining: 0,
+    });
+
+    expect(returned.next.neutralHoldPending).toBe(false);
+    expect(returned.next.neutralHoldFramesRemaining).toBeGreaterThan(0);
+    expect(returned.input.moveX).toBeLessThan(0);
+    expect(returned.input.boost).toBe(false);
+    expect(returned.input.superBoost).toBe(false);
+    expect(returned.input.launch).toBe(false);
+    expect(returned.input.special).toBe(false);
+
+    const legacy = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 475, profileId: 'veteran' }),
+      wasHelpless: true,
+      wasInPressureBand: false,
+      reactionFramesRemaining: 0,
+    });
+    expect(legacy.next.neutralHoldPending).toBe(false);
+    expect(legacy.next.neutralHoldFramesRemaining).toBe(0);
+
+    const distantState = createInitialState({ seed: 476 });
+    distantState.players.P1.pos = { x: -20, y: 0 };
+    distantState.players.P2.pos = { x: 20, y: 0 };
+    const distant = tickAiController(distantState, 'P1', {
+      ...createAiController({ seed: 476, profileId: 'veteran', pursuitPolicyId: 'neutral_hold' }),
+      wasHelpless: true,
+      wasInPressureBand: false,
+      reactionFramesRemaining: 0,
+    });
+    expect(distant.next.neutralHoldPending).toBe(false);
+    expect(distant.next.neutralHoldFramesRemaining).toBe(0);
+
+    state.players.P2.helpless = 1;
+    const finishChase = tickAiController(state, 'P1', {
+      ...createAiController({ seed: 477, profileId: 'veteran', pursuitPolicyId: 'neutral_hold' }),
+      wasHelpless: true,
+      wasInPressureBand: false,
+      reactionFramesRemaining: 0,
+    });
+    expect(finishChase.next.neutralHoldPending).toBe(false);
+    expect(finishChase.next.neutralHoldFramesRemaining).toBe(0);
+    expect(finishChase.input.moveX).toBeGreaterThan(0);
   });
 
   test('neutral hold does not replace launch chase and legacy pursuit does not pause', () => {

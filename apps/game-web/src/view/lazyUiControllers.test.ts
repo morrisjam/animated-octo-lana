@@ -2,7 +2,11 @@ import { describe, expect, test, vi } from 'vitest';
 import type { ReplayReviewData } from '../sim/replayReview';
 import type { OnlineDevMenu, OnlineDevMenuOptions } from './onlineDevMenu';
 import type { PauseMenu, PauseMenuOptions } from './pauseMenu';
-import type { ReplayViewerController, ReplayViewerOptions } from './replayViewer';
+import type {
+  ReplayViewerComparisonContext,
+  ReplayViewerController,
+  ReplayViewerOptions,
+} from './replayViewer';
 import {
   createLazyOnlineDevMenu,
   createLazyPauseMenu,
@@ -27,11 +31,15 @@ function createPauseMenuDouble() {
   let paused = false;
   const menu = {
     isPaused: vi.fn(() => paused),
+    isCapturingBinding: vi.fn(() => false),
     toggle: vi.fn(),
     setPaused: vi.fn((nextPaused: boolean) => {
       paused = nextPaused;
     }),
     openBalanceLab: vi.fn(() => {
+      paused = true;
+    }),
+    openBindings: vi.fn(() => {
       paused = true;
     }),
     setCanRestartTraining: vi.fn(),
@@ -118,6 +126,26 @@ describe('lazy UI controllers', () => {
     expect(menu.setPaused).toHaveBeenCalledWith(true);
   });
 
+  test('queues the controls editor while the pause chunk loads', async () => {
+    const moduleLoad = deferred<{ createPauseMenu: () => PauseMenu }>();
+    const menu = createPauseMenuDouble();
+    const controller = createLazyPauseMenu(
+      {} as PauseMenuOptions,
+      {},
+      () => moduleLoad.promise,
+    );
+
+    controller.openBindings();
+    expect(controller.isPaused()).toBe(true);
+    expect(menu.openBindings).not.toHaveBeenCalled();
+
+    moduleLoad.resolve({ createPauseMenu: () => menu });
+    await controller.preload();
+
+    expect(menu.openBindings).toHaveBeenCalledTimes(1);
+    expect(controller.isCapturingBinding()).toBe(false);
+  });
+
   test('does not flash a replay that was hidden while its chunk loaded', async () => {
     const moduleLoad = deferred<{ createReplayViewer: () => ReplayViewerController }>();
     const viewer = createReplayViewerDouble();
@@ -138,6 +166,15 @@ describe('lazy UI controllers', () => {
     controller.show(review, 'visible replay');
     expect(viewer.show).toHaveBeenCalledWith(review, 'visible replay');
     expect(viewer.updatePlayback).toHaveBeenCalledWith(4, true, 0.5);
+
+    const comparison: ReplayViewerComparisonContext = {
+      activeVariant: 'candidate',
+      candidateAvailable: true,
+      ruleChangeLabel: 'Clash Separation: 10 -> 12',
+      initialFrame: 4,
+    };
+    controller.show(review, 'candidate replay', comparison);
+    expect(viewer.show).toHaveBeenLastCalledWith(review, 'candidate replay', comparison);
   });
 
   test('queues the requested online section and disposes the loaded controller', async () => {

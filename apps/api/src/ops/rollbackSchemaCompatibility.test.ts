@@ -18,7 +18,7 @@ function createReport(): RollbackSchemaCompatibilityReport {
     ok: true,
     localOnly: true,
     hostedServicesContacted: false,
-    runtimeDependenciesSource: 'candidate_install',
+    runtimeDependenciesSource: 'rollback_install',
     candidate: {
       sha: CANDIDATE_SHA,
       dirty: false,
@@ -34,9 +34,11 @@ function createReport(): RollbackSchemaCompatibilityReport {
     },
     compatibilityExceptions: [],
     phases: [
+      { name: 'rollback_dependencies', status: 'passed', durationMs: 10 },
       { name: 'rollback_migrations', status: 'passed', durationMs: 10 },
       { name: 'rollback_pre_upgrade_probe', status: 'passed', durationMs: 20 },
       { name: 'candidate_migrations', status: 'passed', durationMs: 30 },
+      { name: 'rollback_post_upgrade_migrations', status: 'passed', durationMs: 10 },
       { name: 'rollback_post_upgrade_probe', status: 'passed', durationMs: 20 },
     ],
     probes: {

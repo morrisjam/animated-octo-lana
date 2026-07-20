@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto';
+
 const STEAM_ID_REGEX = /^\d{5,20}$/;
 const STEAM_WEB_TICKET_REGEX = /^(?:[0-9a-fA-F]{2}){8,4096}$/;
 
 export interface SteamTicketValidationOk {
   ok: true;
   steamUserId: string;
+  ticketDigest: string | null;
 }
 
 export interface SteamTicketValidationError {
@@ -46,6 +49,17 @@ function normalizeString(value: string | number | null | undefined): string {
   return String(value ?? '').trim();
 }
 
+export function digestSteamWebApiTicket(rawTicket: unknown): string | null {
+  if (typeof rawTicket !== 'string') {
+    return null;
+  }
+  const ticket = rawTicket.trim().toLowerCase();
+  if (!STEAM_WEB_TICKET_REGEX.test(ticket)) {
+    return null;
+  }
+  return createHash('sha256').update(ticket, 'utf8').digest('hex');
+}
+
 function validateDevTicket(ticket: string, allowDevTickets: boolean): SteamTicketValidationResult | null {
   if (!ticket.startsWith('dev-steam:')) {
     return null;
@@ -61,7 +75,7 @@ function validateDevTicket(ticket: string, allowDevTickets: boolean): SteamTicke
       error: 'Development Steam ticket contains an invalid Steam ID.',
     };
   }
-  return { ok: true, steamUserId };
+  return { ok: true, steamUserId, ticketDigest: null };
 }
 
 export class SteamTicketVerifier {
@@ -102,6 +116,14 @@ export class SteamTicketVerifier {
       return devTicket;
     }
     if (!STEAM_WEB_TICKET_REGEX.test(ticket)) {
+      return {
+        ok: false,
+        code: 'invalid_request',
+        error: 'steamTicket must be a hexadecimal GetAuthTicketForWebApi ticket.',
+      };
+    }
+    const ticketDigest = digestSteamWebApiTicket(ticket);
+    if (!ticketDigest) {
       return {
         ok: false,
         code: 'invalid_request',
@@ -174,7 +196,7 @@ export class SteamTicketVerifier {
       const params = payload.response?.params;
       const steamUserId = normalizeString(params?.steamid);
       if (params?.result === 'OK' && STEAM_ID_REGEX.test(steamUserId)) {
-        return { ok: true, steamUserId };
+        return { ok: true, steamUserId, ticketDigest };
       }
       const description = normalizeString(payload.response?.error?.errordesc)
         .replace(/[\u0000-\u001f\u007f]/g, ' ')

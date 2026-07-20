@@ -14,6 +14,13 @@
     "tags": ["custom", "todo"]
   },
 
+  // AI-only neutral pacing. These do not change human or online simulation movement.
+  "ai": {
+    "neutralApproachMultiplier": 1,
+    "neutralBoostDistanceOffset": 0,
+    "postControlSpacingFrames": 0
+  },
+
   "stats": {
     "fuelCapacityMultiplier": 1,
     "moveAccelMultiplier": 1,

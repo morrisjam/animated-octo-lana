@@ -125,7 +125,41 @@ describe('character package schema', () => {
   test('parses valid character package payload', () => {
     const parsed = parseCharacterPackage(makeValidPackage());
     expect(parsed.id).toBe('vanguard_pkg');
+    expect(parsed.ai).toEqual({
+      neutralApproachMultiplier: 1,
+      neutralBoostDistanceOffset: 0,
+      postControlSpacingFrames: 0,
+    });
     expect(parsed.moves.special.behaviorId).toBe('special.projectile.v1');
+  });
+
+  test('parses and bounds optional AI neutral pacing', () => {
+    const payload = makeValidPackage();
+    payload.ai = {
+      neutralApproachMultiplier: 0.75,
+      neutralBoostDistanceOffset: 8,
+      postControlSpacingFrames: 7.6,
+    };
+
+    expect(parseCharacterPackage(payload).ai).toEqual({
+      neutralApproachMultiplier: 0.75,
+      neutralBoostDistanceOffset: 8,
+      postControlSpacingFrames: 8,
+    });
+
+    payload.ai = {
+      neutralApproachMultiplier: 2.1,
+      neutralBoostDistanceOffset: 8,
+      postControlSpacingFrames: 8,
+    };
+    expect(() => parseCharacterPackage(payload)).toThrowError(CharacterPackageValidationError);
+
+    payload.ai = {
+      neutralApproachMultiplier: 1,
+      neutralBoostDistanceOffset: 0,
+      postControlSpacingFrames: 121,
+    };
+    expect(() => parseCharacterPackage(payload)).toThrowError(CharacterPackageValidationError);
   });
 
   test('accepts null kit-dependent assets for a sprite package', () => {

@@ -9,10 +9,17 @@ Local verification:
 ```bash
 npm ci --prefix apps/steam-shell
 npm test --prefix apps/steam-shell
-npm run steam:build
+npm run steam:alpha:build
 npm run package:win --prefix apps/steam-shell
 npm run smoke:win --prefix apps/steam-shell
 ```
+
+`npm run steam:build` remains the offline development profile. Release packaging uses
+`npm run steam:alpha:build`, which enables the allowlisted online, ranked, and live-match
+runtime and emits `gw.steam-alpha-release.v1`. The native smoke requires that manifest's
+API, Steam identity, ruleset, balance profile, and release profile to match this package's
+own configuration. CI additionally rejects a dirty source tree or a release SHA that is not
+the exact checked-out commit.
 
 Set `STEAM_APP_ID` and `STEAM_INCLUDE_APP_ID_FILE=true` only for a local Spacewar or partner-AppID launch. A production depot must be launched through Steam and must not ship `steam_appid.txt`.
 

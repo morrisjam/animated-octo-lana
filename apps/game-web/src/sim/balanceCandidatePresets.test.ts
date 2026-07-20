@@ -16,6 +16,7 @@ describe('Balance Lab candidate presets', () => {
     expect(BALANCE_CANDIDATE_PRESET_IDS).toEqual([
       'launch_break_agency_v1',
       'post_control_reposition_v1',
+      'ordinary_boost_acceleration_v1',
     ]);
     expect(BALANCE_CANDIDATE_PRESETS.map((preset) => preset.id)).toEqual(BALANCE_CANDIDATE_PRESET_IDS);
     expect(BALANCE_CANDIDATE_PRESETS[0]).toMatchObject({
@@ -68,6 +69,26 @@ describe('Balance Lab candidate presets', () => {
     expect(applied.characterBalanceOverrides.duelist?.moves.break.recoveryFrames).toBe(10);
     expect(overrides.vanguard.moves.break.recoveryFrames).toBe(18);
     expect(overrides).not.toHaveProperty('duelist');
+  });
+
+  test('stages only the evidence-backed ordinary Boost startup control', () => {
+    const tuning = createDefaultTuning();
+    const aiBehavior = createDefaultAiBehaviorTuning();
+
+    const applied = applyBalanceCandidatePreset(
+      'ordinary_boost_acceleration_v1',
+      tuning,
+      {},
+      aiBehavior,
+    );
+
+    expect(applied.tuning).toEqual({
+      ...tuning,
+      ordinaryBoostAccelerationSeconds: 0.12,
+    });
+    expect(applied.characterBalanceOverrides).toEqual({});
+    expect(applied.aiBehaviorTuning).toEqual(aiBehavior);
+    expect(tuning.ordinaryBoostAccelerationSeconds).toBe(0);
   });
 
   test('falls back deterministically for an invalid preset id', () => {

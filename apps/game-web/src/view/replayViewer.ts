@@ -1,4 +1,5 @@
 import type { PlayerId } from '../sim/types';
+import type { BalanceReplayVariant } from '../sim/balanceReplayComparison';
 import {
   BALANCE_LAB_CARRIED_REENTRY_CAUSE_LABELS,
   BALANCE_LAB_CONTROL_RETURN_ACTIONS,
@@ -24,11 +25,23 @@ export interface ReplayViewerOptions {
   onAdjustSpeed(direction: -1 | 1): void;
   onJumpRound(roundIndex: number): void;
   onSeek(frameIndex: number): void;
+  onSelectVariant?(variant: BalanceReplayVariant): void;
   onExit(): void;
 }
 
+export interface ReplayViewerComparisonContext {
+  activeVariant: BalanceReplayVariant;
+  candidateAvailable: boolean;
+  ruleChangeLabel: string;
+  initialFrame: number;
+}
+
 export interface ReplayViewerController {
-  show(data: ReplayReviewData, sourceLabel: string): void;
+  show(
+    data: ReplayReviewData,
+    sourceLabel: string,
+    comparison?: ReplayViewerComparisonContext,
+  ): void;
   hide(): void;
   isVisible(): boolean;
   updatePlayback(frameIndex: number, paused: boolean, speed: number): void;
@@ -39,6 +52,10 @@ export class ReplayViewer implements ReplayViewerController {
   private readonly root: HTMLDivElement;
   private readonly title: HTMLDivElement;
   private readonly subtitle: HTMLDivElement;
+  private readonly comparisonBar: HTMLDivElement;
+  private readonly baselineVariantButton: HTMLButtonElement;
+  private readonly candidateVariantButton: HTMLButtonElement;
+  private readonly comparisonRuleLabel: HTMLDivElement;
   private readonly playPauseButton: HTMLButtonElement;
   private readonly speedLabel: HTMLSpanElement;
   private readonly frameLabel: HTMLSpanElement;
@@ -57,6 +74,7 @@ export class ReplayViewer implements ReplayViewerController {
   private currentPaused = true;
   private currentSpeed = 1;
   private playbackRendered = false;
+  private comparisonContext: ReplayViewerComparisonContext | null = null;
 
   constructor(private readonly options: ReplayViewerOptions) {
     this.root = document.createElement('div');
@@ -70,6 +88,18 @@ export class ReplayViewer implements ReplayViewerController {
     this.subtitle = document.createElement('div');
     this.subtitle.className = 'replay-viewer-subtitle';
     header.append(this.title, this.subtitle);
+
+    this.comparisonBar = document.createElement('div');
+    this.comparisonBar.className = 'replay-comparison-bar';
+    this.comparisonBar.hidden = true;
+    const comparisonVariants = document.createElement('div');
+    comparisonVariants.className = 'replay-comparison-variants';
+    this.baselineVariantButton = this.createVariantButton('Baseline [B]', 'baseline');
+    this.candidateVariantButton = this.createVariantButton('Candidate [C]', 'candidate');
+    comparisonVariants.append(this.baselineVariantButton, this.candidateVariantButton);
+    this.comparisonRuleLabel = document.createElement('div');
+    this.comparisonRuleLabel.className = 'replay-comparison-rule';
+    this.comparisonBar.append(comparisonVariants, this.comparisonRuleLabel);
 
     const controls = document.createElement('div');
     controls.className = 'replay-viewer-controls';
@@ -179,7 +209,7 @@ export class ReplayViewer implements ReplayViewerController {
     flowPanel.appendChild(this.flowContent);
     body.append(frameDataPanel, eventPanel, flowPanel);
 
-    this.root.append(header, controls, jumpRow, timelineWrap, decisionPanel, body);
+    this.root.append(header, this.comparisonBar, controls, jumpRow, timelineWrap, decisionPanel, body);
     document.body.appendChild(this.root);
 
     this.keydownHandler = (event: KeyboardEvent) => {
@@ -198,6 +228,16 @@ export class ReplayViewer implements ReplayViewerController {
       if (key === ' ') {
         event.preventDefault();
         this.options.onTogglePause();
+        return;
+      }
+      if (key === 'b' && this.comparisonContext) {
+        event.preventDefault();
+        this.options.onSelectVariant?.('baseline');
+        return;
+      }
+      if (key === 'c' && this.comparisonContext?.candidateAvailable) {
+        event.preventDefault();
+        this.options.onSelectVariant?.('candidate');
         return;
       }
       if (key === ',' || key === 'arrowleft') {
@@ -231,16 +271,24 @@ export class ReplayViewer implements ReplayViewerController {
     window.addEventListener('keydown', this.keydownHandler);
   }
 
-  show(data: ReplayReviewData, sourceLabel: string): void {
+  show(
+    data: ReplayReviewData,
+    sourceLabel: string,
+    comparison?: ReplayViewerComparisonContext,
+  ): void {
     this.review = data;
-    this.currentFrameIndex = 0;
+    const initialFrame = Math.max(
+      0,
+      Math.min(data.totalFrames - 1, Math.floor(comparison?.initialFrame ?? 0)),
+    );
+    this.currentFrameIndex = initialFrame;
     this.currentPaused = true;
     this.currentSpeed = 1;
     this.playbackRendered = false;
+    this.comparisonContext = comparison ? { ...comparison, initialFrame } : null;
     this.visible = true;
     this.root.hidden = false;
-    this.title.textContent = 'Replay Review';
-    this.subtitle.textContent = `${sourceLabel} | Space pause, ,/. step, [-]/[+] speed, 1-9 jump round`;
+    this.renderComparisonContext(sourceLabel);
     this.roundSelect.innerHTML = '';
     for (const round of data.rounds) {
       const option = document.createElement('option');
@@ -249,8 +297,8 @@ export class ReplayViewer implements ReplayViewerController {
       this.roundSelect.appendChild(option);
     }
     this.seekInput.max = String(Math.max(0, data.totalFrames - 1));
-    this.seekInput.value = '0';
-    this.updatePlayback(0, true, 1);
+    this.seekInput.value = String(initialFrame);
+    this.updatePlayback(initialFrame, true, 1);
   }
 
   hide(): void {
@@ -258,6 +306,9 @@ export class ReplayViewer implements ReplayViewerController {
     this.root.hidden = true;
     this.review = null;
     this.playbackRendered = false;
+    this.comparisonContext = null;
+    this.comparisonBar.hidden = true;
+    delete this.root.dataset.comparisonVariant;
   }
 
   isVisible(): boolean {
@@ -327,6 +378,48 @@ export class ReplayViewer implements ReplayViewerController {
     button.textContent = label;
     button.addEventListener('click', onClick);
     return button;
+  }
+
+  private createVariantButton(
+    label: string,
+    variant: BalanceReplayVariant,
+  ): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `replay-comparison-variant ${variant}`;
+    button.textContent = label;
+    button.addEventListener('click', () => this.options.onSelectVariant?.(variant));
+    return button;
+  }
+
+  private renderComparisonContext(sourceLabel: string): void {
+    const comparison = this.comparisonContext;
+    if (!comparison) {
+      this.title.textContent = 'Replay Review';
+      this.subtitle.textContent = `${sourceLabel} | Space pause, ,/. step, [-]/[+] speed, 1-9 jump round`;
+      this.comparisonBar.hidden = true;
+      delete this.root.dataset.comparisonVariant;
+      return;
+    }
+    this.title.textContent = comparison.candidateAvailable
+      ? 'Incident Comparison'
+      : 'Baseline Incident';
+    this.subtitle.textContent = `${sourceLabel} | B/C switch, Space pause, ,/. step, [-]/[+] speed`;
+    this.comparisonBar.hidden = false;
+    this.root.dataset.comparisonVariant = comparison.activeVariant;
+    this.baselineVariantButton.setAttribute(
+      'aria-pressed',
+      String(comparison.activeVariant === 'baseline'),
+    );
+    this.candidateVariantButton.setAttribute(
+      'aria-pressed',
+      String(comparison.activeVariant === 'candidate'),
+    );
+    this.candidateVariantButton.disabled = !comparison.candidateAvailable;
+    this.candidateVariantButton.title = comparison.candidateAvailable
+      ? 'Show the matched candidate at this exact frame.'
+      : 'Run the matched candidate sample to unlock A/B switching.';
+    this.comparisonRuleLabel.textContent = comparison.ruleChangeLabel;
   }
 
   private createTimelineRow(label: string): HTMLDivElement {

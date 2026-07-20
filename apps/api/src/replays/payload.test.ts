@@ -8,6 +8,8 @@ import {
 
 const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as const;
 const COMBAT_BOOST_TUNING_KEY = 'combatBoostReacquireDelaySeconds' as const;
+const COMMITTED_LOCOMOTION_TUNING_KEY = 'committedLocomotionInputAuthority' as const;
+const BOOST_ACCELERATION_TUNING_KEY = 'ordinaryBoostAccelerationSeconds' as const;
 
 const TUNING = {
   chainWindowSeconds: 1,
@@ -70,7 +72,12 @@ function fingerprint(value: unknown): string {
 
 function fingerprintTuning(tuning: Record<string, unknown>): string {
   const fingerprintInput = { ...tuning };
-  for (const key of [ZERO_NEUTRAL_TUNING_KEY, COMBAT_BOOST_TUNING_KEY] as const) {
+  for (const key of [
+    ZERO_NEUTRAL_TUNING_KEY,
+    COMBAT_BOOST_TUNING_KEY,
+    COMMITTED_LOCOMOTION_TUNING_KEY,
+    BOOST_ACCELERATION_TUNING_KEY,
+  ] as const) {
     if (fingerprintInput[key] === 0) {
       delete fingerprintInput[key];
     }
@@ -93,14 +100,43 @@ function input(moveX: number) {
 }
 
 function canonicalOnlinePayload(
-  tuningShape: 'historical' | 'counter_only' | 'boost_only' | 'current' = 'historical',
+  tuningShape:
+    | 'historical'
+    | 'counter_only'
+    | 'boost_only'
+    | 'locomotion_only'
+    | 'counter_boost'
+    | 'counter_locomotion'
+    | 'boost_locomotion'
+    | 'current' = 'historical',
 ): ReplayPayload & Record<string, unknown> {
   const balanceTuning: Record<string, number> = { ...TUNING };
-  if (tuningShape === 'counter_only' || tuningShape === 'current') {
+  if (
+    tuningShape === 'counter_only'
+    || tuningShape === 'counter_boost'
+    || tuningShape === 'counter_locomotion'
+    || tuningShape === 'current'
+  ) {
     balanceTuning[ZERO_NEUTRAL_TUNING_KEY] = 0;
   }
-  if (tuningShape === 'boost_only' || tuningShape === 'current') {
+  if (
+    tuningShape === 'boost_only'
+    || tuningShape === 'counter_boost'
+    || tuningShape === 'boost_locomotion'
+    || tuningShape === 'current'
+  ) {
     balanceTuning[COMBAT_BOOST_TUNING_KEY] = 0;
+  }
+  if (
+    tuningShape === 'locomotion_only'
+    || tuningShape === 'counter_locomotion'
+    || tuningShape === 'boost_locomotion'
+    || tuningShape === 'current'
+  ) {
+    balanceTuning[COMMITTED_LOCOMOTION_TUNING_KEY] = 0;
+  }
+  if (tuningShape === 'current') {
+    balanceTuning[BOOST_ACCELERATION_TUNING_KEY] = 0;
   }
   const payload = {
     header: {
@@ -195,6 +231,53 @@ test('validates replay payload with versioned header', () => {
   ]);
 });
 
+test('preserves v12 and v13 local AI behavior provenance without rewriting archives', () => {
+  for (const [schemaVersion, chaseLockFrames] of [
+    ['gw.ai-behavior-tuning.v12', undefined],
+    ['gw.ai-behavior-tuning.v13', 18],
+  ] as const) {
+    const behaviorTuning = {
+      schemaVersion,
+      neutralApproachScale: 1,
+      ...(chaseLockFrames === undefined
+        ? {}
+        : { postControlChaseLockFrames: chaseLockFrames }),
+    };
+    const rawPayload = {
+      header: {
+        payloadVersion: 1,
+        rulesetVersion: 'prototype-2026.02',
+        simBuildHash: 'dev-local',
+        seed: 1,
+        localAi: {
+          schemaVersion: 'gw.local-ai-replay.v1',
+          profileId: 'veteran',
+          behaviorTuning,
+        },
+      },
+      inputTimeline: [{ p1: { moveX: 1 }, p2: { moveX: -1 } }],
+    };
+    const expectedLocalAi = structuredClone(rawPayload.header.localAi);
+
+    const validation = validateReplayPayloadForArchive(rawPayload);
+
+    assert.equal(validation.ok, true);
+    if (!validation.ok) {
+      throw new Error(validation.errorMessage);
+    }
+    assert.deepEqual(
+      (validation.payload.header as unknown as { localAi: unknown }).localAi,
+      expectedLocalAi,
+    );
+
+    behaviorTuning.neutralApproachScale = 0.5;
+    assert.deepEqual(
+      (validation.payload.header as unknown as { localAi: unknown }).localAi,
+      expectedLocalAi,
+    );
+  }
+});
+
 test('returns explicit unsupported version error', () => {
   const validation = validateReplayPayloadForArchive({
     header: {
@@ -236,7 +319,16 @@ test('preserves the complete canonical online payload as a detached JSON value',
 });
 
 test('accepts every historical zero-default tuning shape without rewriting archives', () => {
-  const shapes = ['historical', 'counter_only', 'boost_only', 'current'] as const;
+  const shapes = [
+    'historical',
+    'counter_only',
+    'boost_only',
+    'locomotion_only',
+    'counter_boost',
+    'counter_locomotion',
+    'boost_locomotion',
+    'current',
+  ] as const;
   const payloads = shapes.map((shape) => canonicalOnlinePayload(shape));
   assert.equal(new Set(payloads.map((payload) => (
     payload.header.onlineMatch!.tuningFingerprint
@@ -257,14 +349,37 @@ test('accepts every historical zero-default tuning shape without rewriting archi
         validation.payload.header.balanceTuning,
         ZERO_NEUTRAL_TUNING_KEY,
       ),
-      shape === 'counter_only' || shape === 'current',
+      shape === 'counter_only'
+        || shape === 'counter_boost'
+        || shape === 'counter_locomotion'
+        || shape === 'current',
     );
     assert.equal(
       Object.prototype.hasOwnProperty.call(
         validation.payload.header.balanceTuning,
         COMBAT_BOOST_TUNING_KEY,
       ),
-      shape === 'boost_only' || shape === 'current',
+      shape === 'boost_only'
+        || shape === 'counter_boost'
+        || shape === 'boost_locomotion'
+        || shape === 'current',
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        validation.payload.header.balanceTuning,
+        COMMITTED_LOCOMOTION_TUNING_KEY,
+      ),
+      shape === 'locomotion_only'
+        || shape === 'counter_locomotion'
+        || shape === 'boost_locomotion'
+        || shape === 'current',
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        validation.payload.header.balanceTuning,
+        BOOST_ACCELERATION_TUNING_KEY,
+      ),
+      shape === 'current',
     );
   }
 });
@@ -285,6 +400,46 @@ test('accepts a current recorder tuning snapshot with a nonzero combat boost loc
   }
   assert.equal(
     validation.payload.header.balanceTuning?.[COMBAT_BOOST_TUNING_KEY],
+    0.18,
+  );
+});
+
+test('accepts a current recorder tuning snapshot with nonzero committed locomotion authority', () => {
+  const payload = canonicalOnlinePayload('current');
+  payload.header.balanceTuning![COMMITTED_LOCOMOTION_TUNING_KEY] = 0.5;
+  payload.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
+    payload.header.balanceTuning!,
+  );
+  payload.integrity!.digest = computeReplayCanonicalDigestForArchive(payload);
+
+  const validation = validateReplayPayloadForArchive(payload);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) {
+    throw new Error(validation.errorMessage);
+  }
+  assert.equal(
+    validation.payload.header.balanceTuning?.[COMMITTED_LOCOMOTION_TUNING_KEY],
+    0.5,
+  );
+});
+
+test('accepts a current recorder tuning snapshot with nonzero ordinary boost acceleration', () => {
+  const payload = canonicalOnlinePayload('current');
+  payload.header.balanceTuning![BOOST_ACCELERATION_TUNING_KEY] = 0.18;
+  payload.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
+    payload.header.balanceTuning!,
+  );
+  payload.integrity!.digest = computeReplayCanonicalDigestForArchive(payload);
+
+  const validation = validateReplayPayloadForArchive(payload);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) {
+    throw new Error(validation.errorMessage);
+  }
+  assert.equal(
+    validation.payload.header.balanceTuning?.[BOOST_ACCELERATION_TUNING_KEY],
     0.18,
   );
 });

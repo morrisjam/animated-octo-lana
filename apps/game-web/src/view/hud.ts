@@ -2,6 +2,10 @@ import type { RenderSnapshot } from '../sim/types';
 import type { MatchTelemetrySummary } from '../sim/matchTelemetry';
 import { buildTrainingFrameDataModel } from './trainingFrameData';
 import type { InputHistoryView } from './inputHistory';
+import {
+  ACTION_READABILITY_DEFINITIONS,
+  resolvePlayerActivityReadability,
+} from './actionReadability';
 
 interface HudElements {
   root: HTMLDivElement;
@@ -16,6 +20,9 @@ interface HudElements {
   p1InputHistory: HTMLDivElement;
   p2InputHistory: HTMLDivElement;
   matchTelemetry: HTMLDivElement;
+  actionLegend: HTMLDivElement;
+  actionLiveP1: HTMLSpanElement;
+  actionLiveP2: HTMLSpanElement;
   analysisToggle: HTMLButtonElement;
   voiceSubtitle: HTMLDivElement;
 }
@@ -121,6 +128,28 @@ export function createHud(): HudController {
   matchTelemetry.hidden = true;
   root.appendChild(matchTelemetry);
 
+  const actionLegend = document.createElement('div');
+  actionLegend.className = 'action-readability-panel';
+  actionLegend.setAttribute('aria-label', 'Action halo key and live fighter actions');
+  actionLegend.hidden = true;
+  actionLegend.innerHTML = `
+    <div class="action-readability-title">Action halo key</div>
+    <div class="action-readability-live">
+      <span class="action-readability-chip p1"></span>
+      <span class="action-readability-chip p2"></span>
+    </div>
+    <div class="action-readability-key">
+      ${ACTION_READABILITY_DEFINITIONS.map((definition) => `
+        <span class="action-readability-key-item" data-action="${definition.id}" style="--action-color:${definition.color}">
+          <span class="action-readability-swatch" aria-hidden="true"></span><span>${definition.label}</span>
+        </span>
+      `).join('')}
+    </div>
+  `;
+  const actionLiveP1 = actionLegend.querySelector<HTMLSpanElement>('.action-readability-chip.p1')!;
+  const actionLiveP2 = actionLegend.querySelector<HTMLSpanElement>('.action-readability-chip.p2')!;
+  root.appendChild(actionLegend);
+
   const analysisToggle = document.createElement('button');
   analysisToggle.type = 'button';
   analysisToggle.className = 'analysis-hud-toggle';
@@ -144,6 +173,9 @@ export function createHud(): HudController {
     p1InputHistory,
     p2InputHistory,
     matchTelemetry,
+    actionLegend,
+    actionLiveP1,
+    actionLiveP2,
     analysisToggle,
     voiceSubtitle,
   };
@@ -165,6 +197,7 @@ export function createHud(): HudController {
     elements.p1InputHistory.hidden = !inputHistoryRequested || analysisHudHidden;
     elements.p2InputHistory.hidden = !inputHistoryRequested || analysisHudHidden;
     elements.matchTelemetry.hidden = !matchTelemetryRequested || analysisHudHidden;
+    elements.actionLegend.hidden = !analysisRequested || analysisHudHidden;
   }
 
   elements.analysisToggle.addEventListener('click', () => {
@@ -323,6 +356,15 @@ export function createHud(): HudController {
     update(snapshot: RenderSnapshot): void {
       const p1 = snapshot.players.P1;
       const p2 = snapshot.players.P2;
+      const p1Activity = resolvePlayerActivityReadability(p1);
+      const p2Activity = resolvePlayerActivityReadability(p2);
+
+      elements.actionLiveP1.textContent = `P1 ${p1Activity.label}`;
+      elements.actionLiveP1.dataset.action = p1Activity.id;
+      elements.actionLiveP1.style.setProperty('--action-color', p1Activity.color);
+      elements.actionLiveP2.textContent = `P2 ${p2Activity.label}`;
+      elements.actionLiveP2.dataset.action = p2Activity.id;
+      elements.actionLiveP2.style.setProperty('--action-color', p2Activity.color);
 
       elements.p1Fuel.style.width = `${toFuelPercent(p1.fuel, p1.maxFuel)}%`;
       elements.p2Fuel.style.width = `${toFuelPercent(p2.fuel, p2.maxFuel)}%`;

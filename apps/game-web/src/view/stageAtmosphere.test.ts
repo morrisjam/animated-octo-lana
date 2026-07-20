@@ -15,6 +15,8 @@ describe('stage atmosphere registry', () => {
     expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_depths_v1')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_depths_v2')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_rim_v3')).toBe(true);
+    expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_funnel_v6_candidate')).toBe(true);
+    expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_rift_v7_candidate')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes(ONLINE_ALPHA_STAGE_ATMOSPHERE_ID)).toBe(true);
     expect(resolveStageAtmosphere(undefined).id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
     expect(resolveStageAtmosphere('').id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
@@ -64,9 +66,9 @@ describe('stage atmosphere registry', () => {
     expect(resolveStageAtmosphere('wormhole_depths_v1').tokens.arenaMouthOpacity).toBe(0);
     const previousPreset = resolveStageAtmosphere('wormhole_rim_v3');
     const alphaPreset = resolveStageAtmosphere(ONLINE_ALPHA_STAGE_ATMOSPHERE_ID);
-    expect(alphaPreset.id).toBe('wormhole_authored_v4');
+    expect(alphaPreset.id).toBe('wormhole_authored_v5');
     expect(previousPreset.tokens.backgroundModelId).toBeNull();
-    expect(alphaPreset.tokens.backgroundModelId).toBe('wormhole_arena_lip_v1');
+    expect(alphaPreset.tokens.backgroundModelId).toBe('wormhole_arena_depth_v2');
     expect(alphaPreset.tokens.backgroundModelOpacity).toBeGreaterThan(0);
     expect(alphaPreset.tokens.arenaMouthOpacity).toBeGreaterThan(0);
     expect(alphaPreset.tokens.cameraPitchDegrees).toBe(previousPreset.tokens.cameraPitchDegrees);
@@ -79,5 +81,18 @@ describe('stage atmosphere registry', () => {
     expect(alphaPreset.tokens.backgroundEffectFarFade).toBeGreaterThan(
       resolveStageAtmosphere('wormhole_depths_v1').tokens.backgroundEffectFarFade,
     );
+    const funnelCandidate = resolveStageAtmosphere('wormhole_funnel_v6_candidate');
+    expect(funnelCandidate.tokens.backgroundModelId).toBe('wormhole_arena_funnel_v3');
+    expect(funnelCandidate.tokens.backgroundEffectCoreOpacity).toBe(0);
+    expect(funnelCandidate.tokens.ringOpacity).toBe(0);
+    expect(funnelCandidate.tokens.cameraPitchDegrees).toBe(MAX_STAGE_CAMERA_PITCH_DEGREES);
+    expect(funnelCandidate.tokens.cameraPitchDegrees).toBeGreaterThan(alphaPreset.tokens.cameraPitchDegrees);
+    const riftCandidate = resolveStageAtmosphere('wormhole_rift_v7_candidate');
+    expect(riftCandidate.tokens.backgroundModelId).toBe('wormhole_arena_rift_v4');
+    expect(riftCandidate.tokens.backgroundEffectCoreOpacity).toBe(0);
+    expect(riftCandidate.tokens.ringOpacity).toBe(0);
+    expect(riftCandidate.tokens.cameraPitchDegrees).toBe(24);
+    expect(riftCandidate.tokens.cameraPitchDegrees).toBeLessThan(funnelCandidate.tokens.cameraPitchDegrees);
+    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(28);
   });
 });

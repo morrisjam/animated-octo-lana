@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { describe, expect, test } from 'vitest';
+import { inspectGlb } from './glbInspection';
 import { parseStaticStageGlb } from './staticGlbRuntime';
 
-function createStaticGlb({ externalBuffer = false } = {}): Uint8Array {
+function createStaticGlb({ externalBuffer = false, morphTargets = false } = {}): Uint8Array {
   const positions = new Float32Array([
     -1, -1, 0,
     1, -1, 0,
@@ -41,7 +42,12 @@ function createStaticGlb({ externalBuffer = false } = {}): Uint8Array {
       emissiveFactor: [0.1, 0.2, 0.3],
       pbrMetallicRoughness: { baseColorFactor: [0.2, 0.4, 0.6, 0.5] },
     }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1 }, indices: 2, material: 0 }] }],
+    meshes: [{ primitives: [{
+      attributes: { POSITION: 0, NORMAL: 1 },
+      indices: 2,
+      material: 0,
+      ...(morphTargets ? { targets: [{ POSITION: 0 }] } : {}),
+    }] }],
   };
   const encodedJson = new TextEncoder().encode(JSON.stringify(document));
   const paddedJsonLength = Math.ceil(encodedJson.length / 4) * 4;
@@ -88,5 +94,12 @@ describe('static GLB runtime', () => {
       .toThrow('does not match other_stage');
     expect(() => parseStaticStageGlb(createStaticGlb({ externalBuffer: true })))
       .toThrow('exactly one embedded buffer');
+  });
+
+  test('rejects runtime-only features that pass structural inspection', () => {
+    const glb = createStaticGlb({ morphTargets: true });
+    expect(inspectGlb(glb).meshCount).toBe(1);
+    expect(() => parseStaticStageGlb(glb, { expectedAssetId: 'test_stage' }))
+      .toThrow('cannot contain morph targets');
   });
 });

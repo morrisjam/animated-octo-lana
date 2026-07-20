@@ -14,19 +14,27 @@ describe('local character balance configuration', () => {
     const config = createCharacterBalanceConfig('vanguard');
     config.moves.launch.startupFrames += 4;
     config.moves.special.timing.recoveryFrames += 3;
+    config.ai.neutralApproachMultiplier = 0.75;
 
     expect(CHARACTER_BY_ID.vanguard.moves.launch.startupFrames).toBe(originalStartup);
     expect(config.moves.launch.startupFrames).toBe(originalStartup + 4);
 
     const clone = cloneCharacterBalanceConfig(config);
     clone.moves.launch.startupFrames += 2;
+    clone.ai.neutralApproachMultiplier = 0.5;
     expect(config.moves.launch.startupFrames).toBe(originalStartup + 4);
+    expect(config.ai.neutralApproachMultiplier).toBe(0.75);
   });
 
   test('sanitises numeric edits while preserving package behavior identity', () => {
     const config = createCharacterBalanceConfig('duelist');
     const edited = {
       ...config,
+      ai: {
+        neutralApproachMultiplier: 99,
+        neutralBoostDistanceOffset: -5,
+        postControlSpacingFrames: 999,
+      },
       stats: { ...config.stats, moveAccelMultiplier: 99 },
       moves: {
         ...config.moves,
@@ -48,6 +56,9 @@ describe('local character balance configuration', () => {
     const sanitised = sanitiseCharacterBalanceConfig('duelist', edited);
 
     expect(sanitised.stats.moveAccelMultiplier).toBe(5);
+    expect(sanitised.ai.neutralApproachMultiplier).toBe(2);
+    expect(sanitised.ai.neutralBoostDistanceOffset).toBe(0);
+    expect(sanitised.ai.postControlSpacingFrames).toBe(120);
     expect(sanitised.moves.dunk.startupFrames).toBe(0);
     expect(sanitised.moves.dunk.hitRange).toBe(100);
     expect(sanitised.moves.dunk.startupPursuitSpeed).toBe(500);

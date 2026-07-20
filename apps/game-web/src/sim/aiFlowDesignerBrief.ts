@@ -2,6 +2,8 @@ import {
   BALANCE_LAB_LOOP_STAGE_IDS,
   type BalanceLabLoopStageAggregates,
   type BalanceLabLoopStageId,
+  type BalanceLabLoopStageIssueReasonAggregate,
+  type BalanceLabLoopStageReasonId,
 } from './balanceLab';
 
 export const AI_FLOW_DESIGNER_BRIEF_SCHEMA_VERSION = 'gw.ai-flow-designer-brief.v2';
@@ -62,6 +64,7 @@ export interface AiFlowDesignerStageSummary {
   blockedRatio: number;
   issueRatio: number;
   priorityIndex: number;
+  issueReasons: readonly BalanceLabLoopStageIssueReasonAggregate[];
 }
 
 export interface AiFlowDesignerPriority extends AiFlowDesignerStageSummary {
@@ -157,6 +160,10 @@ export function buildAiFlowDesignerBrief(
     let watchRounds = 0;
     let observedRounds = 0;
     let waitingRounds = 0;
+    const issueReasonCounts = new Map<BalanceLabLoopStageReasonId, {
+      watchRounds: number;
+      blockedRounds: number;
+    }>();
     const flaggedPairings: string[] = [];
     const blockedPairings: string[] = [];
     const representativeInputs: AiFlowDesignerBriefRepresentativeInput[] = [];
@@ -169,6 +176,13 @@ export function buildAiFlowDesignerBrief(
       watchRounds += stage.watchRounds;
       observedRounds += stage.observedRounds;
       waitingRounds += stage.waitingRounds;
+      for (const reason of stage.issueReasons ?? []) {
+        const counts = issueReasonCounts.get(reason.reasonId)
+          ?? { watchRounds: 0, blockedRounds: 0 };
+        counts.watchRounds += reason.watchRounds;
+        counts.blockedRounds += reason.blockedRounds;
+        issueReasonCounts.set(reason.reasonId, counts);
+      }
       if (stage.blockedRounds + stage.watchRounds > 0) {
         flaggedPairings.push(pairing);
       }
@@ -191,6 +205,21 @@ export function buildAiFlowDesignerBrief(
     }
 
     const reachedRounds = blockedRounds + watchRounds + observedRounds;
+    const issueReasons = [...issueReasonCounts.entries()]
+      .map(([reasonId, counts]): BalanceLabLoopStageIssueReasonAggregate => {
+        const issueRounds = counts.watchRounds + counts.blockedRounds;
+        return {
+          reasonId,
+          ...counts,
+          rounds: issueRounds,
+          issueRatio: roundRatio(issueRounds / Math.max(1, reachedRounds)),
+        };
+      })
+      .sort((left, right) => (
+        right.blockedRounds - left.blockedRounds
+        || right.rounds - left.rounds
+        || left.reasonId.localeCompare(right.reasonId)
+      ));
     const stageSummary: AiFlowDesignerStageSummary = {
       stageId,
       label: LOOP_STAGE_LABELS[stageId],
@@ -204,6 +233,7 @@ export function buildAiFlowDesignerBrief(
       priorityIndex: roundRatio(
         (blockedRounds * 2 + watchRounds) / Math.max(1, reachedRounds * 2),
       ),
+      issueReasons,
     };
     stages[stageId] = stageSummary;
     if (blockedRounds + watchRounds === 0) {

@@ -1,7 +1,16 @@
 import type { CharacterId } from '../../sim/characters';
 import type { PlayerId, Vec2 } from '../../sim/types';
 
-export type CombatVfxEventType = 'boost' | 'launch' | 'clash' | 'parry' | 'special' | 'break' | 'projectile' | 'dunk';
+export type CombatVfxEventType =
+  | 'boost'
+  | 'super_boost'
+  | 'launch'
+  | 'clash'
+  | 'parry'
+  | 'special'
+  | 'break'
+  | 'projectile'
+  | 'dunk';
 
 export interface CombatVfxEvent {
   type: CombatVfxEventType;

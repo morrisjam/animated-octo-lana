@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createInitialState, step } from '../sim/sim';
 import {
   installLocalRankedRootSmokeBridge,
+  assertLocalRankedReleaseIdentity,
+  assertLocalRankedTransportSelection,
   LOCAL_RANKED_ROOT_SMOKE_SCHEMA_VERSION,
   resolveLocalRankedRootSmokeConfig,
   type LocalRankedRootSmokeBridge,
@@ -9,6 +11,79 @@ import {
 import { LocalRankedSmokeInputDriver } from './localRankedSmokeInputDriver';
 
 describe('local ranked root smoke gating', () => {
+  it('binds the observed build, ruleset, and balance profile to the expected release', () => {
+    const profile = {
+      environment: 'production',
+      buildId: 'a'.repeat(40),
+      rulesetVersion: 'prototype-2026.02',
+      balanceProfileId: 'default',
+      onlineEnabled: true,
+      rankedEnabled: true,
+      onlineMatchRuntimeEnabled: true,
+      debugToolsEnabled: false,
+    };
+    const expectation = {
+      buildId: 'a'.repeat(40),
+      rulesetVersion: 'prototype-2026.02',
+      balanceProfileId: 'default',
+    };
+    expect(() => assertLocalRankedReleaseIdentity(profile, expectation)).not.toThrow();
+    expect(() => assertLocalRankedReleaseIdentity(profile, {
+      ...expectation,
+      balanceProfileId: 'mobility_focus_v1',
+    })).toThrow(/balance profile identity mismatch/);
+    expect(() => assertLocalRankedReleaseIdentity(profile, {
+      ...expectation,
+      buildId: '',
+    })).toThrow(/build identity is required/);
+  });
+
+  it('allows automatic ICE to select direct or relay while keeping forced relay strict', () => {
+    expect(() => assertLocalRankedTransportSelection({
+      connectionPath: 'direct',
+      iceTransportPolicy: 'all',
+      relayAvailable: true,
+      forceRelay: false,
+    })).not.toThrow();
+    expect(() => assertLocalRankedTransportSelection({
+      connectionPath: 'relay',
+      iceTransportPolicy: 'all',
+      relayAvailable: true,
+      forceRelay: false,
+    })).not.toThrow();
+    expect(() => assertLocalRankedTransportSelection({
+      connectionPath: 'relay',
+      iceTransportPolicy: 'relay',
+      relayAvailable: true,
+      forceRelay: true,
+    })).not.toThrow();
+
+    expect(() => assertLocalRankedTransportSelection({
+      connectionPath: 'direct',
+      iceTransportPolicy: 'relay',
+      relayAvailable: true,
+      forceRelay: true,
+    })).toThrow(/expected forced relay/);
+    expect(() => assertLocalRankedTransportSelection({
+      connectionPath: 'relay',
+      iceTransportPolicy: 'relay',
+      relayAvailable: true,
+      forceRelay: false,
+    })).toThrow(/expected all/);
+    expect(() => assertLocalRankedTransportSelection({
+      connectionPath: 'unknown',
+      iceTransportPolicy: 'all',
+      relayAvailable: true,
+      forceRelay: false,
+    })).toThrow(/invalid connection path/);
+    expect(() => assertLocalRankedTransportSelection({
+      connectionPath: 'direct',
+      iceTransportPolicy: 'all',
+      relayAvailable: false,
+      forceRelay: false,
+    })).toThrow(/relay fallback/);
+  });
+
   it('stays unavailable unless both the build flag and root query opt in', () => {
     expect(resolveLocalRankedRootSmokeConfig({
       buildEnabled: true,

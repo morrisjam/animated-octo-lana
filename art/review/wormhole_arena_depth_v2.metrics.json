@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "gw.blender-stage-source-metrics.v1",
+  "assetId": "wormhole_arena_depth_v2",
+  "blenderVersion": "2.92.0",
+  "sourceScript": "art/source/blender/wormhole_arena_depth_v2.py",
+  "sourceBlend": "art/source/blender/wormhole_arena_depth_v2.blend",
+  "runtimeGlb": "apps/game-web/public/assets/stages/wormhole/wormhole-arena-depth-v2.glb",
+  "reviewPreview": "art/review/wormhole_arena_depth_v2.png",
+  "coordinateContract": {
+    "blenderPlane": "XZ",
+    "blenderDepth": "+Y",
+    "runtimePlane": "XY",
+    "runtimeDepth": "-Z",
+    "arenaRadius": 72
+  },
+  "metrics": {
+    "objects": 11,
+    "materials": 4,
+    "sourceVertices": 3140,
+    "sourceTriangles": 6140,
+    "vertices": 3140,
+    "triangles": 6140,
+    "glbBytes": 106412,
+    "glbSha256": "87d903b989b8ed832774430ef96f5c33cfc5328c9564d55d899457c1729902ed"
+  },
+  "budgets": {
+    "vertices": 12000,
+    "triangles": 10000,
+    "glbBytes": 327680
+  }
+}

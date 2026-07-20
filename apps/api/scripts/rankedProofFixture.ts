@@ -1,6 +1,14 @@
 import { createAiController, tickAiController } from '../../game-web/src/sim/ai';
 import { computeStateChecksum } from '../../game-web/src/sim/checksum';
 import {
+  deriveRankedInputCommitmentChainDigest,
+  digestRankedInputCommitmentChunk,
+  extractRankedPlayerInput,
+  RANKED_INPUT_COMMITMENT_MAX_FRAMES,
+  RANKED_INPUT_COMMITMENT_SCHEMA_VERSION,
+  type RankedInputCommitmentSubmission,
+} from '../../game-web/src/sim/rankedInputCommitment';
+import {
   RankedMatchProofRecorder,
   RANKED_FIXED_DT,
   RANKED_MAX_FRAMES_PER_ROUND,
@@ -9,6 +17,7 @@ import {
 } from '../../game-web/src/sim/rankedProof';
 import { createInitialState, step } from '../../game-web/src/sim/sim';
 import type { PlayerFrameInput } from '../../game-web/src/sim/types';
+import type { PlayerId } from '../../game-web/src/sim/types';
 
 export interface RankedProofFixtureOptions {
   sessionId: string;
@@ -73,4 +82,47 @@ export function createRankedProofFixture(options: RankedProofFixtureOptions): Ra
   }
 
   return recorder.buildProof('p1_win');
+}
+
+export async function createRankedInputCommitmentFixture(
+  proof: RankedMatchProof,
+  accountId: string,
+  side: PlayerId,
+): Promise<RankedInputCommitmentSubmission[]> {
+  const commitments: RankedInputCommitmentSubmission[] = [];
+  let sequence = 0;
+  let previousChainDigest: string | null = null;
+
+  for (const round of proof.rounds) {
+    for (let startFrame = 0; startFrame < round.inputs.length; startFrame += RANKED_INPUT_COMMITMENT_MAX_FRAMES) {
+      const endFrame = Math.min(
+        round.inputs.length - 1,
+        startFrame + RANKED_INPUT_COMMITMENT_MAX_FRAMES - 1,
+      );
+      const identity = {
+        sessionId: proof.sessionId,
+        accountId,
+        side,
+        sequence,
+        epoch: round.epoch,
+        startFrame,
+        roundFinal: endFrame === round.inputs.length - 1,
+      } as const;
+      const compactInputs = round.inputs
+        .slice(startFrame, endFrame + 1)
+        .map((input) => extractRankedPlayerInput(input, side));
+      const submission: RankedInputCommitmentSubmission = {
+        ...identity,
+        schemaVersion: RANKED_INPUT_COMMITMENT_SCHEMA_VERSION,
+        endFrame,
+        chunkDigest: await digestRankedInputCommitmentChunk(identity, compactInputs),
+        previousChainDigest,
+      };
+      commitments.push(submission);
+      previousChainDigest = await deriveRankedInputCommitmentChainDigest(submission);
+      sequence += 1;
+    }
+  }
+
+  return commitments;
 }

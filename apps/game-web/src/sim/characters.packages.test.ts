@@ -58,13 +58,18 @@ function scriptedInputForFrame(frame: number): FrameInput {
 describe('character package integration', () => {
   test('loads validated packaged character definitions into runtime registry', () => {
     expect(CHARACTER_IDS.slice(0, 4)).toEqual(['vanguard', 'duelist', 'ace', 'warden']);
-    expect(CHARACTER_BY_ID.vanguard.package?.version).toBe('0.3.3');
-    expect(CHARACTER_BY_ID.duelist.package?.version).toBe('0.3.2');
+    expect(CHARACTER_BY_ID.vanguard.package?.version).toBe('0.3.5');
+    expect(CHARACTER_BY_ID.duelist.package?.version).toBe('0.3.4');
+    expect(CHARACTER_BY_ID.vanguard.ai).toEqual({
+      neutralApproachMultiplier: 1,
+      neutralBoostDistanceOffset: 0,
+      postControlSpacingFrames: 0,
+    });
     expect(CHARACTER_BY_ID.vanguard.moves.dunk.startupPursuitSpeed).toBe(70);
     expect(CHARACTER_BY_ID.vanguard.moves.special.behaviorId).toBe('special.block_guard.v1');
     expect(CHARACTER_BY_ID.duelist.moves.special.behaviorId).toBe('special.movement_dash.v1');
     expect(CHARACTER_BY_ID.vanguard_pkg).toBeUndefined();
-    expect(CHARACTER_PACKAGE_VERSION_BY_ID.vanguard).toBe('0.3.3');
+    expect(CHARACTER_PACKAGE_VERSION_BY_ID.vanguard).toBe('0.3.5');
     expect(CHARACTER_REGISTRY_FINGERPRINT).toMatch(/^gw\.character-registry\.v1:[0-9a-f]{8}$/);
   });
 
@@ -111,6 +116,12 @@ describe('character package integration', () => {
       expect(character.stats.fuelCapacityMultiplier).toBeLessThanOrEqual(2.5);
       expect(character.stats.moveAccelMultiplier).toBeGreaterThanOrEqual(0.5);
       expect(character.stats.moveAccelMultiplier).toBeLessThanOrEqual(2.5);
+      expect(character.ai.neutralApproachMultiplier).toBeGreaterThanOrEqual(0);
+      expect(character.ai.neutralApproachMultiplier).toBeLessThanOrEqual(2);
+      expect(character.ai.neutralBoostDistanceOffset).toBeGreaterThanOrEqual(0);
+      expect(character.ai.neutralBoostDistanceOffset).toBeLessThanOrEqual(60);
+      expect(character.ai.postControlSpacingFrames).toBeGreaterThanOrEqual(0);
+      expect(character.ai.postControlSpacingFrames).toBeLessThanOrEqual(120);
       expect(character.moves.launch.startupFrames).toBeGreaterThanOrEqual(0);
       expect(character.moves.launch.startupFrames).toBeLessThanOrEqual(60);
       expect(character.moves.launch.activeFrames).toBeGreaterThanOrEqual(1);

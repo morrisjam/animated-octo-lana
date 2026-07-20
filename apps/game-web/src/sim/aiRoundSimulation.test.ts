@@ -160,6 +160,15 @@ describe('AI round simulation', () => {
       tacticalRepositionFrames: 0,
       postControlCounterstepWindows: 0,
       postControlCounterstepFrames: 0,
+      postControlChaseLockWindows: 0,
+      postControlChaseLockFrames: 0,
+      postControlBoostSuppressionFrames: 0,
+      postControlDashSuppressionFrames: 0,
+      postControlChaseLockConsumptions: 0,
+      postControlRepeatDashWindows: 0,
+      postControlRepeatDashWeightFrames: 0,
+      postControlRepeatDashConsumptions: 0,
+      postControlRepeatDashSelections: 0,
       combatBoostLockFrames: 0,
       combatBoostDelayFrames: 0,
       combatBoostHeldInputFrames: 0,
@@ -186,7 +195,7 @@ describe('AI round simulation', () => {
       0,
     );
 
-    expect(result.decisionFlow.schemaVersion).toBe('gw.ai-round-decision-flow.v3');
+    expect(result.decisionFlow.schemaVersion).toBe('gw.ai-round-decision-flow.v5');
     expect(selections).toBeGreaterThan(0);
     for (const player of players) {
       expect(player.tacticalRepositionSelections).toBeLessThanOrEqual(
@@ -217,6 +226,101 @@ describe('AI round simulation', () => {
       expect(player.postControlCounterstepFrames).toBeGreaterThanOrEqual(
         player.postControlCounterstepWindows,
       );
+    }
+  });
+
+  test('summarises post-control chase lock exposure without changing the default path', () => {
+    const candidate = simulateAiRound({
+      ...BASE_OPTIONS,
+      setSeed: 44_521_056,
+      roundIndex: 1,
+      maxFrames: 5_400,
+      behaviorTuning: {
+        ...createDefaultAiBehaviorTuning(),
+        postControlChaseLockFrames: 18,
+      },
+    });
+    const baseline = simulateAiRound({
+      ...BASE_OPTIONS,
+      setSeed: 44_521_056,
+      roundIndex: 1,
+      maxFrames: 5_400,
+    });
+    const candidatePlayers = Object.values(candidate.decisionFlow.players);
+
+    expect(candidatePlayers.some((player) => player.postControlChaseLockWindows > 0)).toBe(true);
+    expect(candidatePlayers.some((player) => player.postControlChaseLockFrames > 0)).toBe(true);
+    expect(candidatePlayers.some((player) => (
+      player.postControlBoostSuppressionFrames > 0
+      || player.postControlDashSuppressionFrames > 0
+    ))).toBe(true);
+    expect(candidatePlayers.some((player) => player.postControlChaseLockConsumptions > 0))
+      .toBe(true);
+    for (const player of candidatePlayers) {
+      expect(player.postControlChaseLockFrames).toBeGreaterThanOrEqual(
+        player.postControlChaseLockWindows,
+      );
+      expect(player.postControlChaseLockConsumptions).toBeLessThanOrEqual(
+        player.postControlChaseLockWindows,
+      );
+    }
+    for (const player of Object.values(baseline.decisionFlow.players)) {
+      expect(player.postControlChaseLockWindows).toBe(0);
+      expect(player.postControlChaseLockFrames).toBe(0);
+      expect(player.postControlBoostSuppressionFrames).toBe(0);
+      expect(player.postControlDashSuppressionFrames).toBe(0);
+      expect(player.postControlChaseLockConsumptions).toBe(0);
+    }
+  });
+
+  test('summarises post-control repeat-dash decision flow deterministically', () => {
+    const behaviorTuning = {
+      ...createDefaultAiBehaviorTuning(),
+      errorRateScale: 0,
+      postControlRepeatDashWeightScale: 0.5,
+    };
+    const options = {
+      ...BASE_OPTIONS,
+      maxFrames: 5_400,
+      behaviorTuning,
+    };
+    const first = simulateAiRound(options);
+    const second = simulateAiRound(options);
+    const players = Object.values(first.decisionFlow.players);
+
+    expect(second.decisionFlow).toEqual(first.decisionFlow);
+    expect(players.some((player) => player.postControlRepeatDashWindows > 0)).toBe(true);
+    expect(players.some((player) => player.postControlRepeatDashWeightFrames > 0)).toBe(true);
+    expect(players.some((player) => player.postControlRepeatDashConsumptions > 0)).toBe(true);
+    expect(players.some((player) => player.postControlRepeatDashSelections > 0)).toBe(true);
+    for (const player of players) {
+      expect(player.postControlRepeatDashConsumptions).toBeLessThanOrEqual(
+        player.postControlRepeatDashWindows,
+      );
+      expect(player.postControlRepeatDashSelections).toBeLessThanOrEqual(
+        player.postControlRepeatDashConsumptions,
+      );
+      expect(player.postControlRepeatDashSelections).toBeLessThanOrEqual(
+        player.postControlRepeatDashWeightFrames,
+      );
+      if (player.postControlRepeatDashWindows === 0) {
+        expect(player.postControlRepeatDashWeightFrames).toBe(0);
+      }
+    }
+
+    const baseline = simulateAiRound({
+      ...BASE_OPTIONS,
+      maxFrames: 5_400,
+      behaviorTuning: {
+        ...createDefaultAiBehaviorTuning(),
+        errorRateScale: 0,
+      },
+    });
+    for (const player of Object.values(baseline.decisionFlow.players)) {
+      expect(player.postControlRepeatDashWindows).toBe(0);
+      expect(player.postControlRepeatDashWeightFrames).toBe(0);
+      expect(player.postControlRepeatDashConsumptions).toBe(0);
+      expect(player.postControlRepeatDashSelections).toBe(0);
     }
   });
 

@@ -28,6 +28,11 @@ export interface SelectedBalanceReplaySample extends BalanceReplaySample {
   frameIndex: number;
 }
 
+export interface BalanceReplayComparisonDescription {
+  mode: 'baseline_only' | 'repeatability' | 'single_change';
+  label: string;
+}
+
 function cloneVerifiedReplay(payloadRaw: unknown, label: string): ReplayPayload {
   const validation = validateReplayPayload(payloadRaw);
   if (validation.ok === false) {
@@ -72,7 +77,8 @@ function stableIdentity(payload: ReplayPayload): string {
   const localAi = payload.header.localAi;
   return JSON.stringify({
     payloadVersion: payload.header.payloadVersion,
-    rulesetVersion: payload.header.rulesetVersion,
+    // Local Balance Lab drafts append +custom_local to the same base ruleset.
+    rulesetVersion: payload.header.rulesetVersion.split('+', 1)[0],
     simBuildHash: payload.header.simBuildHash,
     seed: payload.header.seed ?? null,
     loadout: payload.header.loadout ?? null,
@@ -105,6 +111,49 @@ function stableIdentity(payload: ReplayPayload): string {
 
 function cloneRuleChanges(ruleChanges: readonly BalanceLabRuleChange[]): BalanceLabRuleChange[] {
   return ruleChanges.map((change) => ({ ...change }));
+}
+
+function formatRuleName(path: string): string {
+  const leaf = path.split('.').at(-1) ?? path;
+  const words = leaf
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  return words.length > 0
+    ? words.charAt(0).toUpperCase() + words.slice(1)
+    : 'Rule';
+}
+
+function formatRuleValue(value: number): string {
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+  return value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+export function describeBalanceReplayComparison(
+  comparison: Pick<BalanceReplayComparison, 'candidate' | 'ruleChanges'>,
+): BalanceReplayComparisonDescription {
+  if (!comparison.candidate) {
+    return {
+      mode: 'baseline_only',
+      label: 'Baseline captured; run the matched candidate to unlock A/B review.',
+    };
+  }
+  const change = comparison.ruleChanges[0];
+  if (!change) {
+    return {
+      mode: 'repeatability',
+      label: 'Repeatability control: no effective rule change.',
+    };
+  }
+  const scope = change.scope === 'character' && change.characterId
+    ? `${change.characterId.charAt(0).toUpperCase()}${change.characterId.slice(1)} `
+    : '';
+  return {
+    mode: 'single_change',
+    label: `${scope}${formatRuleName(change.path)}: ${formatRuleValue(change.baselineValue)} -> ${formatRuleValue(change.candidateValue)}`,
+  };
 }
 
 export function createBalanceReplayComparison(
@@ -140,7 +189,7 @@ export function attachBalanceReplayCandidate(
     throw new Error('Candidate replay must use the baseline matched-sample frame count.');
   }
   if (stableIdentity(candidate) !== stableIdentity(comparison.baseline.payload)) {
-    throw new Error('Candidate replay must preserve the baseline build, seed, loadout, scenario, and round identity.');
+    throw new Error('Candidate replay must preserve the baseline base ruleset, build, seed, loadout, scenario, and round identity.');
   }
   return {
     schemaVersion: BALANCE_REPLAY_COMPARISON_SCHEMA_VERSION,

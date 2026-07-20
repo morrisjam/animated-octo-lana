@@ -1,4 +1,5 @@
 import type {
+  CharacterAiProfile,
   CharacterAudioProfile,
   CharacterSpecialMoveDefinition,
   CharacterStats,
@@ -27,6 +28,7 @@ export interface CharacterPackageV1 {
   mechanicsTag: string;
   metadata: CharacterPackageMetadata;
   stats: CharacterStats;
+  ai: CharacterAiProfile;
   visuals: CharacterVisualProfile;
   audio: CharacterAudioProfile;
   moves: MoveFrameData;
@@ -275,6 +277,46 @@ function validateStats(
     specialFuelCostMultiplier,
     superFuelMultiplier,
     dunkRecoveryFuelMultiplier,
+  };
+}
+
+function validateAi(
+  root: Record<string, unknown>,
+  issues: CharacterPackageValidationIssue[],
+): CharacterAiProfile | null {
+  const neutralApproachMultiplier = readNumber(
+    root,
+    'neutralApproachMultiplier',
+    'ai.neutralApproachMultiplier',
+    issues,
+    { min: 0, max: 2 },
+  );
+  const neutralBoostDistanceOffset = readNumber(
+    root,
+    'neutralBoostDistanceOffset',
+    'ai.neutralBoostDistanceOffset',
+    issues,
+    { min: 0, max: 60 },
+  );
+  const postControlSpacingFrames = readOptionalNumber(
+    root,
+    'postControlSpacingFrames',
+    'ai.postControlSpacingFrames',
+    issues,
+    0,
+    { min: 0, max: 120 },
+  );
+  if (
+    neutralApproachMultiplier === null
+    || neutralBoostDistanceOffset === null
+    || postControlSpacingFrames === null
+  ) {
+    return null;
+  }
+  return {
+    neutralApproachMultiplier,
+    neutralBoostDistanceOffset,
+    postControlSpacingFrames: Math.round(postControlSpacingFrames),
   };
 }
 
@@ -625,6 +667,7 @@ export function parseCharacterPackage(input: unknown): CharacterPackageV1 {
 
   const metadataRaw = readObject(input, 'metadata', 'metadata', issues);
   const statsRaw = readObject(input, 'stats', 'stats', issues);
+  const aiRaw = readOptionalObject(input, 'ai', 'ai', issues);
   const visualsRaw = readObject(input, 'visuals', 'visuals', issues);
   const audioRaw = readObject(input, 'audio', 'audio', issues);
   const movesRaw = readObject(input, 'moves', 'moves', issues);
@@ -632,6 +675,13 @@ export function parseCharacterPackage(input: unknown): CharacterPackageV1 {
 
   const metadata = metadataRaw ? validateMetadata(metadataRaw, issues) : null;
   const stats = statsRaw ? validateStats(statsRaw, issues) : null;
+  const ai = aiRaw
+    ? validateAi(aiRaw, issues)
+    : {
+      neutralApproachMultiplier: 1,
+      neutralBoostDistanceOffset: 0,
+      postControlSpacingFrames: 0,
+    };
   const visuals = visualsRaw ? validateVisuals(visualsRaw, issues) : null;
   const audio = audioRaw ? validateAudio(audioRaw, issues) : null;
   const moves = movesRaw ? validateMoves(movesRaw, issues) : null;
@@ -646,6 +696,7 @@ export function parseCharacterPackage(input: unknown): CharacterPackageV1 {
     || !mechanicsTag
     || !metadata
     || !stats
+    || !ai
     || !visuals
     || !audio
     || !moves
@@ -662,6 +713,7 @@ export function parseCharacterPackage(input: unknown): CharacterPackageV1 {
     mechanicsTag,
     metadata,
     stats,
+    ai,
     visuals,
     audio,
     moves,

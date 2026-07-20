@@ -27,6 +27,7 @@ const ACTION_BREAK_LAUNCH = 1 << 6;
 const MAX_ACTION_MASK = (1 << 7) - 1;
 
 export type RankedMatchOutcome = 'p1_win' | 'p2_win';
+export type RankedCompactPlayerInput = [number, number, number];
 export type RankedCompactInputFrame = [number, number, number, number, number, number];
 
 export interface RankedMatchProofRound {
@@ -160,6 +161,10 @@ function encodeActions(input: PlayerFrameInput): number {
     | (input.breakLaunch ? ACTION_BREAK_LAUNCH : 0);
 }
 
+export function encodeRankedPlayerInput(input: PlayerFrameInput): RankedCompactPlayerInput {
+  return [input.moveX, input.moveY, encodeActions(input)];
+}
+
 function decodePlayerInput(moveX: number, moveY: number, actions: number): PlayerFrameInput {
   return {
     moveX,
@@ -175,13 +180,11 @@ function decodePlayerInput(moveX: number, moveY: number, actions: number): Playe
 }
 
 export function encodeRankedInputFrame(input: FrameInput): RankedCompactInputFrame {
+  const p1 = encodeRankedPlayerInput(input.p1);
+  const p2 = encodeRankedPlayerInput(input.p2);
   return [
-    input.p1.moveX,
-    input.p1.moveY,
-    encodeActions(input.p1),
-    input.p2.moveX,
-    input.p2.moveY,
-    encodeActions(input.p2),
+    ...p1,
+    ...p2,
   ];
 }
 

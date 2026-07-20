@@ -1,13 +1,13 @@
 import { resolveCharacterBalanceConfig } from './characterBalance';
 import { ARENA_RADIUS } from './constants';
 import { fingerprintDeterministicValue } from './fingerprint';
-import { framesToSeconds } from './moveData';
+import { framesToSeconds, secondsToFrames } from './moveData';
 import { nextRngState, rngStateToUnitFloat, sanitiseSeed } from './rng';
 import type { FrameInput, GameState, PlayerFrameInput, PlayerId, PlayerState } from './types';
 
 export type AiDifficultyId = 'rookie' | 'cadet' | 'veteran' | 'ace';
 
-export const AI_POLICY_REVISION = 'flow-v19';
+export const AI_POLICY_REVISION = 'flow-v25';
 export const AI_RECOVERY_POLICY_IDS = ['legacy', 'spacing', 'evasive'] as const;
 export type AiRecoveryPolicyId = (typeof AI_RECOVERY_POLICY_IDS)[number];
 export const DEFAULT_AI_RECOVERY_POLICY: AiRecoveryPolicyId = 'legacy';
@@ -18,12 +18,13 @@ export const AI_PURSUIT_POLICY_IDS = ['legacy', 'neutral_hold'] as const;
 export type AiPursuitPolicyId = (typeof AI_PURSUIT_POLICY_IDS)[number];
 export const DEFAULT_AI_PURSUIT_POLICY: AiPursuitPolicyId = 'legacy';
 
-export const AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v12';
+export const AI_BEHAVIOR_TUNING_SCHEMA_VERSION = 'gw.ai-behavior-tuning.v15';
 
 const LEGACY_FINISH_PURSUIT_REACH_SCALE = 0.25;
 const DEFAULT_FINISH_PURSUIT_REACH_SCALE = 0.7;
 const POST_CONTROL_COUNTERSTEP_OPPORTUNITY_FRAMES = 60;
 const POST_CONTROL_COUNTERSTEP_ACTIVE_FRAMES = 24;
+const POST_CONTROL_FIRST_CHOICE_WINDOW_FRAMES = 60;
 
 export interface AiBehaviorTuning {
   schemaVersion: typeof AI_BEHAVIOR_TUNING_SCHEMA_VERSION;
@@ -44,6 +45,8 @@ export interface AiBehaviorTuning {
   postRecoverySpacingFrames: number;
   postControlSteeringFrames: number;
   postControlCounterstepScale: number;
+  postControlChaseLockFrames: number;
+  postControlRepeatDashWeightScale: number;
   postEventRetreatChanceOffset: number;
   postRecoverySuperBoostChance: number;
   postRecoveryDefenseFrames: number;
@@ -52,6 +55,7 @@ export interface AiBehaviorTuning {
   committedLaunchGuardChance: number;
   finishPursuitReachScale: number;
   repositionWeightScale: number;
+  exchangeRepositionWeightScale: number;
   launchWeightScale: number;
   specialWeightScale: number;
   dunkWeightScale: number;
@@ -78,6 +82,8 @@ const DEFAULT_AI_BEHAVIOR_TUNING: AiBehaviorTuning = {
   postRecoverySpacingFrames: 0,
   postControlSteeringFrames: 0,
   postControlCounterstepScale: 0,
+  postControlChaseLockFrames: 0,
+  postControlRepeatDashWeightScale: 1,
   postEventRetreatChanceOffset: 0,
   postRecoverySuperBoostChance: 0,
   postRecoveryDefenseFrames: 0,
@@ -86,6 +92,7 @@ const DEFAULT_AI_BEHAVIOR_TUNING: AiBehaviorTuning = {
   committedLaunchGuardChance: 0,
   finishPursuitReachScale: DEFAULT_FINISH_PURSUIT_REACH_SCALE,
   repositionWeightScale: 0,
+  exchangeRepositionWeightScale: 0,
   launchWeightScale: 1,
   specialWeightScale: 1,
   dunkWeightScale: 1,
@@ -169,6 +176,15 @@ export function sanitiseAiBehaviorTuning(value: unknown): AiBehaviorTuning {
       0,
       1,
     ),
+    postControlChaseLockFrames: Math.round(
+      finiteTuningValue(input.postControlChaseLockFrames, 0, 0, 120),
+    ),
+    postControlRepeatDashWeightScale: finiteTuningValue(
+      input.postControlRepeatDashWeightScale,
+      1,
+      0,
+      1,
+    ),
     postEventRetreatChanceOffset: finiteTuningValue(
       input.postEventRetreatChanceOffset,
       0,
@@ -212,6 +228,12 @@ export function sanitiseAiBehaviorTuning(value: unknown): AiBehaviorTuning {
       2,
     ),
     repositionWeightScale: finiteTuningValue(input.repositionWeightScale, 0, 0, 4),
+    exchangeRepositionWeightScale: finiteTuningValue(
+      input.exchangeRepositionWeightScale,
+      0,
+      0,
+      4,
+    ),
     launchWeightScale: finiteTuningValue(input.launchWeightScale, 1, 0, 4),
     specialWeightScale: finiteTuningValue(input.specialWeightScale, 1, 0, 4),
     dunkWeightScale: finiteTuningValue(input.dunkWeightScale, 1, 0, 4),
@@ -351,7 +373,12 @@ export interface AiControllerState {
   postControlCounterstepFramesRemaining: number;
   postControlCounterstepSeparatedFrames: number;
   postControlCounterstepActionRequested: boolean;
+  postControlChaseLockPending: boolean;
+  postControlChaseLockFramesRemaining: number;
+  postControlFirstChoiceFramesRemaining: number;
+  lastPostControlFirstChoiceWasDash: boolean;
   tacticalRepositionOpportunityFramesRemaining: number;
+  exchangeRepositionOpportunityFramesRemaining: number;
   tacticalRepositionFramesRemaining: number;
   postRecoveryMode: 'retreat' | 'orbit';
   postRecoveryUseSuperBoost: boolean;
@@ -458,6 +485,17 @@ export interface AiTickResult {
   input: PlayerFrameInput;
   next: AiControllerState;
   decision: AiDecisionTrace;
+  diagnostics: {
+    postControlChaseLockPending: boolean;
+    postControlChaseLockActive: boolean;
+    postControlBoostSuppressed: boolean;
+    postControlDashSuppressed: boolean;
+    postControlChaseLockConsumed: boolean;
+    postControlRepeatDashPending: boolean;
+    postControlRepeatDashWeightApplied: boolean;
+    postControlRepeatDashConsumed: boolean;
+    postControlRepeatDashSelected: boolean;
+  };
 }
 
 interface ProjectileThreatSummary {
@@ -626,7 +664,12 @@ export function createAiController(seedOrOptions?: number | CreateAiControllerOp
     postControlCounterstepFramesRemaining: 0,
     postControlCounterstepSeparatedFrames: 0,
     postControlCounterstepActionRequested: false,
+    postControlChaseLockPending: false,
+    postControlChaseLockFramesRemaining: 0,
+    postControlFirstChoiceFramesRemaining: 0,
+    lastPostControlFirstChoiceWasDash: false,
     tacticalRepositionOpportunityFramesRemaining: 0,
+    exchangeRepositionOpportunityFramesRemaining: 0,
     tacticalRepositionFramesRemaining: 0,
     postRecoveryMode: 'orbit',
     postRecoveryUseSuperBoost: false,
@@ -657,7 +700,11 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   const opponent = state.players[toOpponent(playerId)];
   const behaviorTuning = sanitiseAiBehaviorTuning(controller.behaviorTuning);
   const profile = resolveAiDifficultyProfile(controller.profileId, behaviorTuning);
-  const playerStats = resolveCharacterBalanceConfig(player.characterId, state.characterBalanceOverrides).stats;
+  const playerBalance = resolveCharacterBalanceConfig(
+    player.characterId,
+    state.characterBalanceOverrides,
+  );
+  const playerStats = playerBalance.stats;
   const playerMoves = getCharacterMoves(state, player);
   const opponentMoves = getCharacterMoves(state, opponent);
   const specialMove = playerMoves.special;
@@ -711,6 +758,17 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   );
   let postControlCounterstepActionRequested = controller.postControlCounterstepActionRequested
     ?? false;
+  let postControlChaseLockPending = controller.postControlChaseLockPending ?? false;
+  let postControlChaseLockFramesRemaining = Math.max(
+    0,
+    Math.floor(controller.postControlChaseLockFramesRemaining ?? 0),
+  );
+  let postControlFirstChoiceFramesRemaining = Math.max(
+    0,
+    Math.floor(controller.postControlFirstChoiceFramesRemaining ?? 0) - 1,
+  );
+  let lastPostControlFirstChoiceWasDash = controller.lastPostControlFirstChoiceWasDash
+    ?? false;
   if (postControlCounterstepFramesRemaining <= 0) {
     postControlCounterstepSeparatedFrames = 0;
     postControlCounterstepActionRequested = false;
@@ -718,6 +776,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   let tacticalRepositionOpportunityFramesRemaining = Math.max(
     0,
     Math.floor(controller.tacticalRepositionOpportunityFramesRemaining ?? 0) - 1,
+  );
+  let exchangeRepositionOpportunityFramesRemaining = Math.max(
+    0,
+    Math.floor(controller.exchangeRepositionOpportunityFramesRemaining ?? 0) - 1,
   );
   let tacticalRepositionFramesRemaining = Math.max(
     0,
@@ -807,10 +869,18 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   const toCenterX = centerDistance > 0.001 ? -player.pos.x / centerDistance : 0;
   const toCenterY = centerDistance > 0.001 ? -player.pos.y / centerDistance : 0;
   const pressureDistance = profile.approachDistance;
-  const neutralApproachReduction = clamp01(1 - behaviorTuning.neutralApproachScale);
+  const neutralApproachScale = behaviorTuning.neutralApproachScale
+    * playerBalance.ai.neutralApproachMultiplier;
+  const neutralApproachReduction = clamp01(1 - neutralApproachScale);
   const neutralBoostDistance = pressureDistance
     + 5.5
-    + behaviorTuning.neutralBoostDistanceOffset;
+    + behaviorTuning.neutralBoostDistanceOffset
+    + playerBalance.ai.neutralBoostDistanceOffset;
+  const packagePostControlSpacingFrames = playerBalance.ai.postControlSpacingFrames;
+  const effectivePostControlSteeringFrames = Math.max(
+    behaviorTuning.postControlSteeringFrames,
+    packagePostControlSpacingFrames,
+  );
   const opponentNearDepleted = opponent.fuel <= opponent.maxFuel * 0.08;
   const finishOpportunity = opponent.helpless > 0 && opponent.fuel <= 0;
   const targetSpeed = Math.hypot(opponent.vel.x, opponent.vel.y);
@@ -880,6 +950,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && opponent.recovering <= 0
     && opponent.endLag <= 0
     && !opponentCommittedAttack;
+  const sharedActionReady = canChooseTacticalAction
+    && player.parry <= 0
+    && opponentHasNeutralControl
+    && opponent.parry <= 0;
   const opponentThreatRange = Math.max(10, opponentMoves.dunk.hitRange + 2.5);
   const opponentThreatening = opponentCommittedAttack && distance < opponentThreatRange;
   const opponentLaunchCommitted = opponent.launchStartup > 0 || opponent.launchActive > 0;
@@ -955,9 +1029,93 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   const boundaryRisk = lowFuelDanger
     && centerDistance > ARENA_RADIUS * 0.8
     && radialSpeed > 20;
+  if (
+    ownStrikeEndedThisFrame
+    && behaviorTuning.exchangeRepositionWeightScale > 0
+    && playerHasControl
+    && !incomingProjectileClose
+    && !finishOpportunity
+    && !boundaryRisk
+    && !state.winner
+  ) {
+    exchangeRepositionOpportunityFramesRemaining = Math.max(
+      18,
+      secondsToFrames(player.endLag) + profile.reactionDelayFrames + 12,
+    );
+  }
+  if (
+    state.winner
+    || !playerHasControl
+    || incomingProjectileClose
+    || finishOpportunity
+    || boundaryRisk
+  ) {
+    exchangeRepositionOpportunityFramesRemaining = 0;
+  }
   const committedFinishThreat = lowFuelDanger
     && (opponent.dunkStartup > 0 || opponent.dunkActive > 0)
     && distance < opponentMoves.dunk.hitRange + 4.5;
+  if (
+    controlReturnedThisFrame
+    && playerHasControl
+    && opponent.helpless <= 0
+    && opponent.recovering <= 0
+    && !finishOpportunity
+    && !boundaryRisk
+    && distance <= 24
+    && !state.winner
+  ) {
+    postControlFirstChoiceFramesRemaining = POST_CONTROL_FIRST_CHOICE_WINDOW_FRAMES;
+  }
+  const postControlFirstChoiceCancelled = !playerHasControl
+    || opponent.helpless > 0
+    || opponent.recovering > 0
+    || finishOpportunity
+    || boundaryRisk
+    || distance > 36
+    || Boolean(state.winner);
+  if (postControlFirstChoiceCancelled) {
+    postControlFirstChoiceFramesRemaining = 0;
+  }
+  const postControlRepeatDashPending = postControlFirstChoiceFramesRemaining > 0
+    && lastPostControlFirstChoiceWasDash
+    && behaviorTuning.postControlRepeatDashWeightScale < 1
+    && specialMove.behaviorId === 'special.movement_dash.v1';
+  if (
+    controlReturnedThisFrame
+    && behaviorTuning.postControlChaseLockFrames > 0
+    && playerHasControl
+    && opponent.helpless <= 0
+    && opponent.recovering <= 0
+    && !incomingProjectileClose
+    && !finishOpportunity
+    && !boundaryRisk
+    && distance <= 36
+    && !state.winner
+  ) {
+    postControlChaseLockPending = true;
+    postControlChaseLockFramesRemaining = 0;
+  }
+  const postControlChaseLockCancelled = !playerHasControl
+    || opponent.helpless > 0
+    || opponent.recovering > 0
+    || incomingProjectileClose
+    || finishOpportunity
+    || boundaryRisk
+    || distance > 36
+    || Boolean(state.winner);
+  if (postControlChaseLockCancelled) {
+    postControlChaseLockPending = false;
+    postControlChaseLockFramesRemaining = 0;
+  } else if (postControlChaseLockPending && sharedActionReady) {
+    postControlChaseLockPending = false;
+    postControlChaseLockFramesRemaining = behaviorTuning.postControlChaseLockFrames;
+  } else if (postControlChaseLockFramesRemaining > 0) {
+    postControlChaseLockFramesRemaining = sharedActionReady
+      ? Math.max(0, postControlChaseLockFramesRemaining - 1)
+      : 0;
+  }
+  const postControlChaseLockActive = postControlChaseLockFramesRemaining > 0;
   if (
     controlReturnedThisFrame
     && behaviorTuning.postControlCounterstepScale > 0
@@ -1017,12 +1175,19 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
 
   const inPressureBand = distance <= 24;
   const pressureExitThisFrame = wasInPressureBand && !inPressureBand && !state.winner;
+  const safeControlReturnOutsidePressure = controlReturnedThisFrame
+    && !inPressureBand
+    && distance <= behaviorTuning.neutralHoldDistance
+    && !finishOpportunity
+    && !boundaryRisk
+    && !incomingProjectileClose
+    && !opponentThreatening;
   wasInPressureBand = inPressureBand;
   if (inPressureBand) {
     neutralHoldFramesRemaining = 0;
     neutralHoldPending = false;
   } else if (
-    pressureExitThisFrame
+    (pressureExitThisFrame || safeControlReturnOutsidePressure)
     && (pursuitPolicyId === 'neutral_hold' || behaviorTuning.neutralHoldFrames > 0)
     && player.helpless <= 0
     && player.recovering <= 0
@@ -1206,14 +1371,14 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
 
   if (
     controlReturnedThisFrame
-    && behaviorTuning.postControlSteeringFrames > 0
+    && effectivePostControlSteeringFrames > 0
     && playerHasControl
     && opponent.helpless <= 0
     && opponent.recovering <= 0
-    && distance <= 24
+    && distance <= (packagePostControlSpacingFrames > 0 ? 36 : 24)
     && !state.winner
   ) {
-    postControlSteeringFramesRemaining = behaviorTuning.postControlSteeringFrames;
+    postControlSteeringFramesRemaining = effectivePostControlSteeringFrames;
   }
 
   const recoveryPostureTriggered = controlReturnedThisFrame
@@ -1274,6 +1439,8 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && opponentHasNeutralControl
     && !incomingProjectileClose
     && !opponentOpen
+    && !finishOpportunity
+    && !boundaryRisk
     && !state.winner;
   if (tacticalRepositionFramesRemaining > 0 && !tacticalRepositionActive) {
     tacticalRepositionFramesRemaining = 0;
@@ -1418,7 +1585,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     input.moveY = clampAxis(-dirY * 0.28 + tangentY * 0.82 + toCenterY * 0.25);
   } else if (distance > pressureDistance + 5.5) {
     movementIntent = 'long_range_approach';
-    const inwardBias = 0.92 * behaviorTuning.neutralApproachScale;
+    const inwardBias = 0.92 * neutralApproachScale;
     const orbitBias = 0.16 + neutralApproachReduction * 0.76;
     input.moveX = clampAxis(dirX * inwardBias + tangentX * orbitBias);
     input.moveY = clampAxis(dirY * inwardBias + tangentY * orbitBias);
@@ -1430,7 +1597,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       && (profile.riskAppetite > 0.55 || opponentOpen);
   } else if (distance > pressureDistance * 0.64) {
     movementIntent = 'mid_range_orbit';
-    const inwardBias = 0.55 * behaviorTuning.neutralApproachScale;
+    const inwardBias = 0.55 * neutralApproachScale;
     const orbitBias = 0.6 + neutralApproachReduction * 0.32;
     input.moveX = clampAxis(dirX * inwardBias + tangentX * orbitBias + toCenterX * 0.15);
     input.moveY = clampAxis(dirY * inwardBias + tangentY * orbitBias + toCenterY * 0.15);
@@ -1439,7 +1606,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     const closeRangeRetreat = specialMove.behaviorId === 'special.projectile.v1' || lowFuel || opponent.parry > 0;
     const closeRangeBias = closeRangeRetreat
       ? -0.42
-      : 0.1 * behaviorTuning.neutralApproachScale;
+      : 0.1 * neutralApproachScale;
     input.moveX = clampAxis(dirX * closeRangeBias + tangentX * 0.92 + toCenterX * 0.22);
     input.moveY = clampAxis(dirY * closeRangeBias + tangentY * 0.92 + toCenterY * 0.22);
   }
@@ -1601,7 +1768,19 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   let parryWeight = 0;
   let repositionWeight = 0;
   let repositionSelected = false;
+  let exchangeRepositionDeclined = false;
   let selectionRoll: number | null = null;
+  let postControlRepeatDashWeightApplied = false;
+  const exchangeRepositionDecisionActive = exchangeRepositionOpportunityFramesRemaining > 0
+    && tacticalRepositionOpportunityFramesRemaining <= 0;
+  const repositionOpportunityWeightScale = Math.max(
+    tacticalRepositionOpportunityFramesRemaining > 0
+      ? behaviorTuning.repositionWeightScale
+      : 0,
+    exchangeRepositionOpportunityFramesRemaining > 0
+      ? behaviorTuning.exchangeRepositionWeightScale
+      : 0,
+  );
 
   if (
     !shouldMakeMistake
@@ -1621,9 +1800,13 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       && distance < pressureDistance + profile.riskAppetite * 1.4
       && opponent.parry <= 0
       && !incomingProjectileUrgent
-      && !postRecoveryDefenseActive;
-    const movementDashSuppressed = (postControlSteeringActive || postControlCounterstepDecisionWindow)
-      && specialMove.behaviorId === 'special.movement_dash.v1';
+      && !postRecoveryDefenseActive
+      && (!postControlSteeringActive || opponentLaunchThreatening);
+    const movementDashSuppressed = (
+      postControlSteeringActive
+      || postControlChaseLockActive
+      || postControlCounterstepDecisionWindow
+    ) && specialMove.behaviorId === 'special.movement_dash.v1';
     specialReady = player.cool.special <= 0
       && player.fuel >= specialFuelCost
       && !movementDashSuppressed;
@@ -1631,12 +1814,12 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     parryReady = player.parry <= 0
       && (opponentParryableThreatening || incomingProjectileUrgent);
     const repositionTargetDistance = Math.max(28, pressureDistance + 17);
-    repositionReady = behaviorTuning.repositionWeightScale > 0
-      && tacticalRepositionOpportunityFramesRemaining > 0
+    repositionReady = repositionOpportunityWeightScale > 0
       && opponentHasNeutralControl
       && !opponentOpen
       && !incomingProjectileClose
       && !finishOpportunity
+      && !boundaryRisk
       && distance <= repositionTargetDistance + 12;
 
     if (parryReady && incomingProjectileUrgent && specialMove.behaviorId !== 'special.block_guard.v1') {
@@ -1667,6 +1850,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
               * (opponentOpen ? 1.35 : 1)
               * (lowFuel ? 0.45 : 1)
               * (commitmentPressActive && launchReady ? 0.18 : 1);
+            if (postControlRepeatDashPending && specialWeight > 0) {
+              specialWeight *= behaviorTuning.postControlRepeatDashWeightScale;
+              postControlRepeatDashWeightApplied = true;
+            }
             break;
           case 'special.block_guard.v1':
             if (opponent.helpless <= 0 && !opponentNearDepleted) {
@@ -1703,18 +1890,22 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       if (repositionReady) {
         const crowding = clamp01((repositionTargetDistance - distance) / 18);
         const closingPressure = clamp01(-separationSpeed / 36);
-        repositionWeight = behaviorTuning.repositionWeightScale
+        repositionWeight = repositionOpportunityWeightScale
           * (0.42 + crowding * 0.9 + closingPressure * 0.28)
           * (1.12 - profile.riskAppetite * 0.28)
           * (controlReturnedThisFrame ? 1.25 : 1)
           * (lowFuel ? 1.18 : 1)
           * (opponentNearDepleted ? 0.45 : 1);
       }
+      const exchangeRepositionPassWeight = repositionReady && exchangeRepositionDecisionActive
+        ? 1
+        : 0;
       const totalWeight = launchWeight
         + specialWeight
         + dunkWeight
         + parryWeight
-        + repositionWeight;
+        + repositionWeight
+        + exchangeRepositionPassWeight;
 
       if (totalWeight > 0) {
         const pickSample = nextAiRoll(rngState);
@@ -1735,8 +1926,14 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
               pick -= dunkWeight;
               if (pick < parryWeight) {
                 input.parry = true;
-              } else if (repositionWeight > 0) {
-                repositionSelected = true;
+              } else {
+                pick -= parryWeight;
+                if (pick < repositionWeight) {
+                  repositionSelected = true;
+                } else if (exchangeRepositionPassWeight > 0) {
+                  exchangeRepositionDeclined = true;
+                  exchangeRepositionOpportunityFramesRemaining = 0;
+                }
               }
             }
           }
@@ -1748,10 +1945,11 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
           );
           tacticalRepositionFramesRemaining = repositionFrames;
           tacticalRepositionOpportunityFramesRemaining = 0;
+          exchangeRepositionOpportunityFramesRemaining = 0;
           decisionLockFrames = repositionFrames;
           reactionFramesRemaining = Math.max(profile.reactionDelayFrames, repositionFrames);
           applyTacticalRepositionMovement();
-        } else {
+        } else if (input.launch || input.special || input.dunk || input.parry) {
           decisionLockFrames = Math.max(2, Math.round(2 + (1 - profile.riskAppetite) * 4));
           reactionFramesRemaining = profile.reactionDelayFrames;
         }
@@ -1847,6 +2045,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   if (requestedTacticalAction) {
     superBoostStartsSinceTacticalAction = 0;
     tacticalRepositionOpportunityFramesRemaining = 0;
+    exchangeRepositionOpportunityFramesRemaining = 0;
   }
   const startingSuperBoost = input.superBoost && player.superBoost <= 0;
   if (
@@ -1862,10 +2061,32 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       Math.round(18 + (1 - profile.riskAppetite) * 18),
     );
   }
+  const inwardMovement = input.moveX * dirX + input.moveY * dirY;
+  const postControlBoostSuppressed = postControlChaseLockActive
+    && input.boost
+    && !input.superBoost
+    && inwardMovement > 0.05
+    && (
+      movementIntent === 'long_range_approach'
+      || movementIntent === 'depleted_target_pressure'
+      || movementIntent === 'commitment_press'
+    );
+  if (postControlBoostSuppressed) {
+    input.boost = false;
+  }
   if (input.superBoost) {
     input.boost = false;
   } else if (input.boost && !player.boostActive && player.cool.boost > 0) {
     input.boost = false;
+  }
+  const postControlChaseLockConsumed = postControlChaseLockActive
+    && (requestedTacticalAction || input.superBoost);
+  if (
+    (postControlChaseLockActive || postControlChaseLockPending)
+    && (requestedTacticalAction || input.superBoost)
+  ) {
+    postControlChaseLockPending = false;
+    postControlChaseLockFramesRemaining = 0;
   }
 
   const tacticalGateReason = state.winner
@@ -1878,7 +2099,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
           : 'recovering'
       : player.endLag > 0
         ? 'end_lag'
-        : hasAttackCommitment(player)
+      : hasAttackCommitment(player)
           ? 'action_committed'
           : shouldMakeMistake
             ? 'deliberate_error'
@@ -1910,11 +2131,23 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && distance < pressureDistance + profile.riskAppetite * 1.4
     && opponent.parry <= 0
     && !incomingProjectileUrgent
-    && !postRecoveryDefenseActive;
+    && !postRecoveryDefenseActive
+    && (!postControlSteeringActive || opponentLaunchThreatening);
+  const postControlDashSuppressed = postControlChaseLockActive
+    && tacticalGateReason === null
+    && specialMove.behaviorId === 'special.movement_dash.v1'
+    && player.cool.special <= 0
+    && player.fuel >= specialFuelCost
+    && !postControlSteeringActive
+    && !postControlCounterstepDecisionWindow;
   const intrinsicSpecialReady = player.cool.special <= 0
     && player.fuel >= specialFuelCost
     && !(
-      (postControlSteeringActive || postControlCounterstepDecisionWindow)
+      (
+        postControlSteeringActive
+        || postControlChaseLockActive
+        || postControlCounterstepDecisionWindow
+      )
       && specialMove.behaviorId === 'special.movement_dash.v1'
     );
   const intrinsicParryReady = player.parry <= 0
@@ -1935,6 +2168,8 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       ? 'target_helpless'
       : postRecoveryDefenseActive
         ? 'post_control_defense'
+      : postControlSteeringActive && !opponentLaunchThreatening
+        ? 'post_control_bait'
       : distance >= pressureDistance + profile.riskAppetite * 1.4
         ? 'out_of_range'
         : opponent.parry > 0
@@ -1944,11 +2179,17 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     ? 'cooldown'
     : player.fuel < specialFuelCost
       ? 'insufficient_fuel'
-      : (postControlSteeringActive || postControlCounterstepDecisionWindow)
+      : (
+        postControlSteeringActive
+        || postControlChaseLockActive
+        || postControlCounterstepDecisionWindow
+      )
         && specialMove.behaviorId === 'special.movement_dash.v1'
-        ? postControlCounterstepDecisionWindow
-          ? 'post_control_counterstep_dash_suppressed'
-          : 'post_control_dash_suppressed'
+        ? postControlChaseLockActive
+          ? 'post_control_chase_lock_dash_suppressed'
+          : postControlCounterstepDecisionWindow
+            ? 'post_control_counterstep_dash_suppressed'
+            : 'post_control_dash_suppressed'
       : 'unsupported_context';
   const dunkUnavailableReason = player.cool.dunk > 0
     ? 'cooldown'
@@ -1959,11 +2200,15 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
         : 'target_moving_too_fast';
   const parryUnavailableReason = player.parry > 0 ? 'already_active' : 'no_immediate_threat';
   const repositionUnavailableReason = behaviorTuning.repositionWeightScale <= 0
+    && behaviorTuning.exchangeRepositionWeightScale <= 0
     ? 'disabled'
     : tacticalRepositionOpportunityFramesRemaining <= 0
-      ? 'no_post_control_opportunity'
+      && exchangeRepositionOpportunityFramesRemaining <= 0
+      ? 'no_transition_opportunity'
     : finishOpportunity
       ? 'finish_opportunity'
+      : boundaryRisk
+        ? 'boundary_risk'
       : !opponentHasNeutralControl || opponentOpen
         ? 'opponent_not_neutral'
         : incomingProjectileClose
@@ -1999,6 +2244,16 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
           : input.launch
             ? 'launch'
             : null;
+  const postControlRepeatDashConsumed = postControlRepeatDashPending
+    && selectedAction !== null;
+  const postControlRepeatDashSelected = postControlRepeatDashConsumed
+    && selectedAction === 'special'
+    && specialMove.behaviorId === 'special.movement_dash.v1';
+  if (postControlFirstChoiceFramesRemaining > 0 && selectedAction !== null) {
+    lastPostControlFirstChoiceWasDash = selectedAction === 'special'
+      && specialMove.behaviorId === 'special.movement_dash.v1';
+    postControlFirstChoiceFramesRemaining = 0;
+  }
   const selectedReason = selectedAction === 'launch_break'
     ? urgentBreak ? 'urgent_survival_break' : 'planned_delayed_break'
     : selectedAction === 'dunk'
@@ -2017,12 +2272,20 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
               : specialMove.behaviorId
           : selectedAction === 'launch'
             ? opponentOpen ? 'punish_opening' : 'weighted_pressure_choice'
-            : repositionSelected
+              : repositionSelected
               ? 'weighted_reposition_choice'
+              : exchangeRepositionDeclined
+                ? 'weighted_reposition_declined'
             : breakEligible && breakSelectionRoll !== null
               ? 'launch_break_roll_failed'
               : tacticalGateReason
-                ?? (postControlSteeringActive ? 'post_control_steering' : 'movement_only');
+                ?? (postControlBoostSuppressed
+                  ? 'post_control_chase_lock_boost_suppressed'
+                  : postControlChaseLockActive
+                    ? 'post_control_chase_lock'
+                  : postControlSteeringActive
+                    ? 'post_control_steering'
+                    : 'movement_only');
   const decision: AiDecisionTrace = {
     schemaVersion: AI_DECISION_TRACE_SCHEMA_VERSION,
     playerId,
@@ -2105,6 +2368,17 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   return {
     input,
     decision,
+    diagnostics: {
+      postControlChaseLockPending,
+      postControlChaseLockActive,
+      postControlBoostSuppressed,
+      postControlDashSuppressed,
+      postControlChaseLockConsumed,
+      postControlRepeatDashPending,
+      postControlRepeatDashWeightApplied,
+      postControlRepeatDashConsumed,
+      postControlRepeatDashSelected,
+    },
     next: {
       rngState,
       recoveryRngState,
@@ -2125,7 +2399,12 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       postControlCounterstepFramesRemaining,
       postControlCounterstepSeparatedFrames,
       postControlCounterstepActionRequested,
+      postControlChaseLockPending,
+      postControlChaseLockFramesRemaining,
+      postControlFirstChoiceFramesRemaining,
+      lastPostControlFirstChoiceWasDash,
       tacticalRepositionOpportunityFramesRemaining,
+      exchangeRepositionOpportunityFramesRemaining,
       tacticalRepositionFramesRemaining,
       postRecoveryMode,
       postRecoveryUseSuperBoost,

@@ -52,6 +52,7 @@ describe('combat VFX presets', () => {
   test('combat presets expose particles, trail, flash, and sound cues for readable state changes', () => {
     const events: CombatVfxEvent[] = [
       makeEvent('boost', 'vanguard'),
+      makeEvent('super_boost', 'vanguard'),
       makeEvent('launch', 'duelist'),
       makeEvent('clash', 'ace'),
       makeEvent('parry', 'ace'),

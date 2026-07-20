@@ -18,7 +18,12 @@ import {
   STATE_SNAPSHOT_VERSION,
   step,
 } from './sim';
-import { CHAIN_WINDOW_SECONDS, MAX_FUEL } from './constants';
+import {
+  ARENA_RADIUS,
+  ARENA_WRAP_RADIUS,
+  CHAIN_WINDOW_SECONDS,
+  MAX_FUEL,
+} from './constants';
 
 const FIXED_DT = 1 / 60;
 const VANGUARD_LAUNCH = CHARACTER_BY_ID.vanguard.moves.launch;
@@ -97,6 +102,7 @@ function mirrorPlayerState(player: PlayerState, playerId: PlayerId): PlayerState
     pos: { x: -player.pos.x, y: -player.pos.y },
     vel: { x: -player.vel.x, y: -player.vel.y },
     boostDir: { x: -player.boostDir.x, y: -player.boostDir.y },
+    specialDir: { x: -player.specialDir.x, y: -player.specialDir.y },
     superDir: { x: -player.superDir.x, y: -player.superDir.y },
     lastLaunchedBy: swapPlayerId(player.lastLaunchedBy),
     recoveryDir: { x: -player.recoveryDir.x, y: -player.recoveryDir.y },
@@ -487,6 +493,44 @@ describe('special move rules', () => {
     expect(state.players.P1.pos.x).toBeGreaterThan(0.5);
     expect(Math.abs(state.players.P1.pos.y)).toBeLessThan(0.001);
     expect(state.projectiles.length).toBe(0);
+  });
+
+  test('committed locomotion authority lets a packaged movement dash follow latched input', () => {
+    const baseline = createInitialState({ loadout: { P1: 'duelist', P2: 'vanguard' } });
+    const candidate = createInitialState({ loadout: { P1: 'duelist', P2: 'vanguard' } });
+    candidate.tuning.committedLocomotionInputAuthority = 1;
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: 0, y: 0 };
+      state.players.P2.pos = { x: 20, y: 0 };
+    }
+
+    const input = neutralInput();
+    input.p1.moveY = 1;
+    input.p1.special = true;
+    step(baseline, input, FIXED_DT);
+    step(candidate, input, FIXED_DT);
+
+    expect(baseline.players.P1.specialDir).toEqual({ x: 0, y: 0 });
+    expect(candidate.players.P1.specialDir.x).toBeCloseTo(0);
+    expect(candidate.players.P1.specialDir.y).toBeCloseTo(1);
+    const candidateSnapshot = restoreStateFromSnapshot(createStateSnapshot(candidate));
+    expect(candidateSnapshot.players.P1.specialDir).toEqual(candidate.players.P1.specialDir);
+    expect(computeStateChecksum(candidateSnapshot)).toBe(computeStateChecksum(candidate));
+
+    runSteps(
+      baseline,
+      neutralInput(),
+      CHARACTER_BY_ID.duelist.moves.special.timing.startupFrames + 2,
+    );
+    runSteps(
+      candidate,
+      neutralInput(),
+      CHARACTER_BY_ID.duelist.moves.special.timing.startupFrames + 2,
+    );
+
+    expect(baseline.players.P1.pos.x).toBeGreaterThan(0.5);
+    expect(candidate.players.P1.pos.y).toBeGreaterThan(0.5);
+    expect(Math.abs(candidate.players.P1.pos.x)).toBeLessThan(baseline.players.P1.pos.x * 0.25);
   });
 
   test('special behavior dispatch is keyed by behaviorId, not kind', () => {
@@ -1396,6 +1440,57 @@ describe('launch recovery and spacing', () => {
     expect(Math.abs(state.players.P1.vel.y)).toBeLessThan(0.5);
   });
 
+  test('ordinary boost can ramp to full speed without changing its committed direction', () => {
+    const baseline = createInitialState();
+    const candidate = createInitialState();
+    candidate.tuning.ordinaryBoostAccelerationSeconds = 0.18;
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: 0, y: 0 };
+      state.players.P2.pos = { x: 40, y: 0 };
+    }
+
+    const boostInput = neutralInput();
+    boostInput.p1.boost = true;
+    step(baseline, boostInput, FIXED_DT);
+    step(candidate, boostInput, FIXED_DT);
+
+    expect(candidate.players.P1.boostDir).toEqual(baseline.players.P1.boostDir);
+    expect(candidate.players.P1.vel.x).toBeGreaterThan(0);
+    expect(candidate.players.P1.vel.x).toBeLessThan(baseline.players.P1.vel.x * 0.2);
+
+    runSteps(candidate, boostInput, 12);
+    expect(candidate.players.P1.vel.x).toBeCloseTo(baseline.players.P1.vel.x);
+    expect(Math.abs(candidate.players.P1.vel.y)).toBeLessThan(0.001);
+  });
+
+  test('committed locomotion authority blends ordinary boost toward latched movement input', () => {
+    const baseline = createInitialState();
+    const candidate = createInitialState();
+    candidate.tuning.committedLocomotionInputAuthority = 1;
+    for (const state of [baseline, candidate]) {
+      state.players.P1.pos = { x: 0, y: 0 };
+      state.players.P2.pos = { x: 24, y: 0 };
+    }
+
+    const startBoost = neutralInput();
+    startBoost.p1.moveY = 1;
+    startBoost.p1.boost = true;
+    step(baseline, startBoost, FIXED_DT);
+    step(candidate, startBoost, FIXED_DT);
+
+    expect(baseline.players.P1.boostDir.x).toBeCloseTo(1);
+    expect(Math.abs(baseline.players.P1.boostDir.y)).toBeLessThan(0.001);
+    expect(Math.abs(candidate.players.P1.boostDir.x)).toBeLessThan(0.001);
+    expect(candidate.players.P1.boostDir.y).toBeCloseTo(1);
+
+    const reverseInput = neutralInput();
+    reverseInput.p1.moveY = -1;
+    reverseInput.p1.boost = true;
+    step(candidate, reverseInput, FIXED_DT);
+    expect(candidate.players.P1.boostDir.y).toBeCloseTo(1);
+    expect(candidate.players.P1.vel.y).toBeGreaterThan(55);
+  });
+
   test('boost release applies a short recommit cooldown before it can lock again', () => {
     const state = createInitialState();
     state.players.P1.pos = { x: 0, y: 0 };
@@ -1415,6 +1510,34 @@ describe('launch recovery and spacing', () => {
 
     expect(state.players.P1.boostActive).toBe(false);
     expect(state.players.P1.vel.x).toBeGreaterThan(-20);
+  });
+});
+
+describe('arena boundary safety', () => {
+  test('clamps a controllable fighter back inside the fixed arena', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: ARENA_RADIUS + 3, y: 0 };
+    state.players.P1.vel = { x: 20, y: 0 };
+
+    step(state, neutralInput(), FIXED_DT);
+
+    expect(Math.hypot(state.players.P1.pos.x, state.players.P1.pos.y)).toBeLessThanOrEqual(ARENA_RADIUS);
+    expect(state.players.P1.vel.x).toBeLessThanOrEqual(0);
+  });
+
+  test('wraps an outward Super Boost across the far lip instead of marooning it outside', () => {
+    const state = createInitialState();
+    state.players.P1.pos = { x: ARENA_WRAP_RADIUS - 0.2, y: 0 };
+    state.players.P1.superBoost = 1;
+    state.players.P1.superDir = { x: 1, y: 0 };
+    const input = neutralInput();
+    input.p1.moveX = 1;
+    input.p1.superBoost = true;
+
+    step(state, input, FIXED_DT);
+
+    expect(state.players.P1.pos.x).toBeLessThan(0);
+    expect(Math.hypot(state.players.P1.pos.x, state.players.P1.pos.y)).toBeLessThan(ARENA_RADIUS);
   });
 });
 
@@ -1638,6 +1761,7 @@ describe('state snapshot and restore', () => {
     delete legacyTuning.helplessReleaseSpeedRatio;
     delete legacyTuning.actionRecoveryControlMultiplier;
     delete legacyTuning.combatBoostReacquireDelaySeconds;
+    delete legacyTuning.committedLocomotionInputAuthority;
     delete legacyTuning.startupClashGraceSeconds;
     delete legacyTuning.launchClashSeparationPadding;
     delete legacyTuning.launchClashRecoilMultiplier;
@@ -1700,6 +1824,20 @@ describe('state snapshot and restore', () => {
     expect(restored.tuning.combatBoostReacquireDelaySeconds).toBe(0);
     expect(restored.players.P1.combatBoostLockRemaining).toBe(0);
     expect(restored.players.P2.combatBoostLockRemaining).toBe(0);
+  });
+
+  test('deserialise v4 snapshots without committed locomotion fields as target-locked state', () => {
+    const state = createStateSnapshot(createInitialState({ seed: 2029 }));
+    delete (state.tuning as Partial<typeof state.tuning>).committedLocomotionInputAuthority;
+    for (const playerId of ['P1', 'P2'] as const) {
+      delete (state.players[playerId] as Partial<PlayerState>).specialDir;
+    }
+
+    const restored = deserialiseState(JSON.stringify({ version: 4, state }));
+
+    expect(restored.tuning.committedLocomotionInputAuthority).toBe(0);
+    expect(restored.players.P1.specialDir).toEqual({ x: 0, y: 0 });
+    expect(restored.players.P2.specialDir).toEqual({ x: 0, y: 0 });
   });
 
   test('snapshot and checksum preserve active post-control counter state', () => {

@@ -330,6 +330,7 @@ function startRollbackApi(
         DATABASE_URL: databaseUrl,
         PORT: String(port),
         NODE_ENV: 'test',
+        MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX: 'true',
         RELEASE_SHA: process.env.ROLLBACK_SHA,
         DEPLOYMENT_DATABASE_ID: 'local',
         DEPLOYMENT_ENVIRONMENT: 'test',
@@ -366,15 +367,31 @@ function startRollbackApi(
   return managed;
 }
 
-async function waitForRollbackApi(api: ManagedApi, baseUrl: string): Promise<void> {
+async function waitForRollbackApi(
+  api: ManagedApi,
+  baseUrl: string,
+  expectedMigrationIdentity: Pick<RollbackSchemaIdentity, 'migrationHead' | 'migrationCount'>,
+): Promise<void> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (api.child.exitCode !== null) {
       throw new Error(`Rollback API exited during startup.\n${tail(api.stderr || api.stdout)}`);
     }
     try {
-      const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1_000) });
-      if (response.ok) {
+      const response = await fetch(`${baseUrl}/readyz`, { signal: AbortSignal.timeout(1_000) });
+      const body = await response.json() as {
+        ok?: boolean;
+        migrationHead?: string | null;
+        migrationCount?: number;
+        migrationForwardCompatibleSuffixAllowed?: boolean;
+      };
+      if (
+        response.ok
+        && body.ok === true
+        && body.migrationHead === expectedMigrationIdentity.migrationHead
+        && body.migrationCount === expectedMigrationIdentity.migrationCount
+        && body.migrationForwardCompatibleSuffixAllowed === true
+      ) {
         return;
       }
     } catch {
@@ -415,7 +432,10 @@ async function runMigrationsFromSnapshot(
     ['--import', 'tsx', path.join(runtimeWorkspaceRoot, 'scripts/migrate.ts')],
     {
       cwd: migrationWorkspaceRoot,
-      env: { DATABASE_URL: databaseUrl },
+      env: {
+        DATABASE_URL: databaseUrl,
+        MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX: 'true',
+      },
       timeoutMs: 120_000,
     },
   );
@@ -585,6 +605,18 @@ async function run(): Promise<void> {
       migrationDigest: rollbackIdentityWithFiles.migrationDigest,
     };
 
+    await recordPhase(phases, 'rollback_dependencies', async () => {
+      await runCommand(
+        'Rollback dependency install',
+        process.platform === 'win32' ? 'npm.cmd' : 'npm',
+        ['ci', '--ignore-scripts'],
+        {
+          cwd: rollbackSnapshotRoot,
+          timeoutMs: 300_000,
+        },
+      );
+    });
+
     postgresStartedByRunner = await ensureLocalPostgres(adminUrl);
     await createIsolatedDatabase(adminUrl, databaseName);
     databaseCreated = true;
@@ -603,7 +635,7 @@ async function run(): Promise<void> {
     process.env.ROLLBACK_SHA = options.rollbackSha;
     await recordPhase(phases, 'rollback_pre_upgrade_probe', async () => {
       api = startRollbackApi(rollbackSnapshotRoot, databaseUrl, port, 'before');
-      await waitForRollbackApi(api, baseUrl);
+      await waitForRollbackApi(api, baseUrl, rollbackIdentityWithFiles);
       beforeUpgrade = await runRollbackApiCompatibilityProbe(baseUrl, 'before', {
         internallyManagedLoopback: true,
       });
@@ -621,9 +653,18 @@ async function run(): Promise<void> {
       await assertAppliedMigrationChain(databaseUrl, candidateIdentityWithFiles.files);
     });
 
+    await recordPhase(phases, 'rollback_post_upgrade_migrations', async () => {
+      await runMigrations(
+        path.join(rollbackSnapshotRoot, 'apps/api'),
+        databaseUrl,
+        'Rollback pre-deploy migrations after candidate upgrade',
+      );
+      await assertAppliedMigrationChain(databaseUrl, candidateIdentityWithFiles.files);
+    });
+
     await recordPhase(phases, 'rollback_post_upgrade_probe', async () => {
       api = startRollbackApi(rollbackSnapshotRoot, databaseUrl, port, 'after');
-      await waitForRollbackApi(api, baseUrl);
+      await waitForRollbackApi(api, baseUrl, candidateIdentityWithFiles);
       afterUpgrade = await runRollbackApiCompatibilityProbe(baseUrl, 'after', {
         internallyManagedLoopback: true,
       });
@@ -672,7 +713,7 @@ async function run(): Promise<void> {
     ok: failure === null,
     localOnly: true,
     hostedServicesContacted: false,
-    runtimeDependenciesSource: 'candidate_install',
+    runtimeDependenciesSource: 'rollback_install',
     candidate,
     rollback,
     compatibilityExceptions,

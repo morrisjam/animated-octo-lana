@@ -5,6 +5,7 @@ import {
   nextDeterministicRandom,
   step,
   type SimulationActionStart,
+  type SimulationControlReturnReset,
   type SimulationLaunchClash,
 } from './sim';
 import { applyBalanceScenario } from './balanceScenarios';
@@ -191,9 +192,11 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
     const previousState = createStateSnapshot(state);
     const acceptedActionStarts: SimulationActionStart[] = [];
     const launchClashes: SimulationLaunchClash[] = [];
+    const controlReturnResets: SimulationControlReturnReset[] = [];
     step(state, input, fixedDt, {
       onActionStart: (event) => acceptedActionStarts.push(event),
       onLaunchClash: (event) => launchClashes.push(event),
+      onControlReturnReset: (event) => controlReturnResets.push(event),
     });
     if (payload.header.advanceRngPerFrame) {
       nextDeterministicRandom(state);
@@ -205,7 +208,14 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
       arePlayersInTelemetryContact(state),
       fixedDt,
     );
-    telemetry.recordFrame(input, state, fixedDt, acceptedActionStarts, launchClashes);
+    telemetry.recordFrame(
+      input,
+      state,
+      fixedDt,
+      acceptedActionStarts,
+      launchClashes,
+      controlReturnResets,
+    );
     if (focus && focusTelemetry && frame >= focus.startFrame && frame <= focus.endFrame) {
       focusContactStartFrame = trackContactFrame(
         focusContactWindows,
@@ -214,7 +224,14 @@ export function buildReplayReviewData(payload: ReplayPayload): ReplayReviewData 
         arePlayersInTelemetryContact(state),
         fixedDt,
       );
-      focusTelemetry.recordFrame(input, state, fixedDt, acceptedActionStarts, launchClashes);
+      focusTelemetry.recordFrame(
+        input,
+        state,
+        fixedDt,
+        acceptedActionStarts,
+        launchClashes,
+        controlReturnResets,
+      );
     }
     const currentState = createStateSnapshot(state);
     frames.push({
@@ -317,9 +334,11 @@ export function buildReplayReviewDataFromRounds(
       const previousState = createStateSnapshot(state);
       const acceptedActionStarts: SimulationActionStart[] = [];
       const launchClashes: SimulationLaunchClash[] = [];
+      const controlReturnResets: SimulationControlReturnReset[] = [];
       step(state, input, fixedDt, {
         onActionStart: (event) => acceptedActionStarts.push(event),
         onLaunchClash: (event) => launchClashes.push(event),
+        onControlReturnReset: (event) => controlReturnResets.push(event),
       });
       contactStartFrame = trackContactFrame(
         contactWindows,
@@ -328,7 +347,14 @@ export function buildReplayReviewDataFromRounds(
         arePlayersInTelemetryContact(state),
         fixedDt,
       );
-      telemetry.recordFrame(input, state, fixedDt, acceptedActionStarts, launchClashes);
+      telemetry.recordFrame(
+        input,
+        state,
+        fixedDt,
+        acceptedActionStarts,
+        launchClashes,
+        controlReturnResets,
+      );
       const currentState = createStateSnapshot(state);
       frames.push({
         frame,

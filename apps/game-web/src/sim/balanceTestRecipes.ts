@@ -15,6 +15,7 @@ export const BALANCE_TEST_RECIPE_IDS = [
   'open_ai_mirror',
   'offense_vs_passive',
   'commitment_vs_defense',
+  'shared_commitment_cadence',
   'launch_break_agency',
   'pursuit_vs_escape',
   'post_clash_reset',
@@ -65,6 +66,15 @@ export const BALANCE_TEST_RECIPES: readonly BalanceTestRecipe[] = [
     suggestedDurationSeconds: 25,
     scenarioId: 'close_pressure',
     roles: { P1: 'adaptive', P2: 'defensive' },
+  },
+  {
+    id: 'shared_commitment_cadence',
+    label: 'Shared commitment cadence',
+    description: 'Place both fighters in close pressure with complete kits; AI vs AI uses two adaptive controllers while Balance Sparring leaves P1 human.',
+    designerQuestion: 'Do two fully active fighters create a readable attack, answer, and reset cadence instead of continuously overlapping commitments?',
+    suggestedDurationSeconds: 25,
+    scenarioId: 'close_pressure',
+    roles: createDefaultAiControllerRoles(),
   },
   {
     id: 'launch_break_agency',

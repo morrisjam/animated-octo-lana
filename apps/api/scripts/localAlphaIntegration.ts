@@ -1,12 +1,14 @@
-import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcessByStdio } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { createConnection, createServer } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
+import { validateWebReleaseBuildOutput } from '../../game-web/src/build/webReleaseAttestation';
 import { assertLocalDatabaseTarget } from '../src/databaseTarget';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -17,10 +19,18 @@ const latestReportPath = path.join(artifactDir, 'report.json');
 const MAX_CAPTURED_LOG_BYTES = 1_000_000;
 const LOCAL_COTURN_IMAGE = 'coturn/coturn:4.6.3';
 const LOCAL_RANKED_ROOT_SMOKE_BUILD_SCHEMA = 'gw.local-ranked-root-smoke-build.v1';
+const EXACT_GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 const localRankedRootSmokeBuildPath = path.resolve(
   repositoryRoot,
   'apps/game-web/dist/local-ranked-root-smoke-build.json',
 );
+const localReleaseDistPath = path.resolve(repositoryRoot, 'apps/game-web/dist-release');
+const localReleaseAttestationPath = path.join(localReleaseDistPath, 'release.json');
+const exactReleaseIdentityReportPath = path.join(artifactDir, 'exact-release-identity.json');
+const LOCAL_STEAM_APP_ID = '480';
+const LOCAL_STEAM_WEB_API_KEY = 'local-alpha-steam-publisher-key-0123456789';
+const LOCAL_STEAM_WEB_API_IDENTITY = 'gravity-well-local-alpha';
+const LOCAL_STEAM_USER_ID = '76561198012345678';
 
 interface StepResult {
   name: string;
@@ -53,6 +63,11 @@ interface LocalCoturnConfig {
   relayPortEnd: number;
 }
 
+interface LocalSteamVerifier {
+  server: HttpServer;
+  readonly requestCount: number;
+}
+
 function parseOptions(args: string[]): LocalAlphaOptions {
   const unsupported = args.filter((value) => value !== '--with-coturn');
   if (unsupported.length > 0) {
@@ -69,7 +84,30 @@ function parsePort(name: string, fallback: number): number {
   return parsed;
 }
 
-function assertLocalRankedRootSmokeBuild(expectedApiBaseUrl: string): void {
+function readRepositoryReleaseSha(): string {
+  const releaseSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  }).trim().toLowerCase();
+  if (!EXACT_GIT_SHA_PATTERN.test(releaseSha)) {
+    throw new Error('Local alpha integration requires an exact 40-character repository HEAD SHA.');
+  }
+  return releaseSha;
+}
+
+function repositoryIsDirty(): boolean {
+  return execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  }).trim().length > 0;
+}
+
+function assertLocalRankedRootSmokeBuild(
+  expectedApiBaseUrl: string,
+  expectedBuildId: string,
+): void {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(localRankedRootSmokeBuildPath, 'utf8'));
@@ -86,7 +124,7 @@ function assertLocalRankedRootSmokeBuild(expectedApiBaseUrl: string): void {
   if (
     attestation.schemaVersion !== LOCAL_RANKED_ROOT_SMOKE_BUILD_SCHEMA
     || attestation.enabled !== true
-    || attestation.buildId !== 'local-ranked-root-smoke'
+    || attestation.buildId !== expectedBuildId
     || attestation.apiBaseUrl !== expectedApiBaseUrl
   ) {
     throw new Error(
@@ -193,6 +231,60 @@ async function assertPortsAvailable(ports: Record<string, number>): Promise<void
       throw new Error(`${label} port ${port} is already in use. Override its LOCAL_ALPHA_*_PORT value.`);
     }
   }
+}
+
+async function startLocalSteamVerifier(
+  port: number,
+  expectedTicket: string,
+): Promise<LocalSteamVerifier> {
+  let requestCount = 0;
+  const server = createHttpServer((request, response) => {
+    const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
+    const validRequest = request.method === 'GET'
+      && url.pathname === '/ISteamUserAuth/AuthenticateUserTicket/v1/'
+      && url.searchParams.get('key') === LOCAL_STEAM_WEB_API_KEY
+      && url.searchParams.get('appid') === LOCAL_STEAM_APP_ID
+      && url.searchParams.get('identity') === LOCAL_STEAM_WEB_API_IDENTITY
+      && url.searchParams.get('ticket')?.toLowerCase() === expectedTicket;
+    if (!validRequest) {
+      response.writeHead(400, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      response.end(JSON.stringify({ response: { error: { errordesc: 'Unexpected local verifier request.' } } }));
+      return;
+    }
+    requestCount += 1;
+    response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    response.end(JSON.stringify({
+      response: {
+        params: {
+          result: 'OK',
+          steamid: LOCAL_STEAM_USER_ID,
+        },
+      },
+    }));
+  });
+  server.unref();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => {
+      server.removeListener('error', reject);
+      resolve();
+    });
+  });
+  return {
+    server,
+    get requestCount() {
+      return requestCount;
+    },
+  };
+}
+
+async function stopLocalSteamVerifier(verifier: LocalSteamVerifier | null): Promise<void> {
+  if (!verifier || !verifier.server.listening) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    verifier.server.close((error) => error ? reject(error) : resolve());
+  });
 }
 
 function assertTurnPortRange(
@@ -463,6 +555,7 @@ async function run(): Promise<void> {
     restart: parsePort('LOCAL_ALPHA_RESTART_PORT', 28_791),
     multiA: parsePort('LOCAL_ALPHA_MULTI_PORT_A', 28_792),
     multiB: parsePort('LOCAL_ALPHA_MULTI_PORT_B', 28_793),
+    steam: parsePort('LOCAL_ALPHA_STEAM_PORT', 28_794),
   };
   const turnConfig: LocalCoturnConfig = {
     containerName: `gravity-well-coturn-${process.pid}-${Date.now()}`,
@@ -483,6 +576,10 @@ async function run(): Promise<void> {
   const databaseApplicationName = `gravity-well-local-alpha-${process.pid}`;
   const authSessionSecret = 'local-alpha-auth-session-secret-0123456789-abcdefghijklmnopqrstuvwxyz';
   const authRateLimitSecret = `local-alpha-auth-rate-limit-${process.pid}-${Date.now()}-0123456789abcdef`;
+  const localSteamWebTicket = randomBytes(32).toString('hex');
+  const opsAdminKey = randomBytes(32).toString('hex');
+  const releaseSha = readRepositoryReleaseSha();
+  const sourceDirty = repositoryIsDirty();
   const smokeTargetEnv: NodeJS.ProcessEnv = {
     SMOKE_EXPECT_API_HOSTNAME: '127.0.0.1',
     SMOKE_EXPECT_DATABASE_ID: 'local',
@@ -500,6 +597,8 @@ async function run(): Promise<void> {
   let startedPostgres = false;
   let coturnStartedByRunner = false;
   let coturnActive = false;
+  let localSteamVerifier: LocalSteamVerifier | null = null;
+  let localSteamVerifierAcceptedRequests = 0;
   let failure: string | null = null;
 
   mkdirSync(artifactDir, { recursive: true });
@@ -517,6 +616,36 @@ async function run(): Promise<void> {
           'npm_execpath is unavailable. Start this runner with `npm run alpha:local-integration`.',
         );
       }
+      const releaseBuildEnv: NodeJS.ProcessEnv = {
+        VITE_APP_ENV: 'production',
+        VITE_FEATURE_ONLINE: 'true',
+        VITE_FEATURE_RANKED: 'true',
+        VITE_FEATURE_ONLINE_MATCH_RUNTIME: 'true',
+        VITE_FEATURE_DEBUG_TOOLS: 'false',
+        VITE_FEATURE_ONLINE_DIAGNOSTICS: 'false',
+        VITE_FEATURE_ONLINE_DEV_MENU: 'false',
+        VITE_PROFILE_API_BASE: apiBaseUrl,
+        VITE_MATCHMAKING_API_BASE: apiBaseUrl,
+        VITE_APP_BUILD: releaseSha,
+        VITE_RULESET_VERSION: 'prototype-2026.02',
+        VITE_BALANCE_PROFILE_ID: 'default',
+        VITE_LOCAL_RANKED_ROOT_SMOKE: 'false',
+        CF_PAGES: '1',
+        CF_PAGES_COMMIT_SHA: releaseSha,
+      };
+      await recordStep(steps, 'build provider-equivalent immutable web release', () => runCommand(
+        'Provider-equivalent web release build',
+        process.execPath,
+        [
+          path.resolve(repositoryRoot, 'node_modules/vite/bin/vite.js'),
+          'build',
+          'apps/game-web',
+          '--outDir',
+          'dist-release',
+          '--emptyOutDir',
+        ],
+        { env: releaseBuildEnv, timeoutMs: 180_000 },
+      ));
       await recordStep(steps, 'build production web client', () => runCommand(
         'Production web build',
         process.execPath,
@@ -532,15 +661,20 @@ async function run(): Promise<void> {
             VITE_FEATURE_ONLINE_DEV_MENU: 'false',
             VITE_PROFILE_API_BASE: apiBaseUrl,
             VITE_MATCHMAKING_API_BASE: apiBaseUrl,
-            VITE_APP_BUILD: 'local-ranked-root-smoke',
+            VITE_APP_BUILD: releaseSha,
             VITE_LOCAL_RANKED_ROOT_SMOKE: 'true',
+            CF_PAGES: '0',
+            CF_PAGES_COMMIT_SHA: '',
           },
           timeoutMs: 180_000,
         },
       ));
     }
+    await recordStep(steps, 'verify immutable web release identity', async () => {
+      await validateWebReleaseBuildOutput(localReleaseDistPath, releaseSha);
+    });
     await recordStep(steps, 'verify ranked root smoke build attestation', async () => {
-      assertLocalRankedRootSmokeBuild(apiBaseUrl);
+      assertLocalRankedRootSmokeBuild(apiBaseUrl, releaseSha);
     });
 
     startedPostgres = await recordStep(
@@ -600,6 +734,10 @@ async function run(): Promise<void> {
       coturnActive = true;
     });
 
+    await recordStep(steps, 'start isolated Steam ticket verifier', async () => {
+      localSteamVerifier = await startLocalSteamVerifier(ports.steam, localSteamWebTicket);
+    });
+
     apiProcess = spawnManagedProcess(
       'local API',
       ['--import', 'tsx', 'apps/api/src/server.ts'],
@@ -607,7 +745,12 @@ async function run(): Promise<void> {
         ...sharedEnv,
         PORT: String(ports.api),
         NODE_ENV: 'test',
+        RELEASE_SHA: releaseSha,
+        DEPLOYMENT_ENVIRONMENT: 'test',
+        DEPLOYMENT_DATABASE_ID: 'local',
+        MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX: 'true',
         MATCHMAKING_ACCESS_MODE: 'open',
+        MATCHMAKING_ALPHA_BUILD_VERSIONS: releaseSha,
         MATCHMAKING_RECONNECT_GRACE_SECONDS: '20',
         MATCHMAKING_SNAPSHOT_INTERVAL_MS: '60000',
         MATCHMAKING_RUNTIME_NAMESPACE: runtimeNamespace,
@@ -616,6 +759,13 @@ async function run(): Promise<void> {
         MATCHMAKING_TURN_URLS: `turn:127.0.0.1:${turnConfig.hostPort}?transport=udp`,
         MATCHMAKING_TURN_SHARED_SECRET: turnConfig.sharedSecret,
         MATCHMAKING_TURN_CREDENTIAL_TTL_SECONDS: '300',
+        SLO_ADMIN_KEY: opsAdminKey,
+        STEAM_APP_ID: LOCAL_STEAM_APP_ID,
+        STEAM_WEB_API_KEY: LOCAL_STEAM_WEB_API_KEY,
+        STEAM_WEB_API_IDENTITY: LOCAL_STEAM_WEB_API_IDENTITY,
+        STEAM_WEB_API_BASE: `http://127.0.0.1:${ports.steam}`,
+        STEAM_WEB_API_TIMEOUT_MS: '5000',
+        STEAM_ALLOW_DEV_TICKETS: 'false',
       },
     );
     webProcess = spawnManagedProcess(
@@ -643,15 +793,45 @@ async function run(): Promise<void> {
       ]);
     });
 
-    await recordStep(steps, 'authentication ownership and abuse smoke', () => runCommand(
-      'Authentication security smoke',
+    await recordStep(steps, 'bind web, API, schema, and build allowlist to one release', () => runCommand(
+      'Exact release identity smoke',
       process.execPath,
-      ['--import', 'tsx', 'apps/api/scripts/authSecuritySmoke.ts'],
+      ['--import', 'tsx', 'apps/api/scripts/exactReleaseIdentitySmoke.ts'],
       {
-        env: { ...sharedEnv, API_BASE_URL: apiBaseUrl },
+        env: {
+          ...smokeTargetEnv,
+          API_BASE_URL: apiBaseUrl,
+          API_OPS_ADMIN_KEY: opsAdminKey,
+          EXACT_RELEASE_EXPECT_SHA: releaseSha,
+          EXACT_RELEASE_SOURCE_DIRTY: sourceDirty ? '1' : '0',
+          EXACT_RELEASE_WEB_ATTESTATION_PATH: localReleaseAttestationPath,
+          EXACT_RELEASE_IDENTITY_REPORT_PATH: exactReleaseIdentityReportPath,
+        },
         timeoutMs: 30_000,
       },
     ));
+
+    await recordStep(steps, 'authentication ownership, abuse, and Steam replay smoke', async () => {
+      await runCommand(
+        'Authentication security smoke',
+        process.execPath,
+        ['--import', 'tsx', 'apps/api/scripts/authSecuritySmoke.ts'],
+        {
+          env: {
+            ...sharedEnv,
+            API_BASE_URL: apiBaseUrl,
+            AUTH_SECURITY_STEAM_WEB_TICKET: localSteamWebTicket,
+          },
+          timeoutMs: 30_000,
+        },
+      );
+      localSteamVerifierAcceptedRequests = localSteamVerifier?.requestCount ?? 0;
+      if (localSteamVerifierAcceptedRequests !== 2) {
+        throw new Error(
+          `Local Steam verifier received ${localSteamVerifierAcceptedRequests} requests; expected two accepted upstream validations.`,
+        );
+      }
+    });
     await recordStep(steps, 'ranked proof-consensus smoke', () => runCommand(
       'Ranked online smoke',
       process.execPath,
@@ -706,6 +886,8 @@ async function run(): Promise<void> {
           WEBRTC_SMOKE_URL: `${webBaseUrl}/webrtc-smoke.html`,
           WEBRTC_BROWSER_SMOKE_TIMEOUT_MS: options.withCoturn ? '60000' : '30000',
           WEBRTC_BROWSER_SOAK_DURATION_SECONDS: '1',
+          WEBRTC_BROWSER_SMOKE_BUILD_VERSION: releaseSha,
+          WEBRTC_BROWSER_SMOKE_EXPECT_RELEASE_SHA: releaseSha,
           WEBRTC_BROWSER_SMOKE_REPORT_PATH: path.join(
             artifactDir,
             options.withCoturn ? 'webrtc-browser-relay.json' : 'webrtc-browser-direct.json',
@@ -728,6 +910,9 @@ async function run(): Promise<void> {
           API_BASE_URL: apiBaseUrl,
           RANKED_ROOT_SMOKE_URL: `${webBaseUrl}/`,
           RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS: '180000',
+          RANKED_ROOT_EXPECT_BUILD_ID: releaseSha,
+          RANKED_ROOT_EXPECT_RULESET_VERSION: 'prototype-2026.02',
+          RANKED_ROOT_EXPECT_BALANCE_PROFILE_ID: 'default',
           RANKED_ROOT_BROWSER_SMOKE_REPORT_PATH: path.join(
             artifactDir,
             options.withCoturn ? 'ranked-root-relay.json' : 'ranked-root-direct.json',
@@ -773,6 +958,12 @@ async function run(): Promise<void> {
 
     await stopManagedProcess(webProcess);
     await stopManagedProcess(apiProcess);
+    try {
+      await stopLocalSteamVerifier(localSteamVerifier);
+    } catch (error) {
+      const cleanupError = error instanceof Error ? error.message : String(error);
+      failure = failure ? `${failure}\nCleanup failure: ${cleanupError}` : cleanupError;
+    }
 
     await recordStep(steps, 'matchmaking process-replacement smoke', () => runCommand(
       'Matchmaking restart smoke',
@@ -804,6 +995,12 @@ async function run(): Promise<void> {
   } finally {
     await stopManagedProcess(webProcess);
     await stopManagedProcess(apiProcess);
+    try {
+      await stopLocalSteamVerifier(localSteamVerifier);
+    } catch (error) {
+      const cleanupError = error instanceof Error ? error.message : String(error);
+      failure = failure ? `${failure}\nCleanup failure: ${cleanupError}` : cleanupError;
+    }
     if (apiProcess) {
       writeFileSync(path.join(artifactDir, 'api.log'), apiProcess.stdout + apiProcess.stderr);
     }
@@ -836,13 +1033,20 @@ async function run(): Promise<void> {
   }
 
   const report = {
-    schemaVersion: 'gw.local-alpha-integration.v4',
+    schemaVersion: 'gw.local-alpha-integration.v5',
     generatedAt: new Date().toISOString(),
     ok: failure === null,
     localOnly: true,
     hostedServicesContacted: false,
     databaseTarget: 'local',
     databaseStartedByRunner: startedPostgres,
+    releaseIdentity: {
+      releaseSha,
+      sourceDirty,
+      deployableEvidence: !sourceDirty,
+      webAttestationPath: path.relative(repositoryRoot, localReleaseAttestationPath),
+      evidencePath: path.relative(repositoryRoot, exactReleaseIdentityReportPath),
+    },
     turnRelay: {
       enabled: true,
       provider: 'local_coturn',
@@ -852,6 +1056,12 @@ async function run(): Promise<void> {
       containerStartedByRunner: coturnStartedByRunner,
       hostPort: turnConfig.hostPort,
       relayPortRange: [turnConfig.relayPortStart, turnConfig.relayPortEnd],
+    },
+    steamTicketVerifier: {
+      provider: 'loopback_fake',
+      upstreamAcceptedRequests: localSteamVerifierAcceptedRequests,
+      rawTicketPersisted: false,
+      realSteamVerified: false,
     },
     runtimeNamespace,
     databaseApplicationName,

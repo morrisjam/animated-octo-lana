@@ -19,6 +19,7 @@ export const BALANCE_CANDIDATE_PRESET_SCHEMA_VERSION = 'gw.balance-candidate-pre
 export const BALANCE_CANDIDATE_PRESET_IDS = [
   'launch_break_agency_v1',
   'post_control_reposition_v1',
+  'ordinary_boost_acceleration_v1',
 ] as const;
 
 export type BalanceCandidatePresetId = (typeof BALANCE_CANDIDATE_PRESET_IDS)[number];
@@ -94,6 +95,25 @@ export const BALANCE_CANDIDATE_PRESETS: readonly BalanceCandidatePreset[] = [
         baselineValue: 0,
         candidateValue: 1,
         label: 'Post-control reposition weight: 0 -> 1',
+      },
+    ],
+  },
+  {
+    schemaVersion: BALANCE_CANDIDATE_PRESET_SCHEMA_VERSION,
+    id: 'ordinary_boost_acceleration_v1',
+    label: 'Ordinary Boost startup V1',
+    description: 'Ramp free ordinary Boost to full speed over 0.12 seconds while preserving its committed direction and sustained speed.',
+    designerQuestion: 'Does the added startup read create punishable misses and spacing choices without making pursuit feel sluggish?',
+    evidence: 'A fixed-seed 144-round Cadet/Veteran screen reduced Blocked Commitment from 18 to 6, Blocked Chase from 26 to 18, and Blocked Separation from 2 to 0. The strict v24 report still fails: shared-agency saturation dominates Commitment and all 144 Chase rounds remain flagged. It created 50 avoided Boost lines versus none at baseline, so retain it only for human feel testing rather than promotion.',
+    status: 'human_review',
+    rules: [
+      {
+        scope: 'global',
+        characterId: null,
+        path: 'ordinaryBoostAccelerationSeconds',
+        baselineValue: 0,
+        candidateValue: 0.12,
+        label: 'Ordinary Boost startup: instant -> 0.12s',
       },
     ],
   },

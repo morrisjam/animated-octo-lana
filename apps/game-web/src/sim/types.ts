@@ -43,9 +43,11 @@ export interface GameTuning {
   playerVelocityDamping: number;
   actionRecoveryControlMultiplier: number;
   combatBoostReacquireDelaySeconds: number;
+  committedLocomotionInputAuthority: number;
   helplessVelocityDamping: number;
   helplessReleaseSpeedRatio: number;
   boostHoldSpeed: number;
+  ordinaryBoostAccelerationSeconds: number;
   superBoostHoldSpeed: number;
   superBoostSteerLerp: number;
   superBoostVelocityBlend: number;
@@ -123,6 +125,7 @@ export interface PlayerState {
   specialStartup: number;
   specialActive: number;
   specialDidResolve: boolean;
+  specialDir: Vec2;
   cool: Cooldowns;
 }
 

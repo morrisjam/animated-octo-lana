@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createSteamTicketVerifier } from './steamAuth';
+import { createSteamTicketVerifier, digestSteamWebApiTicket } from './steamAuth';
 
 const STEAM_ID = '76561198012345678';
 const WEB_TICKET = '00112233445566778899aabbccddeeff';
+const WEB_TICKET_DIGEST = digestSteamWebApiTicket(WEB_TICKET) as string;
 
 test('accepts explicitly enabled development tickets without calling Steam', async () => {
   const fetchImpl = (() => {
@@ -14,7 +15,15 @@ test('accepts explicitly enabled development tickets without calling Steam', asy
   assert.deepEqual(await verifier.verify(`dev-steam:${STEAM_ID}`), {
     ok: true,
     steamUserId: STEAM_ID,
+    ticketDigest: null,
   });
+});
+
+test('fingerprints Web API tickets without retaining hex case', () => {
+  assert.match(WEB_TICKET_DIGEST, /^[0-9a-f]{64}$/);
+  assert.equal(digestSteamWebApiTicket(WEB_TICKET.toUpperCase()), WEB_TICKET_DIGEST);
+  assert.equal(digestSteamWebApiTicket(` ${WEB_TICKET} `), WEB_TICKET_DIGEST);
+  assert.equal(digestSteamWebApiTicket(`dev-steam:${STEAM_ID}`), null);
 });
 
 test('rejects development tickets unless explicitly enabled', async () => {
@@ -53,7 +62,11 @@ test('verifies a web API ticket with Steam and returns its Steam ID', async () =
     fetchImpl,
   });
 
-  assert.deepEqual(await verifier.verify(WEB_TICKET), { ok: true, steamUserId: STEAM_ID });
+  assert.deepEqual(await verifier.verify(WEB_TICKET), {
+    ok: true,
+    steamUserId: STEAM_ID,
+    ticketDigest: WEB_TICKET_DIGEST,
+  });
   assert.ok(requestedUrl);
   assert.equal(requestedUrl.protocol, 'https:');
   assert.equal(requestedUrl.searchParams.get('key'), 'publisher-secret');
@@ -150,7 +163,11 @@ test('permits an explicit loopback verifier for local integration only', async (
     fetchImpl,
   });
 
-  assert.deepEqual(await verifier.verify(WEB_TICKET), { ok: true, steamUserId: STEAM_ID });
+  assert.deepEqual(await verifier.verify(WEB_TICKET), {
+    ok: true,
+    steamUserId: STEAM_ID,
+    ticketDigest: WEB_TICKET_DIGEST,
+  });
   assert.match(requestedUrl, /^http:\/\/127\.0\.0\.1:43210\/ISteamUserAuth\//);
 });
 

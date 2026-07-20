@@ -1,9 +1,11 @@
-export const ROLLBACK_SCHEMA_COMPATIBILITY_SCHEMA_VERSION = 'gw.rollback-schema-compatibility.v1' as const;
+export const ROLLBACK_SCHEMA_COMPATIBILITY_SCHEMA_VERSION = 'gw.rollback-schema-compatibility.v2' as const;
 
 export type RollbackSchemaCompatibilityPhaseName =
+  | 'rollback_dependencies'
   | 'rollback_migrations'
   | 'rollback_pre_upgrade_probe'
   | 'candidate_migrations'
+  | 'rollback_post_upgrade_migrations'
   | 'rollback_post_upgrade_probe';
 
 export interface RollbackSchemaCompatibilityPhase {
@@ -41,7 +43,7 @@ export interface RollbackSchemaCompatibilityReport {
   ok: boolean;
   localOnly: true;
   hostedServicesContacted: false;
-  runtimeDependenciesSource: 'candidate_install';
+  runtimeDependenciesSource: 'rollback_install';
   candidate: RollbackSchemaIdentity & { dirty: boolean };
   rollback: RollbackSchemaIdentity;
   compatibilityExceptions: RollbackSchemaCompatibilityExceptionEvidence[];
@@ -62,9 +64,11 @@ export interface RollbackSchemaCompatibilityExpectation {
 const SHA_REGEX = /^[0-9a-f]{40}$/i;
 const DIGEST_REGEX = /^[0-9a-f]{64}$/i;
 const REQUIRED_PHASES: RollbackSchemaCompatibilityPhaseName[] = [
+  'rollback_dependencies',
   'rollback_migrations',
   'rollback_pre_upgrade_probe',
   'candidate_migrations',
+  'rollback_post_upgrade_migrations',
   'rollback_post_upgrade_probe',
 ];
 
@@ -86,8 +90,8 @@ export function validateRollbackSchemaCompatibilityReport(
   if (report.localOnly !== true || report.hostedServicesContacted !== false) {
     errors.push('report must prove local-only execution without hosted services');
   }
-  if (report.runtimeDependenciesSource !== 'candidate_install') {
-    errors.push('runtime dependency source must be the candidate install');
+  if (report.runtimeDependenciesSource !== 'rollback_install') {
+    errors.push('runtime dependency source must be the rollback install');
   }
   if (report.candidate.sha.toLowerCase() !== expectation.candidateSha.toLowerCase()) {
     errors.push('candidate SHA does not match the expected release');

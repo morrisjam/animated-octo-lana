@@ -38,6 +38,9 @@ async function run(): Promise<void> {
     const sql = await readFile(path.join(migrationsDir, filename), 'utf8');
     return { filename, sql, checksum: computeMigrationChecksum(sql) };
   }));
+  const allowAppliedSuffix = ['1', 'true'].includes(
+    String(process.env.MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX ?? '').trim().toLowerCase(),
+  );
 
   const pool = new Pool({ connectionString });
   try {
@@ -45,7 +48,11 @@ async function run(): Promise<void> {
     const applied = await pool.query<{ filename: string; checksum: string | null }>(
       'SELECT filename, checksum FROM schema_migrations ORDER BY filename',
     );
-    const integrity = validateMigrationIntegrity(migrationFiles, applied.rows);
+    const integrity = validateMigrationIntegrity(
+      migrationFiles,
+      applied.rows,
+      { allowAppliedSuffix },
+    );
     for (const migration of integrity.checksumsToBackfill) {
       await pool.query(
         'UPDATE schema_migrations SET checksum = $2 WHERE filename = $1 AND checksum IS NULL',

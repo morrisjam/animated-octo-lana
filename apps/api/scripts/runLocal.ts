@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { config as loadEnv } from 'dotenv';
 import path from 'node:path';
 import process from 'node:process';
@@ -19,6 +20,10 @@ const childEnv = {
   ...process.env,
   DATABASE_URL: databaseUrl,
   NODE_ENV: 'development',
+  AUTH_SESSION_SECRET:
+    process.env.AUTH_SESSION_SECRET?.trim() || randomBytes(48).toString('base64url'),
+  AUTH_RATE_LIMIT_SECRET:
+    process.env.AUTH_RATE_LIMIT_SECRET?.trim() || randomBytes(48).toString('base64url'),
 };
 
 function runEntry(entry: string): Promise<number> {

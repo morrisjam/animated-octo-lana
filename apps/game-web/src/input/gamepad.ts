@@ -1,4 +1,5 @@
 import type { FrameInput, PlayerFrameInput } from '../sim/types';
+import type { ButtonPlayerBindings, InputBindingStore } from './bindings';
 import { createEmptyFrameInput } from './frame';
 
 const AXIS_DEADZONE = 0.2;
@@ -41,7 +42,11 @@ function clearPlayerInput(output: PlayerFrameInput): void {
   output.breakLaunch = false;
 }
 
-function mapPadToPlayerInput(gamepad: Gamepad, output: PlayerFrameInput): void {
+export function mapPadToPlayerInput(
+  gamepad: Gamepad,
+  bindings: ButtonPlayerBindings,
+  output: PlayerFrameInput,
+): void {
   const leftStickX = readAxis(gamepad.axes[0]);
   const leftStickY = -readAxis(gamepad.axes[1]);
   const dpadX = readDpadAxis(readButton(gamepad, 14), readButton(gamepad, 15));
@@ -52,17 +57,19 @@ function mapPadToPlayerInput(gamepad: Gamepad, output: PlayerFrameInput): void {
 
   output.moveX = moveX;
   output.moveY = moveY;
-  output.boost = readButton(gamepad, 7); // RT
-  output.superBoost = readButton(gamepad, 6); // LT
-  output.special = readButton(gamepad, 2); // X
-  output.launch = readButton(gamepad, 3); // Y
-  output.dunk = readButton(gamepad, 1); // B
-  output.parry = readButton(gamepad, 4); // LB
-  output.breakLaunch = readButton(gamepad, 0); // A
+  output.boost = bindings.boost !== null && readButton(gamepad, bindings.boost);
+  output.superBoost = bindings.superBoost !== null && readButton(gamepad, bindings.superBoost);
+  output.special = bindings.special !== null && readButton(gamepad, bindings.special);
+  output.launch = bindings.launch !== null && readButton(gamepad, bindings.launch);
+  output.dunk = bindings.dunk !== null && readButton(gamepad, bindings.dunk);
+  output.parry = bindings.parry !== null && readButton(gamepad, bindings.parry);
+  output.breakLaunch = bindings.breakLaunch !== null && readButton(gamepad, bindings.breakLaunch);
 }
 
 export class GamepadInput {
   private readonly frameInput = createEmptyFrameInput();
+
+  constructor(private readonly bindingStore: InputBindingStore) {}
 
   getFrameInput(): FrameInput {
     clearPlayerInput(this.frameInput.p1);
@@ -74,15 +81,16 @@ export class GamepadInput {
     }
 
     let connectedCount = 0;
+    const bindings = this.bindingStore.getProfile().gamepad;
     for (let i = 0; i < pads.length; i += 1) {
       const pad = pads[i];
       if (!pad) {
         continue;
       }
       if (connectedCount === 0) {
-        mapPadToPlayerInput(pad, this.frameInput.p1);
+        mapPadToPlayerInput(pad, bindings.P1, this.frameInput.p1);
       } else if (connectedCount === 1) {
-        mapPadToPlayerInput(pad, this.frameInput.p2);
+        mapPadToPlayerInput(pad, bindings.P2, this.frameInput.p2);
         break;
       }
       connectedCount += 1;
@@ -92,6 +100,6 @@ export class GamepadInput {
   }
 }
 
-export function createGamepadInput(): GamepadInput {
-  return new GamepadInput();
+export function createGamepadInput(bindingStore: InputBindingStore): GamepadInput {
+  return new GamepadInput(bindingStore);
 }

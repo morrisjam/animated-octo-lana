@@ -15,7 +15,7 @@ Story: `S1.5` Full state serialise and restore
   - `restoreStateFromSnapshot(snapshot)` validates snapshot root shape and serializable values.
   - Invalid payloads fail with explicit `Invalid state snapshot` errors.
 - Serialized format:
-  - Versioned envelope `{ version, state }` with `STATE_SNAPSHOT_VERSION` (`v4` currently).
+  - Versioned envelope `{ version, state }` with `STATE_SNAPSHOT_VERSION` (`v5` currently).
   - Versions `v1` through `v3` and direct legacy `GameState` JSON payloads remain readable.
   - Missing zero-default flow fields, including the combat-boost lock timer, restore to neutral values.
 

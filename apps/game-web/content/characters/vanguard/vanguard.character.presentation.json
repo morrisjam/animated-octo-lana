@@ -5,13 +5,13 @@
     "id": "character_vanguard_animset",
     "atlas": {
       "id": "character_vanguard_animset",
-      "src": "/assets/characters/vanguard/vanguard-alpha-atlas.svg?v=1",
-      "contentType": "image/svg+xml",
+      "src": "/assets/characters/vanguard/vanguard-alpha-atlas-v2.png?v=2",
+      "contentType": "image/png",
       "widthPixels": 512,
       "heightPixels": 256,
       "readiness": "alpha",
       "budget": {
-        "estimatedBytes": 12288,
+        "estimatedBytes": 160000,
         "estimatedTextureBytes": 524288
       },
       "columns": 4,
@@ -56,13 +56,13 @@
   },
   "portrait": {
     "id": "character_vanguard_portrait",
-    "src": "/assets/characters/vanguard/vanguard-alpha-portrait.svg?v=1",
-    "contentType": "image/svg+xml",
+    "src": "/assets/characters/vanguard/vanguard-alpha-portrait-v2.png?v=2",
+    "contentType": "image/png",
     "widthPixels": 256,
     "heightPixels": 256,
     "readiness": "alpha",
     "budget": {
-      "estimatedBytes": 8192,
+      "estimatedBytes": 70000,
       "estimatedTextureBytes": 262144
     }
   },

@@ -11,8 +11,12 @@ Bind combat events from simulation snapshots to VFX presets that can be tuned fr
 
 ## Bound combat events
 - `boost`
+- `super_boost`
 - `launch`
+- `clash`
 - `parry`
+- `special`
+- `break`
 - `projectile`
 - `dunk`
 
@@ -34,3 +38,7 @@ Each preset can define:
 - Render loop emits VFX events each frame and updates transient effect lifetimes.
 - Timeline rewinds (round reset, replay seek) clear active transient VFX safely.
 - Audio cue data is emitted as typed combat audio events and routed by the shared audio event bus (`src/view/audio`).
+
+## Action readability overlay
+Accepted fighter actions also drive persistent, player-centred action halos in `apps/game-web/src/view/actionReadability.ts`.
+The colour and silhouette are action-specific rather than player-specific, and the Analysis HUD displays the same key plus each fighter's live accepted action and phase. A launched fighter is labelled `Launched`; the launch halo remains reserved for the fighter performing Launch.

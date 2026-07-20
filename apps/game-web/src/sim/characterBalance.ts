@@ -1,9 +1,15 @@
-import { CHARACTER_BY_ID, type CharacterId, type CharacterStats } from './characters';
+import {
+  CHARACTER_BY_ID,
+  type CharacterAiProfile,
+  type CharacterId,
+  type CharacterStats,
+} from './characters';
 import { fingerprintDeterministicValue } from './fingerprint';
 import type { MoveFrameData, SpecialMoveData } from './moveData';
 
 export interface CharacterBalanceConfig {
   stats: CharacterStats;
+  ai: CharacterAiProfile;
   moves: MoveFrameData;
 }
 
@@ -38,6 +44,7 @@ function cloneMoveFrameData(moves: MoveFrameData): MoveFrameData {
 export function cloneCharacterBalanceConfig(config: CharacterBalanceConfig): CharacterBalanceConfig {
   return {
     stats: { ...config.stats },
+    ai: { ...config.ai },
     moves: cloneMoveFrameData(config.moves),
   };
 }
@@ -47,7 +54,11 @@ export function createCharacterBalanceConfig(characterId: CharacterId): Characte
   if (!character) {
     throw new Error(`Unknown character balance id "${characterId}".`);
   }
-  return cloneCharacterBalanceConfig({ stats: character.stats, moves: character.moves });
+  return cloneCharacterBalanceConfig({
+    stats: character.stats,
+    ai: character.ai,
+    moves: character.moves,
+  });
 }
 
 export function cloneCharacterBalanceOverrides(overrides: CharacterBalanceOverrides | undefined): CharacterBalanceOverrides {
@@ -84,6 +95,7 @@ export function sanitiseCharacterBalanceConfig(
   const base = createCharacterBalanceConfig(characterId);
   const root = asRecord(value);
   const stats = asRecord(root.stats);
+  const ai = asRecord(root.ai);
   const moves = asRecord(root.moves);
   const launch = asRecord(moves.launch);
   const dunk = asRecord(moves.dunk);
@@ -106,6 +118,25 @@ export function sanitiseCharacterBalanceConfig(
       ? readNumber(stats[key], base.stats[key], 0, 3)
       : readNumber(stats[key], base.stats[key], 0.1, 5);
   }
+  config.ai.neutralApproachMultiplier = readNumber(
+    ai.neutralApproachMultiplier,
+    base.ai.neutralApproachMultiplier,
+    0,
+    2,
+  );
+  config.ai.neutralBoostDistanceOffset = readNumber(
+    ai.neutralBoostDistanceOffset,
+    base.ai.neutralBoostDistanceOffset,
+    0,
+    60,
+  );
+  config.ai.postControlSpacingFrames = readNumber(
+    ai.postControlSpacingFrames,
+    base.ai.postControlSpacingFrames,
+    0,
+    120,
+    true,
+  );
   config.moves.launch.startupFrames = readNumber(launch.startupFrames, base.moves.launch.startupFrames, 0, 600, true);
   config.moves.launch.activeFrames = readNumber(launch.activeFrames, base.moves.launch.activeFrames, 1, 600, true);
   config.moves.launch.recoveryOnHitFrames = readNumber(launch.recoveryOnHitFrames, base.moves.launch.recoveryOnHitFrames, 0, 1200, true);

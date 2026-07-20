@@ -7,6 +7,7 @@ import {
   type AiBehaviorTuning,
   type AiDifficultyId,
   type AiDecisionTrace,
+  type AiTickResult,
   type AiPursuitPolicyId,
   type AiRecoveryPolicyId,
 } from './ai';
@@ -34,12 +35,13 @@ import {
   step,
   type SimulationActionStart,
   type SimulationCombatBoostLockFrame,
+  type SimulationControlReturnReset,
   type SimulationLaunchClash,
 } from './sim';
 import type { FrameInput, GameRules, GameTuning, PlayerId, PlayersById } from './types';
 
 export const AI_ROUND_FIXED_DT = 1 / 60;
-export const AI_ROUND_DECISION_FLOW_SCHEMA_VERSION = 'gw.ai-round-decision-flow.v3';
+export const AI_ROUND_DECISION_FLOW_SCHEMA_VERSION = 'gw.ai-round-decision-flow.v5';
 
 export interface AiRoundDecisionFlowPlayerSummary {
   tacticalRepositionOpportunityFrames: number;
@@ -48,6 +50,15 @@ export interface AiRoundDecisionFlowPlayerSummary {
   tacticalRepositionFrames: number;
   postControlCounterstepWindows: number;
   postControlCounterstepFrames: number;
+  postControlChaseLockWindows: number;
+  postControlChaseLockFrames: number;
+  postControlBoostSuppressionFrames: number;
+  postControlDashSuppressionFrames: number;
+  postControlChaseLockConsumptions: number;
+  postControlRepeatDashWindows: number;
+  postControlRepeatDashWeightFrames: number;
+  postControlRepeatDashConsumptions: number;
+  postControlRepeatDashSelections: number;
   combatBoostLockFrames: number;
   combatBoostDelayFrames: number;
   combatBoostHeldInputFrames: number;
@@ -117,6 +128,15 @@ function createDecisionFlowPlayerSummary(): AiRoundDecisionFlowPlayerSummary {
     tacticalRepositionFrames: 0,
     postControlCounterstepWindows: 0,
     postControlCounterstepFrames: 0,
+    postControlChaseLockWindows: 0,
+    postControlChaseLockFrames: 0,
+    postControlBoostSuppressionFrames: 0,
+    postControlDashSuppressionFrames: 0,
+    postControlChaseLockConsumptions: 0,
+    postControlRepeatDashWindows: 0,
+    postControlRepeatDashWeightFrames: 0,
+    postControlRepeatDashConsumptions: 0,
+    postControlRepeatDashSelections: 0,
     combatBoostLockFrames: 0,
     combatBoostDelayFrames: 0,
     combatBoostHeldInputFrames: 0,
@@ -147,8 +167,11 @@ function recordDecisionFlow(
   summary: AiRoundDecisionFlowSummary,
   previousRepositionEligibility: PlayersById<boolean>,
   previousCounterstepActive: PlayersById<boolean>,
+  previousChaseLockActive: PlayersById<boolean>,
+  previousRepeatDashPending: PlayersById<boolean>,
   playerId: PlayerId,
   decision: AiDecisionTrace,
+  diagnostics: AiTickResult['diagnostics'],
 ): void {
   const player = summary.players[playerId];
   const repositionEligible = decision.candidates.reposition.eligible;
@@ -171,8 +194,40 @@ function recordDecisionFlow(
       player.postControlCounterstepWindows += 1;
     }
   }
+  if (diagnostics.postControlChaseLockActive) {
+    player.postControlChaseLockFrames += 1;
+    if (!previousChaseLockActive[playerId]) {
+      player.postControlChaseLockWindows += 1;
+    }
+  }
+  if (diagnostics.postControlBoostSuppressed) {
+    player.postControlBoostSuppressionFrames += 1;
+  }
+  if (diagnostics.postControlDashSuppressed) {
+    player.postControlDashSuppressionFrames += 1;
+  }
+  if (diagnostics.postControlChaseLockConsumed) {
+    player.postControlChaseLockConsumptions += 1;
+  }
+  if (
+    diagnostics.postControlRepeatDashPending
+    && !previousRepeatDashPending[playerId]
+  ) {
+    player.postControlRepeatDashWindows += 1;
+  }
+  if (diagnostics.postControlRepeatDashWeightApplied) {
+    player.postControlRepeatDashWeightFrames += 1;
+  }
+  if (diagnostics.postControlRepeatDashConsumed) {
+    player.postControlRepeatDashConsumptions += 1;
+  }
+  if (diagnostics.postControlRepeatDashSelected) {
+    player.postControlRepeatDashSelections += 1;
+  }
   previousRepositionEligibility[playerId] = repositionEligible;
   previousCounterstepActive[playerId] = counterstepActive;
+  previousChaseLockActive[playerId] = diagnostics.postControlChaseLockActive;
+  previousRepeatDashPending[playerId] = diagnostics.postControlRepeatDashPending;
 }
 
 export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimulationResult {
@@ -207,6 +262,8 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
   };
   const previousRepositionEligibility: PlayersById<boolean> = { P1: false, P2: false };
   const previousCounterstepActive: PlayersById<boolean> = { P1: false, P2: false };
+  const previousChaseLockActive: PlayersById<boolean> = { P1: false, P2: false };
+  const previousRepeatDashPending: PlayersById<boolean> = { P1: false, P2: false };
 
   let p1Controller = createAiController({
     seed: deriveStableAiSeed(setSeed, options.difficulty, options.p1, roundIndex),
@@ -234,15 +291,21 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
       decisionFlow,
       previousRepositionEligibility,
       previousCounterstepActive,
+      previousChaseLockActive,
+      previousRepeatDashPending,
       'P1',
       p1AiTick.decision,
+      p1AiTick.diagnostics,
     );
     recordDecisionFlow(
       decisionFlow,
       previousRepositionEligibility,
       previousCounterstepActive,
+      previousChaseLockActive,
+      previousRepeatDashPending,
       'P2',
       p2AiTick.decision,
+      p2AiTick.diagnostics,
     );
     const frameInput: FrameInput = {
       p1: { ...p1AiTick.input },
@@ -251,17 +314,26 @@ export function simulateAiRound(options: AiRoundSimulationOptions): AiRoundSimul
     const acceptedActionStarts: SimulationActionStart[] = [];
     const launchClashes: SimulationLaunchClash[] = [];
     const combatBoostLocks: SimulationCombatBoostLockFrame[] = [];
+    const controlReturnResets: SimulationControlReturnReset[] = [];
     step(state, frameInput, fixedDt, {
       onActionStart: (event) => acceptedActionStarts.push(event),
       onLaunchClash: (event) => launchClashes.push(event),
       onCombatBoostLockFrame: (event) => combatBoostLocks.push(event),
+      onControlReturnReset: (event) => controlReturnResets.push(event),
     });
     recordCombatBoostLocks(decisionFlow, combatBoostLocks);
     aiDecisionTelemetry?.recordFrame(frame, {
       P1: p1AiTick.decision,
       P2: p2AiTick.decision,
     });
-    telemetry.recordFrame(frameInput, state, fixedDt, acceptedActionStarts, launchClashes);
+    telemetry.recordFrame(
+      frameInput,
+      state,
+      fixedDt,
+      acceptedActionStarts,
+      launchClashes,
+      controlReturnResets,
+    );
     inputTimeline?.push(frameInput);
     expectedChecksums?.push(computeStateChecksum(state));
     if (state.winner) {

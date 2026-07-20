@@ -83,10 +83,34 @@ describe('AI flow designer brief', () => {
     const first = summary('cadet', 'vanguard', 'duelist', 10);
     first.stages.commitment = aggregate(10, 0, 8);
     first.representatives.commitment = representative('watch', 'Commitments repeat.', ['launchWeightScale']);
-    first.stages.chase = aggregate(10, 1, 7);
+    first.stages.chase = {
+      ...aggregate(10, 1, 7),
+      issueReasons: [{
+        reasonId: 'chase.immediate_relaunch',
+        blockedRounds: 1,
+        watchRounds: 7,
+        rounds: 8,
+        issueRatio: 0.8,
+      }],
+    };
     first.representatives.chase = representative('blocked', 'Control returns become launches.', ['neutralApproachScale']);
     const second = summary('cadet', 'duelist', 'vanguard', 10);
-    second.stages.chase = aggregate(10, 1, 8);
+    second.stages.chase = {
+      ...aggregate(10, 1, 8),
+      issueReasons: [{
+        reasonId: 'chase.immediate_relaunch',
+        blockedRounds: 1,
+        watchRounds: 5,
+        rounds: 6,
+        issueRatio: 0.6,
+      }, {
+        reasonId: 'chase.control_return_reset_failure',
+        blockedRounds: 0,
+        watchRounds: 3,
+        rounds: 3,
+        issueRatio: 0.3,
+      }],
+    };
     second.representatives.chase = representative('blocked', 'Chase never creates agency.', ['neutralApproachScale']);
 
     const brief = buildAiFlowDesignerBrief([first, second]);
@@ -117,6 +141,19 @@ describe('AI flow designer brief', () => {
       watchRounds: 15,
       observedRounds: 3,
       reachedRounds: 20,
+      issueReasons: [{
+        reasonId: 'chase.immediate_relaunch',
+        blockedRounds: 2,
+        watchRounds: 12,
+        rounds: 14,
+        issueRatio: 0.7,
+      }, {
+        reasonId: 'chase.control_return_reset_failure',
+        blockedRounds: 0,
+        watchRounds: 3,
+        rounds: 3,
+        issueRatio: 0.15,
+      }],
     });
   });
 

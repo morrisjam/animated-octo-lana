@@ -12,7 +12,10 @@ import { assertSafeSmokeTarget } from '../../api/scripts/smokeTargetGuard';
 import {
   LOCAL_RANKED_ROOT_SMOKE_INBOUND_DELAY_POLLS,
   LOCAL_RANKED_ROOT_SMOKE_SCHEMA_VERSION,
+  assertLocalRankedReleaseIdentity,
+  assertLocalRankedTransportSelection,
   resolveLocalRankedRootSmokeConfig,
+  type LocalRankedReleaseIdentityExpectation,
   type LocalRankedRootSmokeSnapshot,
 } from '../src/dev/localRankedRootSmoke';
 
@@ -30,7 +33,7 @@ interface BrowserClient {
 }
 
 interface RankedRootBrowserSmokeReport {
-  schemaVersion: 'gw.ranked-root-browser-smoke.v4';
+  schemaVersion: 'gw.ranked-root-browser-smoke.v5';
   ok: boolean;
   generatedAt: string;
   rootUrl: string;
@@ -45,6 +48,8 @@ interface RankedRootBrowserSmokeReport {
   proofDigest?: string;
   proofRoundCount?: number;
   proofFrameCount?: number;
+  inputCommitmentCounts?: number[];
+  attestedInputParticipants?: number;
   replayId?: string;
   replayDigest?: string;
   rollbackApplications?: number[];
@@ -461,6 +466,7 @@ function buildFinalRecoveryEvidence(
 function validateFinalSnapshots(
   snapshots: LocalRankedRootSmokeSnapshot[],
   forceRelay: boolean,
+  releaseIdentity: LocalRankedReleaseIdentityExpectation,
 ): {
   sessionId: string;
   accountIds: string[];
@@ -469,6 +475,8 @@ function validateFinalSnapshots(
   proofDigest: string;
   proofRoundCount: number;
   proofFrameCount: number;
+  inputCommitmentCounts: number[];
+  attestedInputParticipants: number;
   replayId: string;
   replayDigest: string;
   rollbackApplications: number[];
@@ -495,6 +503,7 @@ function validateFinalSnapshots(
       `Client ${index + 1} did not run the production release feature profile.`,
     );
     invariant(snapshot.releaseProfile.buildId.length > 0, `Client ${index + 1} has no release build id.`);
+    assertLocalRankedReleaseIdentity(snapshot.releaseProfile, releaseIdentity);
     invariant(snapshot.forceRelayRequested === forceRelay, `Client ${index + 1} relay intent changed.`);
     invariant(snapshot.account.accountId, `Client ${index + 1} has no signed account id.`);
     invariant(snapshot.account.signedAccessToken, `Client ${index + 1} has no signed bearer session.`);
@@ -507,6 +516,15 @@ function validateFinalSnapshots(
       `Client ${index + 1} session resolved for ${snapshot.session.resolvedReason ?? 'no reason'}.`,
     );
     invariant(snapshot.match.proof, `Client ${index + 1} did not build a ranked proof.`);
+    invariant(snapshot.match.inputCommitments, `Client ${index + 1} has no input commitment evidence.`);
+    invariant(
+      snapshot.match.inputCommitments.queuedChunks === 0
+      && snapshot.match.inputCommitments.failed === false
+      && snapshot.match.inputCommitments.acknowledgedChunks > 0
+      && snapshot.match.inputCommitments.committedFrames === snapshot.match.proof.frameCount
+      && /^[0-9a-f]{64}$/.test(snapshot.match.inputCommitments.finalChainDigest ?? ''),
+      `Client ${index + 1} did not flush a complete ranked input commitment chain.`,
+    );
     invariant(snapshot.match.result.status === 'accepted', `Client ${index + 1} result was not accepted.`);
     invariant(snapshot.match.result.persistedRead, `Client ${index + 1} did not read the persisted result.`);
     invariant(
@@ -514,6 +532,19 @@ function validateFinalSnapshots(
       `Client ${index + 1} result was not proof-consensus settlement.`,
     );
     invariant(snapshot.match.result.proofDigest, `Client ${index + 1} has no persisted proof digest.`);
+    invariant(
+      snapshot.match.result.inputAttestation?.status === 'match_verified'
+      && snapshot.match.result.inputAttestation.schemaVersion === 'gw.ranked-input-attestation.v1'
+      && snapshot.match.result.inputAttestation.participants.length === 2,
+      `Client ${index + 1} result has no two-participant input attestation.`,
+    );
+    const localInputAttestation = snapshot.match.result.inputAttestation.participants
+      .find(({ accountId }) => accountId === snapshot.match?.localAccountId);
+    invariant(
+      localInputAttestation?.committedFrameCount === snapshot.match.proof.frameCount
+      && localInputAttestation.finalChainDigest === snapshot.match.inputCommitments.finalChainDigest,
+      `Client ${index + 1} persisted attestation does not match its observed local chain.`,
+    );
     invariant(snapshot.match.replay.status === 'persisted', `Client ${index + 1} replay was not persisted.`);
     invariant(snapshot.match.replay.replayId, `Client ${index + 1} has no persisted replay id.`);
     invariant(snapshot.match.replay.digest, `Client ${index + 1} has no canonical replay digest.`);
@@ -554,17 +585,12 @@ function validateFinalSnapshots(
     );
     invariant(snapshot.progression?.rating !== null, `Client ${index + 1} has no persisted rating snapshot.`);
 
-    const expectedPath = forceRelay ? 'relay' : 'direct';
-    const expectedPolicy = forceRelay ? 'relay' : 'all';
-    invariant(
-      snapshot.match.connectionPath === expectedPath,
-      `Client ${index + 1} used ${snapshot.match.connectionPath}; expected ${expectedPath}.`,
-    );
-    invariant(
-      snapshot.match.iceTransportPolicy === expectedPolicy,
-      `Client ${index + 1} used ICE policy ${snapshot.match.iceTransportPolicy}; expected ${expectedPolicy}.`,
-    );
-    invariant(snapshot.match.relayAvailable, `Client ${index + 1} had no release-required relay fallback.`);
+    assertLocalRankedTransportSelection({
+      connectionPath: snapshot.match.connectionPath,
+      iceTransportPolicy: snapshot.match.iceTransportPolicy,
+      relayAvailable: snapshot.match.relayAvailable,
+      forceRelay,
+    }, `Client ${index + 1}`);
     invariant(
       snapshot.match.turnCredentialMode === 'time_limited',
       `Client ${index + 1} did not receive time-limited TURN credentials.`,
@@ -607,6 +633,10 @@ function validateFinalSnapshots(
   invariant(
     firstMatch.result.proofDigest === secondMatch.result.proofDigest,
     'Persisted peer proof digests did not match.',
+  );
+  invariant(
+    JSON.stringify(firstMatch.result.inputAttestation) === JSON.stringify(secondMatch.result.inputAttestation),
+    'Persisted peer input attestations did not match.',
   );
   invariant(firstMatch.replay.replayId === secondMatch.replay.replayId, 'Peers did not resolve one replay archive row.');
   invariant(firstMatch.replay.digest === secondMatch.replay.digest, 'Canonical peer replay digests did not match.');
@@ -661,6 +691,11 @@ function validateFinalSnapshots(
     proofDigest: firstMatch.result.proofDigest as string,
     proofRoundCount: firstMatch.proof.roundCount,
     proofFrameCount: firstMatch.proof.frameCount,
+    inputCommitmentCounts: [
+      firstMatch.inputCommitments?.acknowledgedChunks ?? 0,
+      secondMatch.inputCommitments?.acknowledgedChunks ?? 0,
+    ],
+    attestedInputParticipants: firstMatch.result.inputAttestation?.participants.length ?? 0,
     replayId: firstMatch.replay.replayId as string,
     replayDigest: firstMatch.replay.digest as string,
     rollbackApplications: [
@@ -711,6 +746,11 @@ async function run(): Promise<void> {
     'RANKED_ROOT_BROWSER_SMOKE_FORCE_RELAY',
     process.env.RANKED_ROOT_BROWSER_SMOKE_FORCE_RELAY,
   );
+  const releaseIdentity: LocalRankedReleaseIdentityExpectation = {
+    buildId: String(process.env.RANKED_ROOT_EXPECT_BUILD_ID ?? '').trim(),
+    rulesetVersion: String(process.env.RANKED_ROOT_EXPECT_RULESET_VERSION ?? '').trim(),
+    balanceProfileId: String(process.env.RANKED_ROOT_EXPECT_BALANCE_PROFILE_ID ?? '').trim(),
+  };
   const timeoutMs = parseTimeout(process.env.RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS);
   const executablePath = resolveBrowserExecutable();
   const outputPath = resolve(
@@ -823,7 +863,7 @@ async function run(): Promise<void> {
         && snapshot.progression?.rating !== null
       )),
     );
-    const evidence = validateFinalSnapshots(finalSnapshots, forceRelay);
+    const evidence = validateFinalSnapshots(finalSnapshots, forceRelay, releaseIdentity);
     const unexpectedConsoleErrors = clients.flatMap((client, clientIndex) => (
       client.consoleMessages
         .filter((entry) => (
@@ -840,7 +880,7 @@ async function run(): Promise<void> {
     }
 
     const report: RankedRootBrowserSmokeReport = {
-      schemaVersion: 'gw.ranked-root-browser-smoke.v4',
+      schemaVersion: 'gw.ranked-root-browser-smoke.v5',
       ok: true,
       generatedAt: new Date().toISOString(),
       rootUrl: rootUrl.toString(),
@@ -862,7 +902,7 @@ async function run(): Promise<void> {
       readSnapshot(client.page).catch(() => null)
     )));
     const report: RankedRootBrowserSmokeReport = {
-      schemaVersion: 'gw.ranked-root-browser-smoke.v4',
+      schemaVersion: 'gw.ranked-root-browser-smoke.v5',
       ok: false,
       generatedAt: new Date().toISOString(),
       rootUrl: rootUrl.toString(),

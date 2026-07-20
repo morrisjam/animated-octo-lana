@@ -17,6 +17,7 @@ export const DEFAULT_RANKED_TERMINAL_DECISION_RETRY_MAX_SECONDS = 5 * 60;
 export const MAX_RANKED_TERMINAL_DECISION_RETRY_SECONDS = 24 * 60 * 60;
 export const MAX_RANKED_TERMINAL_DECISION_REASON_BYTES = 256;
 export const MAX_RANKED_TERMINAL_DECISION_LAST_ERROR_BYTES = 2_048;
+export const RANKED_SESSION_TRANSACTION_LOCK_SQL = 'SELECT pg_advisory_xact_lock(hashtext($1))';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_RETRY_EXPONENT = 30;
@@ -341,9 +342,12 @@ export class RankedTerminalDecisionStore {
     );
   }
 
-  public async getBySession(sessionId: string): Promise<RankedTerminalDecision | null> {
+  public async getBySession(
+    sessionId: string,
+    client: RankedTerminalDecisionQueryClient = this.database,
+  ): Promise<RankedTerminalDecision | null> {
     const normalisedSessionId = normaliseUuid(sessionId, 'sessionId');
-    const result = await this.database.query(
+    const result = await client.query(
       `
       SELECT
         session_id,
@@ -392,6 +396,7 @@ export async function enqueueRankedTerminalDecision(
   input: EnqueueRankedTerminalDecisionInput,
 ): Promise<RankedTerminalDecision> {
   const decision = normaliseEnqueueInput(input);
+  await client.query(RANKED_SESSION_TRANSACTION_LOCK_SQL, [decision.sessionId]);
   const insertResult = await client.query(
     `
     INSERT INTO ranked_terminal_decisions(

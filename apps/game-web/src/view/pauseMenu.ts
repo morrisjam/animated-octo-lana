@@ -66,9 +66,7 @@ import type { MatchTelemetrySummary } from '../sim/matchTelemetry';
 import {
   attachBalanceReplayCandidate,
   createBalanceReplayComparison,
-  selectBalanceReplaySample,
   type BalanceReplayComparison,
-  type BalanceReplayVariant,
 } from '../sim/balanceReplayComparison';
 import type { ReplayPayload } from '../sim/replay';
 import {
@@ -82,13 +80,58 @@ import {
 } from '../sim/characterBalance';
 import { CHARACTER_BY_ID, type CharacterId } from '../sim/characters';
 import type { GameTuning, PlayerId, PlayersById } from '../sim/types';
+import {
+  INPUT_COMMAND_LABELS,
+  formatGamepadBinding,
+  formatKeyboardBinding,
+  formatMouseBinding,
+  rebindGamepad,
+  rebindKeyboard,
+  rebindMouse,
+  resetAllInputBindings,
+  resetInputBindingDevice,
+} from '../input/bindingEditor';
+import {
+  GAMEPLAY_ACTIONS,
+  KEYBOARD_COMMANDS,
+  isGamepadButtonAllowed,
+  isKeyboardCodeAllowed,
+  type GameplayAction,
+  type InputBindingStore,
+  type InputDevice,
+  type KeyboardCommand,
+} from '../input/bindings';
 import type { AudioSettings, DynamicRangeMode } from './audio/settings';
+
+export function formatOrdinaryBoostCounterplay(
+  flow: BalanceLabFlowModel['ordinaryBoostCounterplay'],
+): string {
+  if (!flow) {
+    return 'unavailable in historical sample';
+  }
+  if (flow.opportunities === 0) {
+    return '--';
+  }
+  const formatPlayer = (playerId: PlayerId): string => {
+    const player = flow.players[playerId];
+    if (player.opportunities === 0) {
+      return `${playerId} --`;
+    }
+    const responseDelay = player.averageFirstResponseSeconds === null
+      ? '--'
+      : `${player.averageFirstResponseSeconds.toFixed(2)}s`;
+    return `${playerId} ${player.opportunities} reads | answered ${player.firstResponses} (${Math.round(player.responseCoverageRatio * 100)}%) | SB ${player.targetSuperBoostResponses} | contact ${player.outcomes.contact} | conversion ${player.outcomes.combat_conversion} | pass ${player.outcomes.clean_pass} | response ${responseDelay} avg`;
+  };
+  return `${formatPlayer('P1')} || ${formatPlayer('P2')}`;
+}
 
 export interface PauseMenuOptions {
   getTuning(): GameTuning;
   setTuning(tuning: GameTuning): void;
   getAudioSettings(): AudioSettings;
   setAudioSettings(settings: AudioSettings): void;
+  inputBindings?: InputBindingStore;
+  onInputBindingsChange?(): void;
   enableDebugTab?: boolean;
   canExportTrainingTelemetry?(): boolean;
   onExportTrainingTelemetry?(): Promise<string> | string;
@@ -98,11 +141,7 @@ export interface PauseMenuOptions {
   onReviewAiRound?(request?: AiRoundReviewRequest): void;
   getAiRoundReplay?(): ReplayPayload | null;
   getBalanceSampleSequence?(): number;
-  onReviewAiReplaySample?(
-    payload: ReplayPayload,
-    request: AiRoundReviewRequest,
-    label: string,
-  ): void;
+  onReviewAiReplayComparison?(comparison: BalanceReplayComparison): void;
   onRestartTraining?(): void;
   balanceProfiles?: readonly BalanceProfile[];
   balanceCandidatePresets?: readonly BalanceCandidatePreset[];
@@ -201,12 +240,14 @@ export const AI_BEHAVIOR_TUNING_FIELDS: readonly AiBehaviorTuningField[] = [
   { key: 'opponentControlReturnObserveFrames', section: 'Commitment and defense', label: 'Opponent Recovery Respect Frames', step: 1, min: 0, max: 120 },
   { key: 'postClashSpacingFrames', section: 'Pursuit and spacing', label: 'Post-Clash Spacing Frames', step: 1, min: 0, max: 240 },
   { key: 'postRecoverySpacingFrames', section: 'Pursuit and spacing', label: 'Post-Recovery Spacing Frames', step: 1, min: 0, max: 240 },
-  { key: 'postControlSteeringFrames', section: 'Pursuit and spacing', label: 'Post-Control Steering Frames', step: 1, min: 0, max: 120 },
+  { key: 'postControlSteeringFrames', section: 'Pursuit and spacing', label: 'Post-Control Bait / Read Frames', step: 1, min: 0, max: 120 },
   { key: 'postControlCounterstepScale', section: 'Pursuit and spacing', label: 'Post-Control Counterstep Scale', step: 0.05, min: 0, max: 1 },
+  { key: 'postControlChaseLockFrames', section: 'Pursuit and spacing', label: 'Post-Control Chase Lock Frames', step: 1, min: 0, max: 120 },
   { key: 'postEventRetreatChanceOffset', section: 'Pursuit and spacing', label: 'Post-Event Retreat Chance Offset', step: 0.05, min: -1, max: 1 },
   { key: 'postRecoverySuperBoostChance', section: 'Pursuit and spacing', label: 'Recovery Escape Super Boost Chance', step: 0.05, min: 0, max: 1 },
   { key: 'reactionDelayScale', section: 'Commitment and defense', label: 'Reaction Delay Scale', step: 0.05, min: 0.25, max: 4 },
   { key: 'postCommitmentDecisionScale', section: 'Commitment and defense', label: 'Post-Commitment Read Scale', step: 0.1, min: 0, max: 4 },
+  { key: 'postControlRepeatDashWeightScale', section: 'Commitment and defense', label: 'Package-Declared Movement-Dash Repeat Weight After Control Return', step: 0.05, min: 0, max: 1 },
   { key: 'errorRateScale', section: 'Commitment and defense', label: 'Error Rate Scale', step: 0.05, min: 0, max: 4 },
   { key: 'riskAppetiteOffset', section: 'Commitment and defense', label: 'Risk Appetite Offset', step: 0.05, min: -0.8, max: 0.8 },
   { key: 'postRecoveryDefenseFrames', section: 'Commitment and defense', label: 'Post-Control Disadvantage Defense Frames', step: 1, min: 0, max: 120 },
@@ -215,6 +256,7 @@ export const AI_BEHAVIOR_TUNING_FIELDS: readonly AiBehaviorTuningField[] = [
   { key: 'committedLaunchGuardChance', section: 'Commitment and defense', label: 'Committed Launch Guard Chance', step: 0.05, min: 0, max: 1 },
   { key: 'finishPursuitReachScale', section: 'Pursuit and spacing', label: 'Finish Dunk Pursuit Reach Scale', step: 0.05, min: 0, max: 2 },
   { key: 'repositionWeightScale', section: 'Pursuit and spacing', label: 'Tactical Reposition Weight', step: 0.05, min: 0, max: 4 },
+  { key: 'exchangeRepositionWeightScale', section: 'Pursuit and spacing', label: 'Between-Exchange Reposition Weight', step: 0.05, min: 0, max: 4 },
   { key: 'launchWeightScale', section: 'Commitment and defense', label: 'Launch Commitment Weight', step: 0.05, min: 0, max: 4 },
   { key: 'specialWeightScale', section: 'Commitment and defense', label: 'Special Commitment Weight', step: 0.05, min: 0, max: 4 },
   { key: 'dunkWeightScale', section: 'Commitment and defense', label: 'Dunk Commitment Weight', step: 0.05, min: 0, max: 4 },
@@ -228,7 +270,7 @@ const AI_BEHAVIOR_FIELD_BY_KEY = new Map(
 
 interface CharacterTuningField {
   id: string;
-  section: 'Archetype' | 'Launch and finish' | 'Defense and movement' | 'Special';
+  section: 'Archetype' | 'AI neutral pacing' | 'Launch and finish' | 'Defense and movement' | 'Special';
   label: string;
   step: number;
   min: number;
@@ -239,6 +281,13 @@ interface CharacterTuningField {
 const TUNING_FIELDS: TuningField[] = [
   { key: 'playerMoveAccel', label: 'Movement Speed', step: 1, min: 1, max: 400 },
   { key: 'boostHoldSpeed', label: 'Boost Speed', step: 1, min: 1, max: 300 },
+  {
+    key: 'ordinaryBoostAccelerationSeconds',
+    label: 'Boost Startup (0 = Instant)',
+    step: 1 / 60,
+    min: 0,
+    max: 1,
+  },
   { key: 'superBoostHoldSpeed', label: 'Super Boost Speed', step: 1, min: 1, max: 300 },
   { key: 'launchBasePower', label: 'Launch Base Speed', step: 1, min: 1, max: 400 },
   { key: 'launchChainBonus', label: 'Launch Chain Bonus', step: 1, min: 0, max: 100 },
@@ -262,6 +311,13 @@ const TUNING_FIELDS: TuningField[] = [
     key: 'combatBoostReacquireDelaySeconds',
     label: 'Combat Boost Lock Delay (0 = Off)',
     step: 1 / 60,
+    min: 0,
+    max: 1,
+  },
+  {
+    key: 'committedLocomotionInputAuthority',
+    label: 'Committed Boost/Dash Input Authority (0 = Target Lock)',
+    step: 0.05,
     min: 0,
     max: 1,
   },
@@ -293,10 +349,12 @@ const GLOBAL_TUNING_SECTIONS: ReadonlyArray<{
     keys: [
       'playerMoveAccel',
       'boostHoldSpeed',
+      'ordinaryBoostAccelerationSeconds',
       'superBoostHoldSpeed',
       'playerVelocityDamping',
       'actionRecoveryControlMultiplier',
       'combatBoostReacquireDelaySeconds',
+      'committedLocomotionInputAuthority',
       'superBoostSteerLerp',
       'superBoostVelocityBlend',
       'superBoostWaveAmplitude',
@@ -360,6 +418,9 @@ const CHARACTER_TUNING_FIELDS: CharacterTuningField[] = [
   { id: 'special-fuel-multiplier', section: 'Archetype', label: 'Special Fuel Multiplier', step: 0.05, min: 0.1, max: 5, path: ['stats', 'specialFuelCostMultiplier'] },
   { id: 'super-fuel-multiplier', section: 'Archetype', label: 'Super Fuel Multiplier', step: 0.05, min: 0.1, max: 5, path: ['stats', 'superFuelMultiplier'] },
   { id: 'dunk-recovery-multiplier', section: 'Archetype', label: 'Dunk Recovery Fuel Multiplier', step: 0.05, min: 0.1, max: 5, path: ['stats', 'dunkRecoveryFuelMultiplier'] },
+  { id: 'ai-neutral-approach', section: 'AI neutral pacing', label: 'Neutral Approach Multiplier', step: 0.05, min: 0, max: 2, path: ['ai', 'neutralApproachMultiplier'] },
+  { id: 'ai-neutral-boost-distance', section: 'AI neutral pacing', label: 'Free Boost Distance Offset', step: 1, min: 0, max: 60, path: ['ai', 'neutralBoostDistanceOffset'] },
+  { id: 'ai-post-control-spacing', section: 'AI neutral pacing', label: 'Post-Control Spacing Frames', step: 1, min: 0, max: 120, path: ['ai', 'postControlSpacingFrames'] },
   { id: 'launch-startup', section: 'Launch and finish', label: 'Launch Startup Frames', step: 1, min: 0, max: 600, path: ['moves', 'launch', 'startupFrames'] },
   { id: 'launch-active', section: 'Launch and finish', label: 'Launch Active Frames', step: 1, min: 1, max: 600, path: ['moves', 'launch', 'activeFrames'] },
   { id: 'launch-hit-recovery', section: 'Launch and finish', label: 'Launch Hit Recovery', step: 1, min: 0, max: 1200, path: ['moves', 'launch', 'recoveryOnHitFrames'] },
@@ -412,6 +473,7 @@ export const CHARACTER_TUNING_FIELD_IDS: readonly string[] = CHARACTER_TUNING_FI
 
 const CHARACTER_TUNING_SECTIONS: CharacterTuningField['section'][] = [
   'Archetype',
+  'AI neutral pacing',
   'Launch and finish',
   'Defense and movement',
   'Special',
@@ -561,8 +623,8 @@ export class PauseMenu {
   private exportAiMatchTelemetryButton: HTMLButtonElement | null = null;
   private exportBalanceExperimentButton: HTMLButtonElement | null = null;
   private restoreBalanceBaselineButton: HTMLButtonElement | null = null;
-  private reviewBalanceBaselineButton: HTMLButtonElement | null = null;
-  private reviewBalanceCandidateButton: HTMLButtonElement | null = null;
+  private reviewBalanceComparisonButton: HTMLButtonElement | null = null;
+  private balanceReplayPairingStatus: HTMLParagraphElement | null = null;
   private balancePendingChangesPanel: HTMLElement | null = null;
   private discardBalanceDraftButton: HTMLButtonElement | null = null;
   private balanceProfileSelect: HTMLSelectElement | null = null;
@@ -593,6 +655,20 @@ export class PauseMenu {
   private characterBalanceIdentity: HTMLDivElement | null = null;
   private aiBehaviorEditor: HTMLDivElement | null = null;
   private readonly tabPanels: Record<PauseTabId, HTMLDivElement>;
+  private bindingsContent!: HTMLDivElement;
+  private bindingsStatus!: HTMLDivElement;
+  private readonly bindingPlayerButtons: Partial<Record<PlayerId, HTMLButtonElement>> = {};
+  private readonly bindingDeviceButtons: Partial<Record<InputDevice, HTMLButtonElement>> = {};
+  private selectedBindingPlayer: PlayerId = 'P1';
+  private selectedBindingDevice: InputDevice = 'keyboard';
+  private bindingCapture: {
+    playerId: PlayerId;
+    device: InputDevice;
+    command: KeyboardCommand | GameplayAction;
+  } | null = null;
+  private bindingCaptureRaf: number | null = null;
+  private suppressBindingClickUntil = 0;
+  private readonly blockedGamepadButtons = new Set<number>();
   private readonly fieldInputs = new Map<keyof GameTuning, HTMLInputElement>();
   private readonly characterFieldInputs = new Map<string, {
     field: CharacterTuningField;
@@ -634,6 +710,49 @@ export class PauseMenu {
   } | null = null;
   private selectedCharacterBalanceId: CharacterId | null = null;
 
+  private readonly bindingKeydownHandler = (event: KeyboardEvent): void => {
+    if (!this.paused || this.activeTab !== 'bindings') {
+      return;
+    }
+    event.stopPropagation();
+    const capture = this.bindingCapture;
+    if (!capture) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.setPaused(false);
+      }
+      return;
+    }
+    event.preventDefault();
+    if (event.key === 'Escape') {
+      this.cancelBindingCapture('Binding cancelled.');
+      return;
+    }
+    if (capture.device !== 'keyboard' || event.repeat || !event.code) {
+      return;
+    }
+    if (!isKeyboardCodeAllowed(event.code)) {
+      this.bindingsStatus.textContent = 'That key is reserved for pause, training, or debug controls. Press another key.';
+      return;
+    }
+    this.applyCapturedBinding(event.code);
+  };
+
+  private readonly bindingMouseDownHandler = (event: MouseEvent): void => {
+    const capture = this.bindingCapture;
+    if (!this.paused || this.activeTab !== 'bindings' || capture?.device !== 'mouse') {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.button < 0 || event.button > 4) {
+      this.bindingsStatus.textContent = 'Only the five standard mouse buttons can be assigned.';
+      return;
+    }
+    this.suppressBindingClickUntil = performance.now() + 200;
+    this.applyCapturedBinding(event.button);
+  };
+
   constructor(private readonly options: PauseMenuOptions) {
     this.debugTabEnabled = options.enableDebugTab ?? true;
     this.balanceLabAvailable = this.debugTabEnabled;
@@ -668,7 +787,7 @@ export class PauseMenu {
 
     const pauseButton = this.createTabButton('Pause', 'pause');
     const audioButton = this.createTabButton('Audio', 'audio');
-    const bindingsButton = this.createTabButton('Controller Bindings', 'bindings');
+    const bindingsButton = this.createTabButton('Controls', 'bindings');
     const debugButton = this.createTabButton('Balance Lab', 'debug');
     if (!this.balanceLabAvailable) {
       debugButton.hidden = true;
@@ -682,6 +801,8 @@ export class PauseMenu {
     };
 
     document.body.appendChild(this.root);
+    window.addEventListener('keydown', this.bindingKeydownHandler, true);
+    window.addEventListener('mousedown', this.bindingMouseDownHandler, true);
     this.setActiveTab('pause');
     this.syncInputsFromTuning();
     this.syncInputsFromAudioSettings();
@@ -689,6 +810,10 @@ export class PauseMenu {
 
   isPaused(): boolean {
     return this.paused;
+  }
+
+  isCapturingBinding(): boolean {
+    return this.bindingCapture !== null;
   }
 
   toggle(): void {
@@ -708,7 +833,14 @@ export class PauseMenu {
       if (this.copyStatus) {
         this.copyStatus.textContent = '';
       }
+    } else {
+      this.cancelBindingCapture();
     }
+  }
+
+  openBindings(): void {
+    this.setPaused(true);
+    this.setActiveTab('bindings');
   }
 
   openBalanceLab(status?: string): void {
@@ -748,6 +880,9 @@ export class PauseMenu {
       tabId = 'pause';
     }
     this.activeTab = tabId;
+    if (tabId !== 'bindings') {
+      this.cancelBindingCapture();
+    }
     this.tabPanels.pause.hidden = tabId !== 'pause';
     this.tabPanels.audio.hidden = tabId !== 'audio';
     this.tabPanels.bindings.hidden = tabId !== 'bindings';
@@ -759,6 +894,8 @@ export class PauseMenu {
     this.tabButtons.debug.classList.toggle('active', tabId === 'debug' && this.balanceLabAvailable);
     if (tabId === 'debug') {
       this.syncBalanceLab();
+    } else if (tabId === 'bindings') {
+      this.renderBindingsEditor();
     }
   }
 
@@ -781,7 +918,7 @@ export class PauseMenu {
     const toBindings = document.createElement('button');
     toBindings.type = 'button';
     toBindings.className = 'pause-action';
-    toBindings.textContent = 'Controller Bindings';
+    toBindings.textContent = 'Controls';
     toBindings.addEventListener('click', () => this.setActiveTab('bindings'));
 
     const toDebug = document.createElement('button');
@@ -905,29 +1042,321 @@ export class PauseMenu {
     tab.className = 'pause-tab-panel';
 
     const title = document.createElement('h3');
-    title.textContent = 'Xbox Controller Bindings';
+    title.textContent = 'Controls';
     tab.appendChild(title);
 
-    const lines = [
-      'Move: Left Stick or D-pad',
-      'RT: Boost',
-      'LT: Super boost',
-      'X: Special',
-      'Y: Launch',
-      'B: Dunk',
-      'LB: Parry',
-      'A: Break',
-      'Pad assignment: first connected pad is P1, second is P2.',
-    ];
+    const intro = document.createElement('p');
+    intro.className = 'controls-intro';
+    intro.textContent = 'Choose a player and device, then select a binding and press the replacement input.';
 
-    for (const line of lines) {
-      const row = document.createElement('div');
-      row.className = 'binding-row';
-      row.textContent = line;
-      tab.appendChild(row);
+    const selectors = document.createElement('div');
+    selectors.className = 'controls-selectors';
+
+    const playerSelector = document.createElement('div');
+    playerSelector.className = 'controls-selector-group';
+    playerSelector.setAttribute('aria-label', 'Player');
+    for (const playerId of ['P1', 'P2'] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'controls-selector';
+      button.textContent = playerId === 'P1' ? 'Player 1' : 'Player 2';
+      button.addEventListener('click', () => {
+        this.cancelBindingCapture();
+        this.selectedBindingPlayer = playerId;
+        this.renderBindingsEditor();
+      });
+      this.bindingPlayerButtons[playerId] = button;
+      playerSelector.appendChild(button);
     }
 
+    const deviceSelector = document.createElement('div');
+    deviceSelector.className = 'controls-selector-group';
+    deviceSelector.setAttribute('aria-label', 'Input device');
+    const deviceLabels: Record<InputDevice, string> = {
+      keyboard: 'Keyboard',
+      gamepad: 'Controller',
+      mouse: 'Mouse',
+    };
+    for (const device of ['keyboard', 'gamepad', 'mouse'] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'controls-selector';
+      button.textContent = deviceLabels[device];
+      button.addEventListener('click', () => {
+        this.cancelBindingCapture();
+        this.selectedBindingDevice = device;
+        this.renderBindingsEditor();
+      });
+      this.bindingDeviceButtons[device] = button;
+      deviceSelector.appendChild(button);
+    }
+    selectors.append(playerSelector, deviceSelector);
+
+    this.bindingsContent = document.createElement('div');
+    this.bindingsContent.className = 'controls-binding-list';
+
+    this.bindingsStatus = document.createElement('div');
+    this.bindingsStatus.className = 'controls-status';
+    this.bindingsStatus.setAttribute('role', 'status');
+    this.bindingsStatus.textContent = 'Bindings save automatically on this device.';
+
+    const actions = document.createElement('div');
+    actions.className = 'controls-actions';
+    const resetDevice = document.createElement('button');
+    resetDevice.type = 'button';
+    resetDevice.className = 'pause-action';
+    resetDevice.textContent = 'Reset Selected Device';
+    resetDevice.addEventListener('click', () => {
+      this.cancelBindingCapture();
+      if (this.options.inputBindings) {
+        resetInputBindingDevice(
+          this.options.inputBindings,
+          this.selectedBindingPlayer,
+          this.selectedBindingDevice,
+        );
+      }
+      this.bindingsStatus.textContent = `${this.selectedBindingPlayer} ${deviceLabels[this.selectedBindingDevice]} restored to defaults.`;
+      this.options.onInputBindingsChange?.();
+      this.renderBindingsEditor();
+    });
+
+    const resetAll = document.createElement('button');
+    resetAll.type = 'button';
+    resetAll.className = 'pause-action';
+    resetAll.textContent = 'Reset All Controls';
+    resetAll.addEventListener('click', () => {
+      this.cancelBindingCapture();
+      if (this.options.inputBindings) {
+        resetAllInputBindings(this.options.inputBindings);
+      }
+      this.bindingsStatus.textContent = 'All controls restored to defaults.';
+      this.options.onInputBindingsChange?.();
+      this.renderBindingsEditor();
+    });
+
+    const done = document.createElement('button');
+    done.type = 'button';
+    done.className = 'pause-action controls-done';
+    done.textContent = 'Done';
+    done.addEventListener('click', () => this.setPaused(false));
+    actions.append(resetDevice, resetAll, done);
+
+    tab.append(intro, selectors, this.bindingsContent, this.bindingsStatus, actions);
+    this.renderBindingsEditor();
+
     return tab;
+  }
+
+  private renderBindingsEditor(): void {
+    if (!this.bindingsContent) {
+      return;
+    }
+    for (const playerId of ['P1', 'P2'] as const) {
+      this.bindingPlayerButtons[playerId]?.classList.toggle(
+        'active',
+        playerId === this.selectedBindingPlayer,
+      );
+    }
+    for (const device of ['keyboard', 'gamepad', 'mouse'] as const) {
+      this.bindingDeviceButtons[device]?.classList.toggle(
+        'active',
+        device === this.selectedBindingDevice,
+      );
+    }
+
+    this.bindingsContent.replaceChildren();
+    const store = this.options.inputBindings;
+    if (!store) {
+      const unavailable = document.createElement('div');
+      unavailable.className = 'binding-row';
+      unavailable.textContent = 'Control remapping is unavailable in this build.';
+      this.bindingsContent.appendChild(unavailable);
+      return;
+    }
+
+    const note = document.createElement('div');
+    note.className = 'controls-device-note';
+    if (this.selectedBindingDevice === 'gamepad') {
+      note.textContent = 'Movement uses the left stick or D-pad. The first connected controller is P1; the second is P2. Pause and menu buttons stay fixed.';
+    } else if (this.selectedBindingDevice === 'mouse') {
+      note.textContent = 'Mouse buttons can trigger actions while keyboard or controller handles movement. One mouse is shared, so bindings are kept unique across players.';
+    } else {
+      note.textContent = 'Keyboard bindings are kept unique across both players. Pause, training, and debug shortcuts stay reserved.';
+    }
+    this.bindingsContent.appendChild(note);
+
+    const profile = store.getProfile();
+    const commands = this.selectedBindingDevice === 'keyboard'
+      ? KEYBOARD_COMMANDS
+      : GAMEPLAY_ACTIONS;
+    for (const command of commands) {
+      const row = document.createElement('div');
+      row.className = 'controls-binding-row';
+
+      const label = document.createElement('span');
+      label.className = 'controls-binding-label';
+      label.textContent = INPUT_COMMAND_LABELS[command];
+
+      const bind = document.createElement('button');
+      bind.type = 'button';
+      bind.className = 'controls-binding-button';
+      const value = this.selectedBindingDevice === 'keyboard'
+        ? profile.keyboard[this.selectedBindingPlayer][command as KeyboardCommand]
+        : profile[this.selectedBindingDevice][this.selectedBindingPlayer][command as GameplayAction];
+      bind.textContent = this.selectedBindingDevice === 'keyboard'
+        ? formatKeyboardBinding(value as string | null)
+        : this.selectedBindingDevice === 'gamepad'
+          ? formatGamepadBinding(value as number | null)
+          : formatMouseBinding(value as number | null);
+      const isCapturing = this.bindingCapture?.playerId === this.selectedBindingPlayer
+        && this.bindingCapture.device === this.selectedBindingDevice
+        && this.bindingCapture.command === command;
+      bind.classList.toggle('waiting', isCapturing);
+      if (isCapturing) {
+        bind.textContent = 'Press input...';
+      }
+      bind.setAttribute('aria-label', `Change ${INPUT_COMMAND_LABELS[command]}`);
+      bind.addEventListener('click', () => this.beginBindingCapture(command));
+
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.className = 'controls-clear-button';
+      clear.textContent = 'Clear';
+      clear.disabled = value === null;
+      clear.addEventListener('click', () => {
+        this.cancelBindingCapture();
+        this.applyBinding(command, null);
+      });
+
+      row.append(label, bind, clear);
+      this.bindingsContent.appendChild(row);
+    }
+  }
+
+  private beginBindingCapture(command: KeyboardCommand | GameplayAction): void {
+    if (!this.options.inputBindings || performance.now() < this.suppressBindingClickUntil) {
+      return;
+    }
+    this.cancelBindingCapture();
+    this.bindingCapture = {
+      playerId: this.selectedBindingPlayer,
+      device: this.selectedBindingDevice,
+      command,
+    };
+    this.renderBindingsEditor();
+    const deviceLabel = this.selectedBindingDevice === 'gamepad'
+      ? 'controller button'
+      : this.selectedBindingDevice === 'mouse'
+        ? 'mouse button'
+        : 'key';
+    this.bindingsStatus.textContent = `Press a ${deviceLabel} for ${INPUT_COMMAND_LABELS[command]}. Escape cancels.`;
+    if (this.selectedBindingDevice === 'gamepad') {
+      this.blockedGamepadButtons.clear();
+      const gamepad = this.getAssignedGamepad(this.selectedBindingPlayer);
+      gamepad?.buttons.forEach((button, index) => {
+        if (button.pressed || button.value > 0.35) {
+          this.blockedGamepadButtons.add(index);
+        }
+      });
+      this.bindingCaptureRaf = window.requestAnimationFrame(this.pollGamepadBindingCapture);
+    }
+  }
+
+  private readonly pollGamepadBindingCapture = (): void => {
+    this.bindingCaptureRaf = null;
+    const capture = this.bindingCapture;
+    if (!capture || capture.device !== 'gamepad') {
+      return;
+    }
+    const gamepad = this.getAssignedGamepad(capture.playerId);
+    if (gamepad) {
+      for (let index = 0; index < gamepad.buttons.length; index += 1) {
+        const button = gamepad.buttons[index];
+        const isDown = button.pressed || button.value > 0.35;
+        if (!isDown) {
+          this.blockedGamepadButtons.delete(index);
+          continue;
+        }
+        if (this.blockedGamepadButtons.has(index)) {
+          continue;
+        }
+        this.blockedGamepadButtons.add(index);
+        if (!isGamepadButtonAllowed(index)) {
+          this.bindingsStatus.textContent = 'That button is reserved for movement, pause, or diagnostics. Press another button.';
+          continue;
+        }
+        this.applyCapturedBinding(index);
+        return;
+      }
+    }
+    this.bindingCaptureRaf = window.requestAnimationFrame(this.pollGamepadBindingCapture);
+  };
+
+  private getAssignedGamepad(playerId: PlayerId): Gamepad | null {
+    const targetIndex = playerId === 'P1' ? 0 : 1;
+    let connectedIndex = 0;
+    for (const gamepad of navigator.getGamepads?.() ?? []) {
+      if (!gamepad) {
+        continue;
+      }
+      if (connectedIndex === targetIndex) {
+        return gamepad;
+      }
+      connectedIndex += 1;
+    }
+    return null;
+  }
+
+  private applyCapturedBinding(value: string | number): void {
+    const capture = this.bindingCapture;
+    if (!capture) {
+      return;
+    }
+    this.applyBinding(capture.command, value);
+  }
+
+  private applyBinding(
+    command: KeyboardCommand | GameplayAction,
+    value: string | number | null,
+  ): void {
+    const store = this.options.inputBindings;
+    if (!store) {
+      return;
+    }
+    const playerId = this.selectedBindingPlayer;
+    const device = this.selectedBindingDevice;
+    const result = device === 'keyboard'
+      ? rebindKeyboard(store, playerId, command as KeyboardCommand, value as string | null)
+      : device === 'gamepad'
+        ? rebindGamepad(store, playerId, command as GameplayAction, value as number | null)
+        : rebindMouse(store, playerId, command as GameplayAction, value as number | null);
+    this.options.onInputBindingsChange?.();
+    this.cancelBindingCapture();
+    this.renderBindingsEditor();
+    const actionLabel = INPUT_COMMAND_LABELS[command];
+    if (value === null) {
+      this.bindingsStatus.textContent = `${actionLabel} cleared.`;
+    } else if (result.swappedCommand && result.swappedPlayerId) {
+      this.bindingsStatus.textContent = `${actionLabel} assigned. ${result.swappedPlayerId} ${INPUT_COMMAND_LABELS[result.swappedCommand as KeyboardCommand]} received the previous binding.`;
+    } else {
+      this.bindingsStatus.textContent = `${actionLabel} assigned.`;
+    }
+  }
+
+  private cancelBindingCapture(status?: string): void {
+    const hadCapture = this.bindingCapture !== null;
+    this.bindingCapture = null;
+    this.blockedGamepadButtons.clear();
+    if (this.bindingCaptureRaf !== null) {
+      window.cancelAnimationFrame(this.bindingCaptureRaf);
+      this.bindingCaptureRaf = null;
+    }
+    if (hadCapture && this.bindingsContent) {
+      this.renderBindingsEditor();
+    }
+    if (status && this.bindingsStatus) {
+      this.bindingsStatus.textContent = status;
+    }
   }
 
   private createDebugTab(): HTMLDivElement {
@@ -1187,31 +1616,29 @@ export class PauseMenu {
     exportExperimentButton.disabled = true;
     exportExperimentButton.title = 'Capture a baseline before exporting a reproducible comparison.';
     exportExperimentButton.addEventListener('click', () => this.downloadBalanceExperiment());
-    const reviewBaselineButton = document.createElement('button');
-    reviewBaselineButton.type = 'button';
-    reviewBaselineButton.className = 'pause-action';
-    reviewBaselineButton.textContent = 'Review Baseline Incident';
-    reviewBaselineButton.disabled = true;
-    reviewBaselineButton.addEventListener('click', () => this.reviewBalanceReplaySample('baseline'));
-    const reviewCandidateButton = document.createElement('button');
-    reviewCandidateButton.type = 'button';
-    reviewCandidateButton.className = 'pause-action';
-    reviewCandidateButton.textContent = 'Review Candidate Incident';
-    reviewCandidateButton.disabled = true;
-    reviewCandidateButton.addEventListener('click', () => this.reviewBalanceReplaySample('candidate'));
+    const reviewComparisonButton = document.createElement('button');
+    reviewComparisonButton.type = 'button';
+    reviewComparisonButton.className = 'pause-action';
+    reviewComparisonButton.textContent = 'Review Baseline Incident';
+    reviewComparisonButton.disabled = true;
+    reviewComparisonButton.addEventListener('click', () => this.reviewBalanceReplayComparison());
     comparisonActions.append(
       captureBaselineButton,
-      reviewBaselineButton,
-      reviewCandidateButton,
+      reviewComparisonButton,
       restoreBaselineButton,
       clearBaselineButton,
       exportExperimentButton,
     );
     tab.appendChild(comparisonActions);
+    const replayPairingStatus = document.createElement('p');
+    replayPairingStatus.className = 'balance-replay-pairing-status';
+    replayPairingStatus.hidden = true;
+    replayPairingStatus.setAttribute('role', 'status');
+    tab.appendChild(replayPairingStatus);
     this.exportBalanceExperimentButton = exportExperimentButton;
     this.restoreBalanceBaselineButton = restoreBaselineButton;
-    this.reviewBalanceBaselineButton = reviewBaselineButton;
-    this.reviewBalanceCandidateButton = reviewCandidateButton;
+    this.reviewBalanceComparisonButton = reviewComparisonButton;
+    this.balanceReplayPairingStatus = replayPairingStatus;
 
     const experimentReview = document.createElement('details');
     experimentReview.className = 'balance-experiment-review';
@@ -1848,28 +2275,18 @@ export class PauseMenu {
     this.options.onReviewAiRound?.(request);
   }
 
-  private reviewBalanceReplaySample(variant: BalanceReplayVariant): void {
+  private reviewBalanceReplayComparison(): void {
     const comparison = this.balanceReplayComparison;
-    if (!comparison || !this.options.onReviewAiReplaySample) {
+    if (!comparison || !this.options.onReviewAiReplayComparison) {
       return;
     }
     try {
-      const selected = selectBalanceReplaySample(comparison, variant);
-      const label = variant === 'baseline' ? 'Baseline incident' : 'Candidate incident';
-      this.options.onReviewAiReplaySample(
-        selected.payload,
-        {
-          focusFrame: selected.focus.focusFrame,
-          endFrame: selected.focus.endFrame,
-          label: selected.focus.label,
-        },
-        label,
-      );
+      this.options.onReviewAiReplayComparison(comparison);
     } catch (error) {
       if (this.copyStatus) {
         this.copyStatus.textContent = error instanceof Error
           ? error.message
-          : 'The selected incident replay is unavailable.';
+          : 'The incident comparison is unavailable.';
       }
     }
   }
@@ -2137,23 +2554,35 @@ export class PauseMenu {
         ? 'Stage the captured global rules, character overrides, AI behavior, starting situation, and controller roles. Restart to apply them.'
         : 'Capture a baseline before restoring its exact local rules and probe setup.';
     }
-    if (this.reviewBalanceBaselineButton) {
+    if (this.reviewBalanceComparisonButton) {
       const canReview = this.balanceReplayComparison !== null
-        && this.options.onReviewAiReplaySample !== undefined;
-      this.reviewBalanceBaselineButton.disabled = !canReview;
-      this.reviewBalanceBaselineButton.title = canReview
-        ? 'Open the checksum-verified baseline at the captured incident window.'
+        && this.options.onReviewAiReplayComparison !== undefined;
+      const candidateReady = this.balanceReplayComparison?.candidate !== null
+        && this.balanceReplayComparison?.candidate !== undefined;
+      this.reviewBalanceComparisonButton.disabled = !canReview;
+      this.reviewBalanceComparisonButton.textContent = candidateReady
+        ? 'Compare Incident A/B'
+        : 'Review Baseline Incident';
+      this.reviewBalanceComparisonButton.title = canReview
+        ? candidateReady
+          ? 'Switch between checksum-verified baseline and candidate replays at the same incident frame.'
+          : this.balanceReplayCandidateError
+            ? `Candidate replay pairing failed: ${this.balanceReplayCandidateError}`
+            : 'Open the checksum-verified baseline. Run the matched candidate to unlock synchronized A/B review.'
         : 'Capture a replay-backed AI baseline before reviewing it.';
-    }
-    if (this.reviewBalanceCandidateButton) {
-      const canReview = this.balanceReplayComparison?.candidate !== null
-        && this.balanceReplayComparison?.candidate !== undefined
-        && this.options.onReviewAiReplaySample !== undefined;
-      this.reviewBalanceCandidateButton.disabled = !canReview;
-      this.reviewBalanceCandidateButton.title = canReview
-        ? 'Open the checksum-verified candidate at the same incident window.'
-        : this.balanceReplayCandidateError
-          ?? 'Run a matched sample with zero or one effective rule change to create a candidate replay.';
+      if (this.balanceReplayPairingStatus) {
+        this.balanceReplayPairingStatus.hidden = this.balanceReplayComparison === null;
+        this.balanceReplayPairingStatus.dataset.state = this.balanceReplayCandidateError
+          ? 'error'
+          : candidateReady
+            ? 'ready'
+            : 'waiting';
+        this.balanceReplayPairingStatus.textContent = this.balanceReplayCandidateError
+          ? `Candidate replay pairing failed: ${this.balanceReplayCandidateError}`
+          : candidateReady
+            ? 'Matched replay pair ready. Review the incident and switch with B/C.'
+            : 'Baseline replay ready. Run the matched candidate to unlock synchronized A/B review.';
+      }
     }
     if (this.discardBalanceDraftButton) {
       this.discardBalanceDraftButton.disabled = !pendingState.any;
@@ -2471,12 +2900,21 @@ export class PauseMenu {
       itemHeader.append(label, status);
       const detail = document.createElement('p');
       detail.textContent = stage.detail;
-      item.append(itemHeader, detail);
+      item.appendChild(itemHeader);
       if (stage.status === 'watch' || stage.status === 'blocked') {
+        if (stage.reasonId) {
+          const reason = document.createElement('code');
+          reason.className = 'balance-loop-stage-reason';
+          reason.textContent = stage.reasonId;
+          item.appendChild(reason);
+        }
+        item.appendChild(detail);
         const tuningHints = this.createDiagnosticTuningHints(stage, 3);
         if (tuningHints) {
           item.appendChild(tuningHints);
         }
+      } else {
+        item.appendChild(detail);
       }
       loopChainGrid.appendChild(item);
     }
@@ -2485,9 +2923,12 @@ export class PauseMenu {
 
     const metrics = document.createElement('div');
     metrics.className = 'balance-lab-metrics';
-    const appendMetric = (label: string, value: string): void => {
+    const appendMetric = (label: string, value: string, wide = false): void => {
       const metric = document.createElement('div');
       metric.className = 'balance-lab-metric';
+      if (wide) {
+        metric.classList.add('wide');
+      }
       const metricLabel = document.createElement('span');
       metricLabel.textContent = label;
       const metricValue = document.createElement('strong');
@@ -2602,6 +3043,11 @@ export class PauseMenu {
     };
     appendMetric('P1 launch-defense reads', launchDefense(flow.players.P1));
     appendMetric('P2 launch-defense reads', launchDefense(flow.players.P2));
+    appendMetric(
+      'Ordinary Boost counterplay (defender)',
+      formatOrdinaryBoostCounterplay(flow.ordinaryBoostCounterplay),
+      true,
+    );
     const controlReturn = (player: BalanceLabFlowModel['players']['P1']): string => {
       const control = player.controlReturn;
       if (control.controlReturns === 0) {
@@ -2614,6 +3060,44 @@ export class PauseMenu {
     };
     appendMetric('P1 return -> re-launch', controlReturn(flow.players.P1));
     appendMetric('P2 return -> re-launch', controlReturn(flow.players.P2));
+    const controlReturnClosure = (player: BalanceLabFlowModel['players']['P1']): string => {
+      const causal = player.controlReturn.causal;
+      if (!causal) {
+        return 'unavailable in historical sample';
+      }
+      if (causal.windows === 0) {
+        return '--';
+      }
+      const granted = causal.averageControlGrantedDistance === null
+        ? '-- grant'
+        : `${causal.averageControlGrantedDistance.toFixed(1)} grant`;
+      const maximum = causal.averageMaximumDistance === null
+        ? '-- max'
+        : `${causal.averageMaximumDistance.toFixed(1)} max`;
+      const closureShare = causal.returnedPlayerClosingShare === null
+        ? '-- closure share'
+        : `${Math.round(causal.returnedPlayerClosingShare * 100)}% returner closure`;
+      const dominant = (values: Record<string, number>): { label: string; count: number } => {
+        const [entry] = Object.entries(values)
+          .filter(([, count]) => count > 0)
+          .sort((first, second) => second[1] - first[1] || first[0].localeCompare(second[0]));
+        return entry
+          ? { label: entry[0].replace(/_/g, ' '), count: entry[1] }
+          : { label: 'none', count: 0 };
+      };
+      const roleMix = (role: typeof causal.roles.returner): string => {
+        const movement = dominant(role.dominantMovementIntents);
+        const active = dominant(role.dominantActiveActions);
+        const first = dominant(role.firstAcceptedActions);
+        const activeText = active.label === 'none'
+          ? ''
+          : `, active ${active.label} ${active.count}`;
+        return `move ${movement.label} ${movement.count}, first ${first.label} ${first.count}${activeText}`;
+      };
+      return `${causal.windows} returns | ${granted} (${causal.controlGrantedInPressure} pressure / ${causal.safeAtGrant} safe) | ${maximum} | ${closureShare} (closed more R/O/even ${causal.returnedPlayerClosedMore}/${causal.opponentClosedMore}/${causal.balancedClosure}) | Returner: ${roleMix(causal.roles.returner)} | Opponent: ${roleMix(causal.roles.opponent)} | Outcomes exit ${causal.outcomes.sustained_exit}, brief ${causal.outcomes.brief_reentry}, pressure re-launch ${causal.outcomes.relaunched_in_pressure}, interrupted ${causal.outcomes.control_interrupted}`;
+    };
+    appendMetric('P1 control-return causes', controlReturnClosure(flow.players.P1), true);
+    appendMetric('P2 control-return causes', controlReturnClosure(flow.players.P2), true);
     const postReturnActions = (player: BalanceLabFlowModel['players']['P1']): string => {
       const control = player.controlReturn;
       const actionLabels: Record<(typeof BALANCE_LAB_CONTROL_RETURN_ACTIONS)[number], string> = {
@@ -2886,7 +3370,13 @@ export class PauseMenu {
       const reset = constrainedControlReturn.sustainedResetAfterReturn
         ? 'durable reset created'
         : 'no durable reset';
-      focusDetail.textContent = `${recovery} at ${distance} (${pressureContext}) | ${firstAction} | ${relaunch} | ${reset}`;
+      const causal = constrainedControlReturn.players
+        ? ` | max ${constrainedControlReturn.maximumDistance?.toFixed(1) ?? '--'} | closing returner ${constrainedControlReturn.players[constrainedControlReturn.playerId].closingDistance.toFixed(1)} / opponent ${constrainedControlReturn.players[constrainedControlReturn.playerId === 'P1' ? 'P2' : 'P1'].closingDistance.toFixed(1)} | ${constrainedControlReturn.outcome?.replace(/_/g, ' ') ?? 'sample open'}`
+        : '';
+      const preReset = constrainedControlReturn.preResetDistance === null
+        ? ''
+        : `; pre-reset ${constrainedControlReturn.preResetDistance.toFixed(1)}`;
+      focusDetail.textContent = `${recovery} at ${distance}${preReset} (${pressureContext}) | ${firstAction} | ${relaunch} | ${reset}${causal}`;
       focusCopy.append(focusTitle, focusDetail);
       controlFocus.appendChild(focusCopy);
       const reviewRange = resolveBalanceLabControlReturnReviewRange(

@@ -6,8 +6,13 @@
   "mechanicsTag": "pressure chase",
   "metadata": {
     "author": "Gravity Well Team",
-    "version": "0.3.2",
+    "version": "0.3.4",
     "tags": ["alpha", "mobility", "pressure"]
+  },
+  "ai": {
+    "neutralApproachMultiplier": 1,
+    "neutralBoostDistanceOffset": 0,
+    "postControlSpacingFrames": 0
   },
   "stats": {
     "fuelCapacityMultiplier": 0.96,

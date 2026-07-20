@@ -9,6 +9,10 @@ import {
   rankedSeedFromSessionId,
   verifyRankedMatchProof,
 } from '../../game-web/src/sim/rankedProof';
+import {
+  parseRankedInputCommitmentSubmission,
+  RANKED_INPUT_COMMITMENT_RECEIPT_SCHEMA_VERSION,
+} from '../../game-web/src/sim/rankedInputCommitment';
 import { databaseTarget, db } from './db';
 import {
   createMatchmakingQueueService,
@@ -103,6 +107,10 @@ import {
 } from './auth/webAuth';
 import { createSteamTicketVerifier } from './auth/steamAuth';
 import {
+  claimSteamTicketExchange,
+  SteamTicketAlreadyExchangedError,
+} from './auth/steamTicketExchangeStore';
+import {
   SteamAccountLinkError,
   logIdentityLinkEvent,
   resolveSteamAccountLink,
@@ -142,6 +150,9 @@ import {
   shouldTriggerDatabaseMaintenance,
 } from './ops/activityBoundMaintenance';
 import { DueWorkScheduler } from './ops/dueWorkScheduler';
+import { verifyMigrationHistoryMatchesRelease } from './ops/migrationIntegrity';
+import { loadMigrationFileManifest } from './ops/migrationManifest';
+import { evaluateRuntimeSecurityPosture } from './ops/runtimeSecurityPosture';
 import {
   evaluateRankedResultConsensus,
   evaluateRankedResultSubmission,
@@ -168,6 +179,7 @@ import {
 } from './ranked/authoritativeResolutionService';
 import {
   createRankedTerminalDecisionStore,
+  RANKED_SESSION_TRANSACTION_LOCK_SQL,
   type EnqueueRankedTerminalDecisionInput,
   type RankedTerminalDecision,
 } from './ranked/terminalDecisionStore';
@@ -176,11 +188,25 @@ import {
   settleRankedMatch,
   type RankedSettlementConfig,
 } from './ranked/settlementService';
+import {
+  appendRankedInputCommitment,
+  createRankedInputAttestation,
+  loadRankedInputCommitments,
+  RankedInputCommitmentConflictError,
+  resolveMinimumRankedInputObservationRatio,
+  verifyRankedInputCommitmentCoverage,
+  type RankedInputAttestation,
+} from './ranked/inputCommitmentStore';
 
 const app = Fastify({
   logger: true,
   trustProxy: resolveTrustProxyHops(process.env.API_TRUST_PROXY_HOPS),
 });
+let migrationFileManifestPromise: ReturnType<typeof loadMigrationFileManifest> | null = null;
+function getMigrationFileManifest(): ReturnType<typeof loadMigrationFileManifest> {
+  migrationFileManifestPromise ??= loadMigrationFileManifest();
+  return migrationFileManifestPromise;
+}
 const replayIngestBodyLimitBytes = resolveReplayIngestBodyLimitBytes(
   process.env.REPLAY_INGEST_BODY_LIMIT_BYTES,
 );
@@ -267,6 +293,9 @@ const releaseSha = [
 const deploymentEnvironment = String(
   process.env.DEPLOYMENT_ENVIRONMENT ?? process.env.NODE_ENV ?? 'development',
 ).trim();
+const migrationAllowForwardCompatibleSuffix = ['1', 'true'].includes(
+  String(process.env.MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX ?? '').trim().toLowerCase(),
+);
 const deploymentDatabaseId = String(
   process.env.DEPLOYMENT_DATABASE_ID ?? (databaseTarget === 'local' ? 'local' : 'unconfigured'),
 ).trim();
@@ -301,6 +330,7 @@ const rankedProofRateLimitPolicies = {
   accountSession: resolveAuthRateLimitPolicy('RANKED_PROOF_RATE_LIMIT_ACCOUNT_SESSION', 4, 10 * 60),
   accountHour: resolveAuthRateLimitPolicy('RANKED_PROOF_RATE_LIMIT_ACCOUNT_HOUR', 20, 60 * 60),
 };
+const minimumRankedInputObservationRatio = resolveMinimumRankedInputObservationRatio(process.env);
 const replayIngestQuotaPolicy = resolveReplayIngestQuotaPolicy(process.env);
 const replayRetentionCleanupIntervalMs = Math.max(
   60,
@@ -457,6 +487,7 @@ const rankedSettlementConfig: RankedSettlementConfig = {
 const rankedAnomalyAdminKey = process.env.RANKED_ANOMALY_ADMIN_KEY;
 const enforcementAdminKey = process.env.ENFORCEMENT_ADMIN_KEY;
 const sloAdminKey = process.env.SLO_ADMIN_KEY;
+const runtimeSecurityPosture = evaluateRuntimeSecurityPosture(process.env);
 const sloAvailabilityTargetPercent = parsePercentageEnv(process.env.SLO_AVAILABILITY_TARGET_PERCENT) ?? 99.5;
 const sloErrorRateTargetPercent = parsePercentageEnv(process.env.SLO_ERROR_RATE_TARGET_PERCENT) ?? 1;
 const sloLatencyP95TargetMs = parsePositiveIntegerEnv(process.env.SLO_LATENCY_P95_TARGET_MS) ?? 350;
@@ -507,6 +538,10 @@ interface MatchmakingQueueLeaveBody {
 
 interface MatchmakingDrainBody {
   draining?: boolean;
+}
+
+interface MatchmakingBuildAccessCheckBody {
+  buildVersion?: unknown;
 }
 
 interface MatchmakingSessionDisconnectBody {
@@ -698,6 +733,21 @@ interface RankedResultSubmitBody {
   winnerAccountId?: string | null;
   outcome?: string;
   proof?: unknown;
+}
+
+interface RankedInputCommitmentSubmitBody {
+  sessionToken?: string;
+  schemaVersion?: unknown;
+  sessionId?: unknown;
+  accountId?: unknown;
+  side?: unknown;
+  sequence?: unknown;
+  epoch?: unknown;
+  startFrame?: unknown;
+  endFrame?: unknown;
+  roundFinal?: unknown;
+  chunkDigest?: unknown;
+  previousChainDigest?: unknown;
 }
 
 type RankedResultOutcome = 'p1_win' | 'p2_win' | 'draw' | 'forfeit';
@@ -2198,17 +2248,29 @@ app.get('/health', async () => ({
 
 app.get('/readyz', async (_request, reply) => {
   try {
-    const [databaseResult, migrationResult] = await Promise.all([
+    const [databaseResult, migrationResult, migrationFiles] = await Promise.all([
       db.query<{ connected: number }>('SELECT 1::int AS connected'),
       db.query<{ filename: string; checksum: string | null }>(
         'SELECT filename, checksum FROM schema_migrations ORDER BY filename ASC',
       ),
+      getMigrationFileManifest(),
     ]);
     const databaseConnected = databaseResult.rows[0]?.connected === 1;
-    const migrationHead = migrationResult.rows.at(-1)?.filename ?? null;
-    const migrationCount = migrationResult.rows.length;
-    const migrationChecksumsVerified = migrationResult.rows.length > 0
-      && migrationResult.rows.every((migration) => /^[a-f0-9]{64}$/.test(migration.checksum ?? ''));
+    let migrationHead = migrationResult.rows.at(-1)?.filename ?? null;
+    let migrationCount = migrationResult.rows.length;
+    let migrationChecksumsVerified = false;
+    try {
+      const verifiedHistory = verifyMigrationHistoryMatchesRelease(
+        migrationFiles,
+        migrationResult.rows,
+        { allowAppliedSuffix: migrationAllowForwardCompatibleSuffix },
+      );
+      migrationHead = verifiedHistory.migrationHead;
+      migrationCount = verifiedHistory.migrationCount;
+      migrationChecksumsVerified = true;
+    } catch (error) {
+      app.log.warn({ err: error }, 'Applied migration history does not match this release.');
+    }
     const ok = databaseConnected && migrationHead !== null && migrationChecksumsVerified;
     if (!ok) {
       reply.code(503);
@@ -2222,6 +2284,7 @@ app.get('/readyz', async (_request, reply) => {
       migrationHead,
       migrationCount,
       migrationChecksumsVerified,
+      migrationForwardCompatibleSuffixAllowed: migrationAllowForwardCompatibleSuffix,
       replayBlobProvider: replayBlobStore.provider,
       replayBlobDurable: replayBlobStore.durable,
       matchmakingRuntimeCoordination: MATCHMAKING_RUNTIME_COORDINATION_MODE,
@@ -2239,6 +2302,7 @@ app.get('/readyz', async (_request, reply) => {
       migrationHead: null,
       migrationCount: 0,
       migrationChecksumsVerified: false,
+      migrationForwardCompatibleSuffixAllowed: migrationAllowForwardCompatibleSuffix,
       replayBlobProvider: replayBlobStore.provider,
       replayBlobDurable: replayBlobStore.durable,
       matchmakingRuntimeCoordination: MATCHMAKING_RUNTIME_COORDINATION_MODE,
@@ -2865,6 +2929,14 @@ app.post('/auth/steam/exchange', async (request, reply) => {
     });
     const accountId = linkResult.accountId;
 
+    if (ticketValidation.ticketDigest) {
+      await claimSteamTicketExchange(client, {
+        ticketDigest: ticketValidation.ticketDigest,
+        steamUserId,
+        accountId,
+      });
+    }
+
     if (displayName) {
       await client.query(
         `
@@ -2925,6 +2997,14 @@ app.post('/auth/steam/exchange', async (request, reply) => {
       emailNormalised: `steam:${steamUserId}`,
       reason: message,
     });
+    if (error instanceof SteamTicketAlreadyExchangedError) {
+      reply.code(401);
+      return {
+        error: error.message,
+        code: 'steam_ticket_already_exchanged',
+        recovery: 'Request a fresh Steam ticket and retry sign-in.',
+      };
+    }
     if (error instanceof SteamAccountLinkError) {
       switch (error.code) {
         case 'steam_linked_account_disabled':
@@ -4890,6 +4970,93 @@ app.get('/matchmaking/sessions/:sessionId/frames', async (request, reply) => {
   return liveSessionFrameRelay.getPeerFrames(params.sessionId, accountId, epoch, sinceFrame);
 });
 
+app.post('/ranked/sessions/:sessionId/input-commitments', async (request, reply) => {
+  const accountId = getAuthenticatedAccountId(request);
+  if (!accountId) {
+    reply.code(401);
+    return { error: 'Missing or invalid authentication credential.' };
+  }
+  const params = request.params as { sessionId?: string };
+  if (!isUuid(params.sessionId)) {
+    reply.code(400);
+    return { error: 'sessionId is required and must be a UUID.' };
+  }
+  const body = (request.body ?? {}) as RankedInputCommitmentSubmitBody;
+  const sessionToken = String(body.sessionToken ?? '').trim();
+  if (!sessionToken) {
+    reply.code(400);
+    return { error: 'sessionToken is required.' };
+  }
+  const submission = parseRankedInputCommitmentSubmission(body);
+  if (!submission) {
+    reply.code(400);
+    return {
+      error: 'Ranked input commitment payload is invalid.',
+      code: 'ranked_input_commitment_invalid',
+    };
+  }
+  if (submission.sessionId !== params.sessionId || submission.accountId !== accountId) {
+    reply.code(403);
+    return {
+      error: 'Ranked input commitment identity does not match the authenticated session participant.',
+      code: 'ranked_input_commitment_identity_mismatch',
+    };
+  }
+
+  const client = await db.connect();
+  let transactionOpen = false;
+  try {
+    await client.query('BEGIN');
+    transactionOpen = true;
+    await client.query(RANKED_SESSION_TRANSACTION_LOCK_SQL, [params.sessionId]);
+    const sessionAccess = await matchmakingSessionAccessStore.validateLiveSessionAccess({
+      sessionId: params.sessionId,
+      accountId,
+      sessionToken,
+    }, client);
+    if (!sessionAccess.ok) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      reply.code(mapSessionErrorToHttp(sessionAccess.error.code));
+      return { error: sessionAccess.error.message, code: sessionAccess.error.code };
+    }
+    if (submission.side !== sessionAccess.value.side) {
+      await client.query('ROLLBACK');
+      transactionOpen = false;
+      reply.code(403);
+      return {
+        error: 'Ranked input commitment side does not match the server-assigned participant side.',
+        code: 'ranked_input_commitment_side_mismatch',
+      };
+    }
+    const stored = await appendRankedInputCommitment(client, submission);
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return {
+      schemaVersion: RANKED_INPUT_COMMITMENT_RECEIPT_SCHEMA_VERSION,
+      sequence: stored.sequence,
+      chainDigest: stored.chainDigest,
+      receivedAt: stored.receivedAt,
+      existing: stored.existing,
+    };
+  } catch (error) {
+    if (transactionOpen) {
+      await client.query('ROLLBACK');
+    }
+    if (error instanceof RankedInputCommitmentConflictError) {
+      reply.code(409);
+      return { error: error.message, code: 'ranked_input_commitment_conflict' };
+    }
+    if (error instanceof TypeError) {
+      reply.code(400);
+      return { error: error.message, code: 'ranked_input_commitment_invalid' };
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/ranked/results', { bodyLimit: RANKED_PROOF_BODY_LIMIT_BYTES }, async (request, reply) => {
   const accountId = getAuthenticatedAccountId(request);
   if (!accountId) {
@@ -4964,6 +5131,20 @@ app.post('/ranked/results', { bodyLimit: RANKED_PROOF_BODY_LIMIT_BYTES }, async 
   if (sessionValidation.value.queueType !== 'ranked') {
     reply.code(409);
     return { error: 'Session is not a ranked queue session.' };
+  }
+  const pendingTerminalDecision = deriveRankedTerminalDecision(sessionValidation.value);
+  if (pendingTerminalDecision) {
+    reply.code(409);
+    return {
+      error: pendingTerminalDecision.decisionType === 'no_contest'
+        ? 'Ranked session ended as a server-owned no-contest.'
+        : 'Ranked session has a server-owned authoritative resolution.',
+      code: pendingTerminalDecision.decisionType === 'no_contest'
+        ? 'ranked_session_no_contest'
+        : 'ranked_session_authoritative_resolution',
+      terminalStatus: 'pending',
+      reason: pendingTerminalDecision.reason,
+    };
   }
   const terminalDecision = await rankedTerminalDecisionStore.getBySession(body.sessionId);
   if (terminalDecision) {
@@ -5095,7 +5276,17 @@ app.post('/ranked/results', { bodyLimit: RANKED_PROOF_BODY_LIMIT_BYTES }, async 
       code: 'ranked_winner_mismatch',
     };
   }
-  const proofView = {
+  let proofView: {
+    digest: string;
+    simulatorVersion: string;
+    roundCount: number;
+    frameCount: number;
+    derivedOutcome: 'p1_win' | 'p2_win';
+    inputAttestation?: {
+      status: 'participant_verified' | 'match_verified';
+      evidence: RankedInputAttestation;
+    };
+  } = {
     digest: proofVerification.proofDigest,
     simulatorVersion: proofVerification.proof.simulatorVersion,
     roundCount: proofVerification.roundCount,
@@ -5106,7 +5297,74 @@ app.post('/ranked/results', { bodyLimit: RANKED_PROOF_BODY_LIMIT_BYTES }, async 
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [body.sessionId]);
+    await client.query(RANKED_SESSION_TRANSACTION_LOCK_SQL, [body.sessionId]);
+    const lockedSessionValidation = matchmakingQueueService.validateSessionToken(
+      body.sessionId,
+      accountId,
+      sessionToken,
+      { allowResolved: true, allowExpiredToken: true },
+    );
+    const lockedPendingTerminalDecision = lockedSessionValidation.ok
+      ? deriveRankedTerminalDecision(lockedSessionValidation.value)
+      : null;
+    const lockedTerminalDecision = await rankedTerminalDecisionStore.getBySession(body.sessionId, client);
+    if (lockedPendingTerminalDecision || lockedTerminalDecision) {
+      await client.query('ROLLBACK');
+      const decisionType = lockedTerminalDecision?.decisionType
+        ?? lockedPendingTerminalDecision?.decisionType;
+      reply.code(409);
+      return {
+        error: decisionType === 'no_contest'
+          ? 'Ranked session ended as a server-owned no-contest.'
+          : 'Ranked session has a server-owned authoritative resolution.',
+        code: decisionType === 'no_contest'
+          ? 'ranked_session_no_contest'
+          : 'ranked_session_authoritative_resolution',
+        terminalStatus: lockedTerminalDecision?.status ?? 'pending',
+        reason: lockedTerminalDecision?.reason ?? lockedPendingTerminalDecision?.reason,
+      };
+    }
+    if (!lockedSessionValidation.ok) {
+      await client.query('ROLLBACK');
+      reply.code(mapSessionErrorToHttp(lockedSessionValidation.error.code));
+      return {
+        error: lockedSessionValidation.error.message,
+        code: lockedSessionValidation.error.code,
+      };
+    }
+    const submitterSide = p1Participant.accountId === accountId ? 'P1' : 'P2';
+    const submitterCommitments = await loadRankedInputCommitments(
+      client,
+      body.sessionId,
+      accountId,
+    );
+    const submitterCommitmentVerification = await verifyRankedInputCommitmentCoverage({
+      proof: proofVerification.proof,
+      accountId,
+      side: submitterSide,
+      commitments: submitterCommitments,
+      minimumObservationRatio: minimumRankedInputObservationRatio,
+    });
+    if (!submitterCommitmentVerification.ok) {
+      await client.query('ROLLBACK');
+      reply.code(422);
+      return {
+        error: submitterCommitmentVerification.message,
+        code: 'ranked_input_attestation_invalid',
+        attestationErrorCode: submitterCommitmentVerification.code,
+      };
+    }
+    const submitterAttestation = submitterCommitmentVerification.attestation;
+    proofView = {
+      ...proofView,
+      inputAttestation: {
+        status: 'participant_verified',
+        evidence: createRankedInputAttestation(
+          minimumRankedInputObservationRatio,
+          [submitterAttestation],
+        ),
+      },
+    };
     await client.query(
       `
       INSERT INTO ranked_match_proofs(
@@ -5172,6 +5430,7 @@ app.post('/ranked/results', { bodyLimit: RANKED_PROOF_BODY_LIMIT_BYTES }, async 
           proofDigest: proofVerification.proofDigest,
           verifiedRoundCount: proofVerification.roundCount,
           verifiedFrameCount: proofVerification.frameCount,
+          inputCommitmentAttestation: submitterAttestation,
         }),
         proofVerification.proofDigest,
         proofVerification.derivedOutcome,
@@ -5263,6 +5522,51 @@ app.post('/ranked/results', { bodyLimit: RANKED_PROOF_BODY_LIMIT_BYTES }, async 
         proof: proofView,
       };
     }
+
+    const peerSide = submitterSide === 'P1' ? 'P2' : 'P1';
+    const peerAccountId = peerSide === 'P1'
+      ? p1Participant.accountId
+      : p2Participant.accountId;
+    const peerCommitments = await loadRankedInputCommitments(
+      client,
+      body.sessionId,
+      peerAccountId,
+    );
+    const peerCommitmentVerification = await verifyRankedInputCommitmentCoverage({
+      proof: proofVerification.proof,
+      accountId: peerAccountId,
+      side: peerSide,
+      commitments: peerCommitments,
+      minimumObservationRatio: minimumRankedInputObservationRatio,
+    });
+    if (!peerCommitmentVerification.ok) {
+      await client.query('ROLLBACK');
+      reply.code(422);
+      return {
+        error: peerCommitmentVerification.message,
+        code: 'ranked_input_attestation_invalid',
+        attestationErrorCode: peerCommitmentVerification.code,
+      };
+    }
+    const matchInputAttestation = createRankedInputAttestation(
+      minimumRankedInputObservationRatio,
+      [submitterAttestation, peerCommitmentVerification.attestation],
+    );
+    await client.query(
+      `
+      UPDATE ranked_match_proofs
+      SET input_attestation_json = $2::jsonb
+      WHERE proof_digest = $1
+      `,
+      [proofVerification.proofDigest, JSON.stringify(matchInputAttestation)],
+    );
+    proofView = {
+      ...proofView,
+      inputAttestation: {
+        status: 'match_verified',
+        evidence: matchInputAttestation,
+      },
+    };
 
     const existingMatch = await client.query(
       'SELECT 1 FROM ranked_matches WHERE match_id = $1 LIMIT 1',
@@ -5356,6 +5660,7 @@ app.get('/ranked/results/:sessionId', async (request, reply) => {
       p.round_count,
       p.frame_count,
       p.derived_outcome,
+      p.input_attestation_json,
       ar.reason AS authoritative_reason,
       ar.forfeiting_account_id
     FROM ranked_matches m
@@ -5426,6 +5731,7 @@ app.get('/ranked/results/:sessionId', async (request, reply) => {
       round_count: number | null;
       frame_count: number | null;
       derived_outcome: 'p1_win' | 'p2_win' | null;
+      input_attestation_json: RankedInputAttestation | null;
       authoritative_reason: 'reconnect_timeout' | 'peer_left' | null;
       forfeiting_account_id: string | null;
     };
@@ -5461,6 +5767,10 @@ app.get('/ranked/results/:sessionId', async (request, reply) => {
         roundCount: Number(match.round_count),
         frameCount: Number(match.frame_count),
         derivedOutcome: match.derived_outcome,
+        inputAttestation: match.input_attestation_json ? {
+          status: 'match_verified',
+          evidence: match.input_attestation_json,
+        } : undefined,
       } : undefined,
       ratingDeltas: deltas.rows.map((rawRow) => {
         const delta = rawRow as Record<string, unknown>;
@@ -5521,7 +5831,8 @@ app.get('/ranked/results/:sessionId', async (request, reply) => {
       p.simulator_version,
       p.round_count,
       p.frame_count,
-      p.derived_outcome
+      p.derived_outcome,
+      p.input_attestation_json
     FROM ranked_result_submissions s
     LEFT JOIN ranked_match_proofs p ON p.proof_digest = s.proof_digest
     WHERE s.session_id = $1
@@ -5543,6 +5854,7 @@ app.get('/ranked/results/:sessionId', async (request, reply) => {
     round_count?: number | null;
     frame_count?: number | null;
     derived_outcome?: 'p1_win' | 'p2_win' | null;
+    input_attestation_json?: RankedInputAttestation | null;
   } | undefined;
   return {
     submissionId: selected?.submission_id ?? params.sessionId,
@@ -5557,6 +5869,10 @@ app.get('/ranked/results/:sessionId', async (request, reply) => {
       roundCount: Number(selected.round_count),
       frameCount: Number(selected.frame_count),
       derivedOutcome: selected.derived_outcome ?? null,
+      inputAttestation: selected.input_attestation_json ? {
+        status: 'match_verified',
+        evidence: selected.input_attestation_json,
+      } : undefined,
     } : undefined,
   };
 });
@@ -6157,7 +6473,7 @@ app.get('/ops/matchmaking/runtime', async (request, reply) => {
     return { error: 'Matchmaking operations are not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== sloAdminKey) {
+  if (!secretMatches(adminKey, sloAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }
@@ -6172,13 +6488,49 @@ app.get('/ops/matchmaking/runtime', async (request, reply) => {
   };
 });
 
+app.post('/ops/matchmaking/access/build-check', async (request, reply) => {
+  if (!sloAdminKey) {
+    reply.code(501);
+    return { error: 'Matchmaking operations are not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (!secretMatches(adminKey, sloAdminKey)) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+  const body = (request.body ?? {}) as MatchmakingBuildAccessCheckBody;
+  if (typeof body.buildVersion !== 'string' || !body.buildVersion.trim()) {
+    reply.code(400);
+    return { error: 'buildVersion is required.' };
+  }
+
+  reply.header('cache-control', 'no-store');
+  return {
+    allowlisted: matchmakingAccessPolicy.isBuildAllowlisted(body.buildVersion),
+  };
+});
+
+app.get('/ops/security/posture', async (request, reply) => {
+  if (!sloAdminKey) {
+    reply.code(501);
+    return { error: 'Security posture operations are not configured.' };
+  }
+  const adminKey = getHeaderValue(request.headers['x-admin-key']);
+  if (!secretMatches(adminKey, sloAdminKey)) {
+    reply.code(401);
+    return { error: 'Missing or invalid admin key.' };
+  }
+  reply.header('Cache-Control', 'no-store');
+  return runtimeSecurityPosture;
+});
+
 app.post('/ops/matchmaking/drain', async (request, reply) => {
   if (!sloAdminKey) {
     reply.code(501);
     return { error: 'Matchmaking operations are not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== sloAdminKey) {
+  if (!secretMatches(adminKey, sloAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }
@@ -6208,7 +6560,7 @@ app.get('/ops/slo/summary', async (request, reply) => {
     return { error: 'SLO summary is not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== sloAdminKey) {
+  if (!secretMatches(adminKey, sloAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }
@@ -6301,7 +6653,7 @@ app.post('/admin/enforcement/actions', async (request, reply) => {
     return { error: 'Enforcement tooling is not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== enforcementAdminKey) {
+  if (!secretMatches(adminKey, enforcementAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }
@@ -6450,7 +6802,7 @@ app.get('/admin/enforcement/actions', async (request, reply) => {
     return { error: 'Enforcement tooling is not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== enforcementAdminKey) {
+  if (!secretMatches(adminKey, enforcementAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }
@@ -6801,7 +7153,7 @@ app.post('/admin/enforcement/appeals/:appealId/review', async (request, reply) =
     return { error: 'Enforcement tooling is not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== enforcementAdminKey) {
+  if (!secretMatches(adminKey, enforcementAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }
@@ -6926,7 +7278,7 @@ app.get('/ranked/anomalies/alerts', async (request, reply) => {
     return { error: 'Ranked anomaly alerts are not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== rankedAnomalyAdminKey) {
+  if (!secretMatches(adminKey, rankedAnomalyAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }
@@ -7048,7 +7400,7 @@ app.post('/ranked/anomalies/alerts/:alertId/review', async (request, reply) => {
     return { error: 'Ranked anomaly alerts are not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== rankedAnomalyAdminKey) {
+  if (!secretMatches(adminKey, rankedAnomalyAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }
@@ -7143,7 +7495,7 @@ app.post('/ranked/seasons/reset', async (request, reply) => {
     return { error: 'Ranked season reset is not configured.' };
   }
   const adminKey = getHeaderValue(request.headers['x-admin-key']);
-  if (adminKey !== requiredAdminKey) {
+  if (!secretMatches(adminKey, requiredAdminKey)) {
     reply.code(401);
     return { error: 'Missing or invalid admin key.' };
   }

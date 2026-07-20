@@ -73,6 +73,9 @@ test('canonicalizes account UUIDs and exact build SHAs before readiness and runt
   });
   assert.deepEqual(policy.evaluate(HEX_ACCOUNT, BUILD_SHA), { allowed: true });
   assert.deepEqual(policy.evaluate(HEX_ACCOUNT.toUpperCase(), BUILD_SHA.toUpperCase()), { allowed: true });
+  assert.equal(policy.isBuildAllowlisted(BUILD_SHA), true);
+  assert.equal(policy.isBuildAllowlisted(BUILD_SHA.toUpperCase()), true);
+  assert.equal(policy.isBuildAllowlisted(`${BUILD_SHA.slice(0, -1)}0`), false);
 });
 
 test('keeps non-SHA build identifiers case-sensitive', () => {
@@ -83,6 +86,9 @@ test('keeps non-SHA build identifiers case-sensitive', () => {
   });
 
   assert.deepEqual(policy.evaluate(HEX_ACCOUNT, 'alpha-RC1'), { allowed: true });
+  assert.equal(policy.isBuildAllowlisted('alpha-RC1'), true);
+  assert.equal(policy.isBuildAllowlisted(' alpha-RC1 '), true);
+  assert.equal(policy.isBuildAllowlisted('alpha-rc1'), false);
   assert.deepEqual(policy.evaluate(HEX_ACCOUNT, 'alpha-rc1'), {
     allowed: false,
     code: 'build_not_allowlisted',
@@ -124,4 +130,16 @@ test('public status never exposes allowlist entries', () => {
   const serialised = JSON.stringify(policy.getStatus());
   assert.equal(serialised.includes(ACCOUNT_1), false);
   assert.equal(serialised.includes('alpha-secret-build'), false);
+});
+
+test('build membership checks fail closed for empty and invalid identifiers', () => {
+  const policy = createMatchmakingAccessPolicyFromEnv({
+    MATCHMAKING_ACCESS_MODE: 'allowlist',
+    MATCHMAKING_ALPHA_ACCOUNT_IDS: ACCOUNT_1,
+    MATCHMAKING_ALPHA_BUILD_VERSIONS: BUILD_SHA,
+  });
+
+  assert.equal(policy.isBuildAllowlisted(''), false);
+  assert.equal(policy.isBuildAllowlisted('bad build'), false);
+  assert.equal(policy.isBuildAllowlisted('x'.repeat(121)), false);
 });

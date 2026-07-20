@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import type { RankedMatchProof } from '../../game-web/src/sim/rankedProof';
 import { assertLocalDatabaseTarget } from '../src/databaseTarget';
-import { createRankedProofFixture } from './rankedProofFixture';
+import {
+  createRankedInputCommitmentFixture,
+  createRankedProofFixture,
+} from './rankedProofFixture';
 
 interface AccountRecord {
   id: string;
@@ -53,6 +56,15 @@ interface SignalsView {
 
 interface RankedResultStatus {
   status: 'awaiting_peer_confirmation' | 'accepted' | 'flagged_for_review';
+  proof?: {
+    inputAttestation?: {
+      status: 'participant_verified' | 'match_verified';
+      evidence: {
+        schemaVersion: string;
+        participants: Array<{ accountId: string; finalChainDigest: string }>;
+      };
+    };
+  };
 }
 
 interface ManagedApi {
@@ -386,6 +398,37 @@ async function submitRankedResult(
   });
 }
 
+async function submitRankedInputCommitments(
+  baseUrl: string,
+  accountId: string,
+  sessionId: string,
+  sessionToken: string,
+  side: 'P1' | 'P2',
+  proof: RankedMatchProof,
+): Promise<number> {
+  const commitments = await createRankedInputCommitmentFixture(proof, accountId, side);
+  for (const commitment of commitments) {
+    const response = await requestJson<{ sequence?: number }>(
+      `${baseUrl}/ranked/sessions/${sessionId}/input-commitments`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...authorizationHeaders(accountId),
+          'x-match-session-token': sessionToken,
+        },
+        body: JSON.stringify({ ...commitment, sessionToken }),
+      },
+    );
+    if (response.status !== 200 || response.body.sequence !== commitment.sequence) {
+      throw new Error(
+        `Restart-smoke input commitment ${commitment.sequence} failed: status=${response.status}.`,
+      );
+    }
+  }
+  return commitments.length;
+}
+
 async function getRankedStatus(
   baseUrl: string,
   accountId: string,
@@ -453,6 +496,28 @@ async function run(): Promise<void> {
       rulesetVersion: SMOKE_RULESET_VERSION,
       balanceProfileId: SMOKE_BALANCE_PROFILE_ID,
     });
+    const matchedSession = await getSession(baseUrl, account1, sessionId);
+    const account1Side = matchedSession.participants.find(({ accountId }) => accountId === account1)?.side;
+    const account2Side = matchedSession.participants.find(({ accountId }) => accountId === account2)?.side;
+    if (!account1Side || !account2Side) {
+      throw new Error('Restart smoke did not expose both server-assigned player sides.');
+    }
+    const account1Commitments = await submitRankedInputCommitments(
+      baseUrl,
+      account1,
+      sessionId,
+      ticket1.matchStart.sessionToken,
+      account1Side,
+      rankedProof,
+    );
+    const account2Commitments = await submitRankedInputCommitments(
+      baseUrl,
+      account2,
+      sessionId,
+      ticket2.matchStart.sessionToken,
+      account2Side,
+      rankedProof,
+    );
 
     const signalId = await publishSignal(
       baseUrl,
@@ -571,6 +636,13 @@ async function run(): Promise<void> {
     if (settledStatus.status !== 200 || settledStatus.body.status !== 'accepted') {
       throw new Error(`Post-restart ranked result was not accepted: status=${settledStatus.status}`);
     }
+    if (
+      settledStatus.body.proof?.inputAttestation?.status !== 'match_verified'
+      || settledStatus.body.proof.inputAttestation.evidence.schemaVersion !== 'gw.ranked-input-attestation.v1'
+      || settledStatus.body.proof.inputAttestation.evidence.participants.length !== 2
+    ) {
+      throw new Error('Post-restart ranked result did not retain both input commitment chains.');
+    }
     const checkpointAfterRestart = await checkpointRuntime(baseUrl);
 
     console.log(JSON.stringify({
@@ -593,6 +665,11 @@ async function run(): Promise<void> {
       preRestartResultStatus: firstResult.status,
       postRestartResultStatus: peerResult.status,
       settledStatus: settledStatus.body.status,
+      inputCommitments: {
+        account1: account1Commitments,
+        account2: account2Commitments,
+        survivedProcessReplacement: true,
+      },
       checkpoints: {
         beforeRestart: checkpointBeforeRestart,
         afterRestart: checkpointAfterRestart,

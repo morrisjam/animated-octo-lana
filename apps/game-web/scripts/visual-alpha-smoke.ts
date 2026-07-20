@@ -28,6 +28,7 @@ import {
   type VisualAlphaLoopbackApiStubConfig,
   type VisualAlphaLoopbackApiStubRequestRecord,
 } from '../src/build/visualAlphaLoopbackApiStub';
+import { resolveVisualAlphaStageTarget } from '../src/build/visualAlphaStageTarget';
 import {
   traceReplayActionStarts,
   validateReplayPayload,
@@ -43,8 +44,9 @@ const VIEWPORT = { width: 1280, height: 720 } as const;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const RANDOM_SEED = 0x4757_2026;
 const REPORT_SCHEMA_VERSION = 'gw.visual-alpha-smoke.v11';
-const EXPECTED_ALPHA_STAGE_ID = 'wormhole_authored_v4';
-const EXPECTED_STAGE_MODEL_ID = 'wormhole_arena_lip_v1';
+const STAGE_TARGET = resolveVisualAlphaStageTarget(process.env.VISUAL_ALPHA_SMOKE_STAGE_ID);
+const EXPECTED_STAGE_ID = STAGE_TARGET.stageId;
+const EXPECTED_STAGE_MODEL_ID = STAGE_TARGET.modelId;
 const EXPECTED_CHARACTER_ATLAS_IDS = [
   'character_duelist_animset',
   'character_vanguard_animset',
@@ -61,7 +63,10 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(currentDir, '..');
 const distRoot = path.resolve(appRoot, 'dist');
 const replayRoot = path.resolve(appRoot, 'replays');
-const artifactRoot = path.resolve(appRoot, 'build-artifacts/visual-alpha-smoke');
+const artifactDirectoryName = STAGE_TARGET.override
+  ? `visual-alpha-smoke-${STAGE_TARGET.stageId.replace(/[^a-z0-9_-]+/gi, '-')}`
+  : 'visual-alpha-smoke';
+const artifactRoot = path.resolve(appRoot, 'build-artifacts', artifactDirectoryName);
 const reportPath = path.resolve(artifactRoot, 'report.json');
 const smokeFixturePath = path.resolve(replayRoot, 'smoke.replay.json');
 const alphaFixturePath = path.resolve(replayRoot, 'alpha-visual.replay.json');
@@ -127,9 +132,9 @@ interface AssetPreloadReadinessSummary {
   characterAssetLoadingIds: string[];
   characterAssetFailedIds: string[];
   characterAssetFallbackIds: string[];
-  selectedStageId: typeof EXPECTED_ALPHA_STAGE_ID;
-  requestedStageModelId: typeof EXPECTED_STAGE_MODEL_ID;
-  visibleStageModelId: typeof EXPECTED_STAGE_MODEL_ID;
+  selectedStageId: string;
+  requestedStageModelId: string;
+  visibleStageModelId: string;
 }
 
 interface LoopbackApiStubSummary {
@@ -516,8 +521,8 @@ async function waitForAssetPreload(
         + `fallback=${result.characterAssetFallbackIds.join(',') || 'none'}.`,
     );
   }
-  if (result.selectedStageId !== EXPECTED_ALPHA_STAGE_ID) {
-    throw new Error(`Selected stage ${result.selectedStageId} does not match ${EXPECTED_ALPHA_STAGE_ID} before ${context}.`);
+  if (result.selectedStageId !== EXPECTED_STAGE_ID) {
+    throw new Error(`Selected stage ${result.selectedStageId} does not match ${EXPECTED_STAGE_ID} before ${context}.`);
   }
   if (
     result.requestedStageModelId !== EXPECTED_STAGE_MODEL_ID
@@ -540,7 +545,7 @@ async function waitForAssetPreload(
     characterAssetLoadingIds: result.characterAssetLoadingIds,
     characterAssetFailedIds: result.characterAssetFailedIds,
     characterAssetFallbackIds: result.characterAssetFallbackIds,
-    selectedStageId: EXPECTED_ALPHA_STAGE_ID,
+    selectedStageId: EXPECTED_STAGE_ID,
     requestedStageModelId: EXPECTED_STAGE_MODEL_ID,
     visibleStageModelId: EXPECTED_STAGE_MODEL_ID,
   };
@@ -1339,7 +1344,7 @@ async function run(): Promise<void> {
       serviceWorkers: 'block',
     });
     page = await context.newPage();
-    await page.addInitScript((seed: number) => {
+    await page.addInitScript(({ seed, stageId }: { seed: number; stageId: string }) => {
       let state = seed >>> 0;
       Math.random = () => {
         state = (state + 0x6d2b79f5) >>> 0;
@@ -1348,7 +1353,15 @@ async function run(): Promise<void> {
         value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
         return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
       };
-    }, RANDOM_SEED);
+      try {
+        window.localStorage.setItem(
+          'gravity_well.settings.v1',
+          JSON.stringify({ stageAtmosphereId: stageId }),
+        );
+      } catch {
+        // The exact stage identity checks fail closed if storage is unavailable.
+      }
+    }, { seed: RANDOM_SEED, stageId: EXPECTED_STAGE_ID });
 
     const allowedOrigin = new URL(origin).origin;
     const loopbackApiStub = loopbackApiStubConfig

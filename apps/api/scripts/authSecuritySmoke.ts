@@ -1,5 +1,6 @@
 import process from 'node:process';
 import { Pool } from 'pg';
+import { digestSteamWebApiTicket } from '../src/auth/steamAuth';
 import {
   assertSafeDatabaseSmokeTarget,
   assertSafeSmokeTarget,
@@ -8,6 +9,12 @@ import {
 interface AccountRecord {
   id?: string;
   accessToken?: string;
+}
+
+interface SteamExchangeRecord {
+  accountId?: string;
+  accessToken?: string;
+  steamUserId?: string;
 }
 
 interface ErrorResponse {
@@ -168,6 +175,74 @@ async function run(): Promise<void> {
     throw new Error('Unconfirmed Steam link request reached ticket verification or returned the wrong boundary code.');
   }
 
+  const steamWebTicket = String(process.env.AUTH_SECURITY_STEAM_WEB_TICKET ?? '').trim();
+  let steamTicketReplay: {
+    firstStatus: number;
+    replayStatus: number;
+    durableClaimCount: number;
+  } | null = null;
+  if (steamWebTicket) {
+    const ticketDigest = digestSteamWebApiTicket(steamWebTicket);
+    if (!ticketDigest) {
+      throw new Error('AUTH_SECURITY_STEAM_WEB_TICKET must be a valid hexadecimal Web API ticket.');
+    }
+    if (!databaseUrl) {
+      throw new Error('Steam ticket replay smoke requires DATABASE_URL for durable claim verification.');
+    }
+
+    const firstExchange = await requestJson<SteamExchangeRecord>(`${baseUrl}/auth/steam/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ steamTicket: steamWebTicket }),
+    });
+    expectStatus('First Steam Web API ticket exchange', firstExchange, 200);
+    if (!firstExchange.body.accountId || !firstExchange.body.accessToken) {
+      throw new Error('First Steam Web API ticket exchange did not issue a signed account session.');
+    }
+
+    const replayExchange = await requestJson<ErrorResponse>(`${baseUrl}/auth/steam/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ steamTicket: steamWebTicket.toUpperCase() }),
+    });
+    expectStatus('Replayed Steam Web API ticket exchange', replayExchange, 401);
+    if (replayExchange.body.code !== 'steam_ticket_already_exchanged') {
+      throw new Error('Replayed Steam ticket did not reach the durable one-use boundary.');
+    }
+
+    assertSafeDatabaseSmokeTarget(databaseUrl, 'Steam ticket replay claim smoke');
+    const pool = new Pool({ connectionString: databaseUrl, max: 1 });
+    try {
+      const claim = await pool.query<{
+        ticket_digest: string;
+        steam_user_id: string;
+        account_id: string | null;
+      }>(
+        `
+          SELECT ticket_digest, steam_user_id, account_id
+          FROM steam_ticket_exchanges
+          WHERE ticket_digest = $1
+        `,
+        [ticketDigest],
+      );
+      if (
+        claim.rowCount !== 1
+        || claim.rows[0]?.ticket_digest !== ticketDigest
+        || claim.rows[0]?.steam_user_id !== firstExchange.body.steamUserId
+        || claim.rows[0]?.account_id !== firstExchange.body.accountId
+      ) {
+        throw new Error('Steam ticket exchange did not retain one matching durable fingerprint claim.');
+      }
+      steamTicketReplay = {
+        firstStatus: firstExchange.status,
+        replayStatus: replayExchange.status,
+        durableClaimCount: claim.rowCount,
+      };
+    } finally {
+      await pool.end();
+    }
+  }
+
   const malformedTicket = `not-a-steam-ticket-${process.pid}-${Date.now()}`;
   const steamStatuses: number[] = [];
   let throttledResponse: JsonResponse<ErrorResponse> | null = null;
@@ -219,6 +294,7 @@ async function run(): Promise<void> {
       unauthenticatedLinkStatus: unauthenticatedLink.status,
       unconfirmedLinkStatus: unconfirmedLink.status,
     },
+    steamTicketReplay,
   }, null, 2));
 }
 

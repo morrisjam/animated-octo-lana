@@ -5,12 +5,15 @@ import {
   type CharacterId,
 } from './characters';
 import {
+  COMBAT_ORDINARY_BOOST_OUTCOMES,
   COMBAT_EVENT_TYPES,
   CombatEventTelemetryTracker,
+  type CombatAction,
   type CombatDistanceBand,
   type CombatEventTelemetrySummary,
   type CombatEventType,
   type CombatLaunchClashCause,
+  type CombatOrdinaryBoostOutcome,
   type CombatResourceTelemetry,
 } from './combatEventTelemetry';
 import type { FrameInput, GameState, PlayerId, PlayerState, PlayersById } from './types';
@@ -18,10 +21,16 @@ import {
   fingerprintCharacterBalanceConfig,
   resolveCharacterRulesFingerprint,
 } from './characterBalance';
-import type { SimulationActionStart, SimulationLaunchClash } from './sim';
+import type {
+  SimulationActionStart,
+  SimulationControlReturnReset,
+  SimulationLaunchClash,
+} from './sim';
 
-export const MATCH_TELEMETRY_SCHEMA_VERSION = 'gw.match-telemetry.v8';
-export const MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION = 'gw.match-telemetry-aggregate.v8';
+export const PREVIOUS_MATCH_TELEMETRY_SCHEMA_VERSION = 'gw.match-telemetry.v9';
+export const PREVIOUS_MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION = 'gw.match-telemetry-aggregate.v9';
+export const MATCH_TELEMETRY_SCHEMA_VERSION = 'gw.match-telemetry.v10';
+export const MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION = 'gw.match-telemetry-aggregate.v10';
 export const MATCH_TELEMETRY_CONTACT_PADDING = 0.75;
 export const MATCH_TELEMETRY_SUSTAINED_DECISION_WINDOW_SECONDS = 0.75;
 
@@ -250,6 +259,20 @@ export interface MatchTelemetryAggregateSharedAgencySummary extends MatchTelemet
   neutralRatio: number;
 }
 
+export interface MatchTelemetryAggregateOrdinaryBoostCounterplaySummary {
+  opportunities: number;
+  completedOpportunities: number;
+  firstResponses: number;
+  targetSuperBoostResponses: number;
+  firstResponseActions: Record<CombatAction | 'none', number>;
+  outcomes: Record<CombatOrdinaryBoostOutcome, number>;
+  responseCoverageRatio: number;
+  superBoostResponseRatio: number;
+  averageFirstResponseSeconds: number | null;
+  averageAvailableReactionSeconds: number | null;
+  averageStartDistance: number | null;
+}
+
 export interface MatchTelemetryAggregateSummary {
   schemaVersion: typeof MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION;
   matchTelemetrySchemaVersion: typeof MATCH_TELEMETRY_SCHEMA_VERSION;
@@ -261,6 +284,7 @@ export interface MatchTelemetryAggregateSummary {
   players: PlayersById<MatchTelemetryAggregatePlayerSummary>;
   spacing: MatchTelemetryAggregateSpacingSummary;
   sharedAgency: MatchTelemetryAggregateSharedAgencySummary;
+  ordinaryBoostCounterplay: PlayersById<MatchTelemetryAggregateOrdinaryBoostCounterplaySummary>;
   eventCounts: Record<CombatEventType, number>;
   launchClashCauses: Record<CombatLaunchClashCause, number>;
 }
@@ -486,6 +510,7 @@ export class MatchTelemetryTracker {
     dt: number,
     acceptedActionStarts?: readonly SimulationActionStart[],
     launchClashes?: readonly SimulationLaunchClash[],
+    controlReturnResets?: readonly SimulationControlReturnReset[],
   ): void {
     const frameSeconds = Math.max(0, dt);
     this.framesSimulated += 1;
@@ -568,7 +593,14 @@ export class MatchTelemetryTracker {
     this.updateHelplessDuration('P1', currentState.p1.helpless, dt);
     this.updateHelplessDuration('P2', currentState.p2.helpless, dt);
 
-    this.combatTelemetry.recordFrame(frameInput, state, dt, acceptedActionStarts, launchClashes);
+    this.combatTelemetry.recordFrame(
+      frameInput,
+      state,
+      dt,
+      acceptedActionStarts,
+      launchClashes,
+      controlReturnResets,
+    );
     this.previousState = currentState;
   }
 
@@ -973,6 +1005,33 @@ function createAggregatePlayerSummary(): MatchTelemetryAggregatePlayerSummary {
   };
 }
 
+function createAggregateOrdinaryBoostCounterplaySummary(): MatchTelemetryAggregateOrdinaryBoostCounterplaySummary {
+  return {
+    opportunities: 0,
+    completedOpportunities: 0,
+    firstResponses: 0,
+    targetSuperBoostResponses: 0,
+    firstResponseActions: {
+      boost: 0,
+      super_boost: 0,
+      special: 0,
+      launch: 0,
+      dunk: 0,
+      parry: 0,
+      launch_break: 0,
+      none: 0,
+    },
+    outcomes: Object.fromEntries(
+      COMBAT_ORDINARY_BOOST_OUTCOMES.map((outcome) => [outcome, 0]),
+    ) as Record<CombatOrdinaryBoostOutcome, number>,
+    responseCoverageRatio: 0,
+    superBoostResponseRatio: 0,
+    averageFirstResponseSeconds: null,
+    averageAvailableReactionSeconds: null,
+    averageStartDistance: null,
+  };
+}
+
 function roundAggregateMetric(value: number, precision = 4): number {
   const scale = 10 ** precision;
   return Math.round(value * scale) / scale;
@@ -1002,6 +1061,13 @@ export function aggregateMatchTelemetrySummaries(
     P1: createAggregatePlayerSummary(),
     P2: createAggregatePlayerSummary(),
   };
+  const ordinaryBoostCounterplay: PlayersById<MatchTelemetryAggregateOrdinaryBoostCounterplaySummary> = {
+    P1: createAggregateOrdinaryBoostCounterplaySummary(),
+    P2: createAggregateOrdinaryBoostCounterplaySummary(),
+  };
+  const ordinaryBoostFirstResponseSeconds: PlayersById<number> = { P1: 0, P2: 0 };
+  const ordinaryBoostAvailableReactionSeconds: PlayersById<number> = { P1: 0, P2: 0 };
+  const ordinaryBoostStartDistance: PlayersById<number> = { P1: 0, P2: 0 };
   const breakReactionTotals: PlayersById<number> = { P1: 0, P2: 0 };
   const averageFuelTotals: PlayersById<number> = { P1: 0, P2: 0 };
   const eventCounts = Object.fromEntries(
@@ -1079,6 +1145,27 @@ export function aggregateMatchTelemetrySummaries(
     for (const cause of Object.keys(launchClashCauses) as CombatLaunchClashCause[]) {
       launchClashCauses[cause] += summary.combat.launchClashCauses[cause];
     }
+    for (const window of summary.combat.ordinaryBoostCounterplay ?? []) {
+      const target = ordinaryBoostCounterplay[window.targetId];
+      target.opportunities += 1;
+      target.outcomes[window.outcome] += 1;
+      ordinaryBoostAvailableReactionSeconds[window.targetId] += window.availableReactionSeconds;
+      ordinaryBoostStartDistance[window.targetId] += window.startDistance;
+      if (window.outcome !== 'sample_end') {
+        target.completedOpportunities += 1;
+      }
+      if (window.targetFirstAcceptedAction) {
+        target.firstResponses += 1;
+        target.firstResponseActions[window.targetFirstAcceptedAction.action] += 1;
+        ordinaryBoostFirstResponseSeconds[window.targetId]
+          += window.targetFirstAcceptedAction.delaySeconds;
+      } else {
+        target.firstResponseActions.none += 1;
+      }
+      if (window.targetSuperBoostResponse) {
+        target.targetSuperBoostResponses += 1;
+      }
+    }
     for (const band of Object.keys(distanceBandFrames) as CombatDistanceBand[]) {
       distanceBandFrames[band] += summary.combat.spacingBands.frames[band];
     }
@@ -1144,6 +1231,33 @@ export function aggregateMatchTelemetrySummaries(
       : 0;
     player.zeroFuelSeconds = roundAggregateMetric(player.zeroFuelSeconds, 2);
     player.helplessSeconds = roundAggregateMetric(player.helplessSeconds, 2);
+    const boostCounterplay = ordinaryBoostCounterplay[playerId];
+    boostCounterplay.responseCoverageRatio = roundAggregateMetric(
+      boostCounterplay.firstResponses / Math.max(1, boostCounterplay.opportunities),
+      3,
+    );
+    boostCounterplay.superBoostResponseRatio = roundAggregateMetric(
+      boostCounterplay.targetSuperBoostResponses / Math.max(1, boostCounterplay.opportunities),
+      3,
+    );
+    boostCounterplay.averageFirstResponseSeconds = boostCounterplay.firstResponses > 0
+      ? roundAggregateMetric(
+        ordinaryBoostFirstResponseSeconds[playerId] / boostCounterplay.firstResponses,
+        3,
+      )
+      : null;
+    boostCounterplay.averageAvailableReactionSeconds = boostCounterplay.opportunities > 0
+      ? roundAggregateMetric(
+        ordinaryBoostAvailableReactionSeconds[playerId] / boostCounterplay.opportunities,
+        3,
+      )
+      : null;
+    boostCounterplay.averageStartDistance = boostCounterplay.opportunities > 0
+      ? roundAggregateMetric(
+        ordinaryBoostStartDistance[playerId] / boostCounterplay.opportunities,
+        2,
+      )
+      : null;
   }
 
   const sharedContactEpisodes = summariseEpisodes(sharedContactEpisodeDurationsSeconds);
@@ -1161,6 +1275,7 @@ export function aggregateMatchTelemetrySummaries(
     framesSimulated,
     elapsedSeconds: roundAggregateMetric(elapsedSeconds, 2),
     players,
+    ordinaryBoostCounterplay,
     spacing: {
       averageDistance: framesSimulated > 0 ? roundAggregateMetric(weightedDistance / framesSimulated, 2) : 0,
       closestDistance: Number.isFinite(closestDistance) ? roundAggregateMetric(closestDistance, 2) : 0,

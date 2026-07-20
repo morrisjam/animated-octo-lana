@@ -48,6 +48,11 @@ export function computeStateChecksum(state: GameState): number {
       hash = addHashNumber(hash, 0x43424c4b);
       hash = addHashNumber(hash, quantise(player.combatBoostLockRemaining));
     }
+    if (player.specialDir && (player.specialDir.x !== 0 || player.specialDir.y !== 0)) {
+      hash = addHashNumber(hash, 0x53504452);
+      hash = addHashNumber(hash, quantise(player.specialDir.x));
+      hash = addHashNumber(hash, quantise(player.specialDir.y));
+    }
     if (
       player.launchAttemptSerial !== 0
       || player.postControlCounterPending

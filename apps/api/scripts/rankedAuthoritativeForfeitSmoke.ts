@@ -1,6 +1,7 @@
 import process from 'node:process';
 import { Pool } from 'pg';
 import { deriveLivenessResolutionTimeoutMs } from '../src/ops/authoritativeForfeitSmokeTiming';
+import { createRankedProofFixture } from './rankedProofFixture';
 import { assertSafeSmokeTarget } from './smokeTargetGuard';
 
 const BUILD_VERSION = 'prototype-2026.02';
@@ -53,6 +54,11 @@ interface RankedResultResponse {
     postRating: number;
     result: string;
   }>;
+}
+
+interface RankedResultSubmissionResponse {
+  code?: string;
+  error?: string;
 }
 
 interface DurableTerminalDecisionRow {
@@ -259,6 +265,33 @@ async function readResult(
   });
 }
 
+async function submitLateRankedProof(
+  baseUrl: string,
+  account: AccountResponse,
+  sessionId: string,
+  sessionToken: string,
+  participantAccountIds: string[],
+  winnerAccountId: string,
+  proof: ReturnType<typeof createRankedProofFixture>,
+): Promise<{ status: number; body: RankedResultSubmissionResponse }> {
+  return await requestJson<RankedResultSubmissionResponse>(`${baseUrl}/ranked/results`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${account.accessToken}`,
+    },
+    body: JSON.stringify({
+      sessionId,
+      matchId: sessionId,
+      sessionToken,
+      outcome: 'p1_win',
+      participantAccountIds,
+      winnerAccountId,
+      proof,
+    }),
+  });
+}
+
 async function waitForSilentPeerTimeout(
   baseUrl: string,
   liveAccount: AccountResponse,
@@ -377,6 +410,12 @@ async function run(): Promise<void> {
   ) {
     throw new Error('Match start did not publish a safe heartbeat schedule.');
   }
+  const lateForfeitProof = createRankedProofFixture({
+    sessionId,
+    buildVersion: BUILD_VERSION,
+    rulesetVersion: RULESET_VERSION,
+    balanceProfileId: BALANCE_PROFILE_ID,
+  });
 
   const databaseUrl = process.env.DATABASE_URL?.trim() || undefined;
   const heartbeatSloSamplesBefore = await countHeartbeatSloSamples(databaseUrl);
@@ -446,6 +485,23 @@ async function run(): Promise<void> {
     || session.forfeitingAccountId !== p2.id
   ) {
     throw new Error(`Expected attributed reconnect timeout, got ${JSON.stringify(session)}.`);
+  }
+  const lateForfeitSubmission = await submitLateRankedProof(
+    baseUrl,
+    p1,
+    sessionId,
+    p1Ticket.matchStart.sessionToken,
+    [p1.id, p2.id],
+    p1.id,
+    lateForfeitProof,
+  );
+  if (
+    lateForfeitSubmission.status !== 409
+    || lateForfeitSubmission.body.code !== 'ranked_session_authoritative_resolution'
+  ) {
+    throw new Error(
+      `Late proof bypassed authoritative forfeit priority: ${JSON.stringify(lateForfeitSubmission)}.`,
+    );
   }
   const heartbeatSloSamplesAfter = await countHeartbeatSloSamples(databaseUrl);
   if (
@@ -545,6 +601,12 @@ async function run(): Promise<void> {
   if (noContestP2Ticket.matchStart.sessionId !== noContestSessionId) {
     throw new Error('No-contest smoke peers disagree on session id.');
   }
+  const lateNoContestProof = createRankedProofFixture({
+    sessionId: noContestSessionId,
+    buildVersion: BUILD_VERSION,
+    rulesetVersion: RULESET_VERSION,
+    balanceProfileId: BALANCE_PROFILE_ID,
+  });
   const noContestResolutionTimeoutMs = deriveLivenessResolutionTimeoutMs({
     configuredMinimumMs: configuredMinimumTimeoutMs,
     heartbeatTimeoutSeconds: noContestP1Ticket.matchStart.heartbeatTimeoutSeconds,
@@ -562,6 +624,23 @@ async function run(): Promise<void> {
     || noContestSession.forfeitingAccountId !== undefined
   ) {
     throw new Error(`Expected double-timeout no-contest, got ${JSON.stringify(noContestSession)}.`);
+  }
+  const lateNoContestSubmission = await submitLateRankedProof(
+    baseUrl,
+    noContestP1,
+    noContestSessionId,
+    noContestP1Ticket.matchStart.sessionToken,
+    [noContestP1.id, noContestP2.id],
+    noContestP1.id,
+    lateNoContestProof,
+  );
+  if (
+    lateNoContestSubmission.status !== 409
+    || lateNoContestSubmission.body.code !== 'ranked_session_no_contest'
+  ) {
+    throw new Error(
+      `Late proof bypassed authoritative no-contest priority: ${JSON.stringify(lateNoContestSubmission)}.`,
+    );
   }
   const noContestResult = await waitForDurableResult(
     baseUrl,
@@ -625,12 +704,14 @@ async function run(): Promise<void> {
     durableTerminalDecision: terminalDecision ? {
       status: terminalDecision.status,
       settledMatchId: terminalDecision.settled_match_id,
+      lateProofRejected: true,
       tokenlessParticipantRead: true,
       outsiderRejected: true,
     } : 'not_checked',
     noContest: noContestDecision ? {
       sessionId: noContestSessionId,
       status: noContestDecision.status,
+      lateProofRejected: true,
       ratedMatchCount: Number(noContestDecision.ranked_match_count),
       outsiderRejected: true,
     } : 'not_checked',

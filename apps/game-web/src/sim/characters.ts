@@ -20,12 +20,19 @@ export interface CharacterStats {
   dunkRecoveryFuelMultiplier: number;
 }
 
+export interface CharacterAiProfile {
+  neutralApproachMultiplier: number;
+  neutralBoostDistanceOffset: number;
+  postControlSpacingFrames: number;
+}
+
 export interface CharacterDefinition {
   id: CharacterId;
   displayName: string;
   blurb: string;
   mechanicsTag: string;
   stats: CharacterStats;
+  ai: CharacterAiProfile;
   visuals: CharacterVisualProfile;
   audio: CharacterAudioProfile;
   moves: MoveFrameData;
@@ -109,6 +116,14 @@ function baseMoves(projectileVisualId: string | null): MoveFrameData {
   return createMoveFrameData(projectileVisualId ?? undefined);
 }
 
+function baseAiProfile(): CharacterAiProfile {
+  return {
+    neutralApproachMultiplier: 1,
+    neutralBoostDistanceOffset: 0,
+    postControlSpacingFrames: 0,
+  };
+}
+
 function baseSpecials(): CharacterSpecialMoveDefinition[] {
   return [
     { id: 'special_alpha', label: 'Special Alpha', enabled: false },
@@ -128,6 +143,7 @@ function makePlaceholderCharacter(
     blurb: 'Placeholder all-round archetype.',
     mechanicsTag,
     stats: baseStats(),
+    ai: baseAiProfile(),
     visuals,
     audio: baseAudio(id),
     moves: baseMoves(visuals.projectileVisualId),
@@ -208,6 +224,7 @@ const CHARACTER_RULES_MANIFEST = CHARACTERS.map((character) => ({
   id: character.id,
   packageVersion: CHARACTER_PACKAGE_VERSION_BY_ID[character.id],
   stats: character.stats,
+  ai: character.ai,
   moves: character.moves,
   specials: character.specials.map((special) => ({ id: special.id, enabled: special.enabled })),
 }));

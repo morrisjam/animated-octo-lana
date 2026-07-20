@@ -13,8 +13,11 @@
     "ci:win": "npm test && npm run package:win && npm run smoke:win"
   },
   "gravityWell": {
+    "releaseProfile": "controlled-online-alpha",
     "steamWebApiIdentity": "gravity-well-api",
-    "steamAuthApiBase": "https://api.gravitywell.space"
+    "steamAuthApiBase": "https://api.gravitywell.space",
+    "rulesetVersion": "prototype-2026.02",
+    "balanceProfileId": "default"
   },
   "dependencies": {
     "steamworks.js": "0.4.0"

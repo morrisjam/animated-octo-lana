@@ -78,10 +78,18 @@ export interface SimulationCombatBoostLockFrame {
   cancelledActiveBoost: boolean;
 }
 
+export interface SimulationControlReturnReset {
+  playerId: PlayerId;
+  kind: 'natural' | 'launch_break';
+  preResetDistance: number;
+  postResetDistance: number;
+}
+
 export interface SimulationStepObserver {
   onActionStart(event: SimulationActionStart): void;
   onLaunchClash?(event: SimulationLaunchClash): void;
   onCombatBoostLockFrame?(event: SimulationCombatBoostLockFrame): void;
+  onControlReturnReset?(event: SimulationControlReturnReset): void;
 }
 
 interface LaunchAttemptFrameState {
@@ -179,6 +187,7 @@ function clearSpecialAttempt(player: PlayerState): void {
   player.specialStartup = 0;
   player.specialActive = 0;
   player.specialDidResolve = false;
+  player.specialDir = { x: 0, y: 0 };
 }
 
 function resetChain(player: PlayerState): void {
@@ -250,6 +259,7 @@ function createPlayer(
     specialStartup: 0,
     specialActive: 0,
     specialDidResolve: false,
+    specialDir: { x: 0, y: 0 },
     cool: {
       special: 0,
       launch: 0,
@@ -372,6 +382,7 @@ function clonePlayerState(player: PlayerState): PlayerState {
     specialStartup: player.specialStartup,
     specialActive: player.specialActive,
     specialDidResolve: player.specialDidResolve,
+    specialDir: player.specialDir ? cloneVec2(player.specialDir) : { x: 0, y: 0 },
     cool: cloneCooldowns(player.cool),
   };
 }
@@ -454,8 +465,8 @@ function assertSnapshotRootShape(snapshot: unknown): asserts snapshot is GameSta
   }
 }
 
-export const STATE_SNAPSHOT_VERSION = 4;
-const LEGACY_STATE_SNAPSHOT_VERSIONS = [1, 2, 3] as const;
+export const STATE_SNAPSHOT_VERSION = 5;
+const LEGACY_STATE_SNAPSHOT_VERSIONS = [1, 2, 3, 4] as const;
 
 interface GameStateSnapshotEnvelope {
   version: number;
@@ -521,7 +532,7 @@ export function deserialiseState(serialised: string): GameState {
       !Number.isFinite(version)
       || (
         version !== STATE_SNAPSHOT_VERSION
-        && !LEGACY_STATE_SNAPSHOT_VERSIONS.includes(version as 1 | 2 | 3)
+        && !LEGACY_STATE_SNAPSHOT_VERSIONS.includes(version as 1 | 2 | 3 | 4)
       )
     ) {
       throw new Error(
@@ -943,7 +954,10 @@ function executeSpecial(
       if (!moveData) {
         return false;
       }
-      const dir = normalise(target.pos.x - attacker.pos.x, target.pos.y - attacker.pos.y);
+      const committedDir = attacker.specialDir ?? { x: 0, y: 0 };
+      const dir = Math.hypot(committedDir.x, committedDir.y) > 0
+        ? normalise(committedDir.x, committedDir.y)
+        : normalise(target.pos.x - attacker.pos.x, target.pos.y - attacker.pos.y);
       attacker.vel.x = dir.x * moveData.dashSpeed;
       attacker.vel.y = dir.y * moveData.dashSpeed;
       return true;
@@ -960,7 +974,12 @@ function executeSpecial(
   }
 }
 
-function startSpecialAttempt(state: GameState, player: PlayerState): boolean {
+function startSpecialAttempt(
+  state: GameState,
+  player: PlayerState,
+  target: PlayerState,
+  playerInput: PlayerFrameInput,
+): boolean {
   const playerStats = getCharacterStats(state, player);
   const specialMove = getCharacterMoves(state, player).special;
   if (
@@ -982,6 +1001,13 @@ function startSpecialAttempt(state: GameState, player: PlayerState): boolean {
   player.specialStartup = framesToSeconds(specialMove.timing.startupFrames);
   player.specialActive = player.specialStartup > 0 ? 0 : framesToSeconds(specialMove.timing.activeFrames);
   player.specialDidResolve = false;
+  const inputAuthority = state.tuning.committedLocomotionInputAuthority;
+  const inputDir = normalise(playerInput.moveX, playerInput.moveY);
+  player.specialDir = specialMove.behaviorId === 'special.movement_dash.v1'
+    && inputAuthority > 0
+    && Math.hypot(inputDir.x, inputDir.y) > 0
+    ? resolveCommittedLocomotionDirection(player, target, playerInput, inputAuthority)
+    : { x: 0, y: 0 };
   player.specialFlash = SPECIAL_FLASH_SECONDS;
 
   const startupAndActiveSeconds = framesToSeconds(
@@ -1077,16 +1103,32 @@ function applyDunkStartupPursuit(
   attacker.vel.y = lerp(attacker.vel.y, pursuitDirection.y * pursuitSpeed, trackingBlend);
 }
 
-function resolveCommittedBoostDirection(
+function resolveCommittedLocomotionDirection(
   player: PlayerState,
   target: PlayerState,
   playerInput: PlayerFrameInput,
+  inputAuthority: number,
 ): Vec2 {
   const toTarget = normalise(target.pos.x - player.pos.x, target.pos.y - player.pos.y);
+  const inputDir = normalise(playerInput.moveX, playerInput.moveY);
+  if (
+    Math.hypot(toTarget.x, toTarget.y) > 0
+    && inputAuthority > 0
+    && Math.hypot(inputDir.x, inputDir.y) > 0
+  ) {
+    const authority = clamp(inputAuthority, 0, 1);
+    const blended = normalise(
+      lerp(toTarget.x, inputDir.x, authority),
+      lerp(toTarget.y, inputDir.y, authority),
+    );
+    if (Math.hypot(blended.x, blended.y) > 0) {
+      return blended;
+    }
+    return authority >= 0.5 ? inputDir : toTarget;
+  }
   if (Math.hypot(toTarget.x, toTarget.y) > 0) {
     return toTarget;
   }
-  const inputDir = normalise(playerInput.moveX, playerInput.moveY);
   if (Math.hypot(inputDir.x, inputDir.y) > 0) {
     return inputDir;
   }
@@ -1098,6 +1140,7 @@ function resolveCommittedBoostDirection(
 }
 
 function startCommittedBoost(
+  state: GameState,
   player: PlayerState,
   target: PlayerState,
   playerInput: PlayerFrameInput,
@@ -1107,7 +1150,12 @@ function startCommittedBoost(
   }
   player.boostActive = true;
   player.boostHeldTime = 0;
-  player.boostDir = resolveCommittedBoostDirection(player, target, playerInput);
+  player.boostDir = resolveCommittedLocomotionDirection(
+    player,
+    target,
+    playerInput,
+    state.tuning.committedLocomotionInputAuthority,
+  );
   return true;
 }
 
@@ -1181,13 +1229,21 @@ function emitCombatBoostLockFrame(
   });
 }
 
-function applyBoostHold(player: PlayerState, speed: number, controlMultiplier = 1): void {
+function applyBoostHold(
+  player: PlayerState,
+  speed: number,
+  accelerationSeconds: number,
+  controlMultiplier = 1,
+): void {
   if (player.helpless > 0) {
     return;
   }
+  const speedRatio = accelerationSeconds > 0
+    ? clamp(player.boostHeldTime / accelerationSeconds, 0, 1)
+    : 1;
   const blend = clamp(controlMultiplier, 0, 1);
-  player.vel.x = lerp(player.vel.x, player.boostDir.x * speed, blend);
-  player.vel.y = lerp(player.vel.y, player.boostDir.y * speed, blend);
+  player.vel.x = lerp(player.vel.x, player.boostDir.x * speed * speedRatio, blend);
+  player.vel.y = lerp(player.vel.y, player.boostDir.y * speed * speedRatio, blend);
 }
 
 function resolveHelplessReleaseSpeed(player: PlayerState, state: GameState): number {
@@ -1255,6 +1311,8 @@ function tryLaunchBreak(
   }
 
   const breakMove = getCharacterMoves(state, player).break;
+  const opponent = state.players[OPPONENT_BY_ID[playerId]];
+  const preResetDistance = distanceVec2(player.pos, opponent.pos);
   player.launchBreaks -= 1;
   player.helpless = 0;
   player.breakFlash = BREAK_FLASH_SECONDS;
@@ -1267,6 +1325,12 @@ function tryLaunchBreak(
     applyDefensiveReset(state, player, attacker, state.tuning.launchBreakResetMultiplier);
     player.lastLaunchedBy = null;
   }
+  observer?.onControlReturnReset?.({
+    playerId,
+    kind: 'launch_break',
+    preResetDistance,
+    postResetDistance: distanceVec2(player.pos, opponent.pos),
+  });
   recordAcceptedActionStart(state, playerId, 'launch_break', observer);
   armCombatBoostLock(state, player, combatBoostStepState);
   return true;
@@ -1327,7 +1391,7 @@ function movement(
   }
 
   if (playerInput.special) {
-    if (startSpecialAttempt(state, player)) {
+    if (startSpecialAttempt(state, player, target, playerInput)) {
       player.didCommitAttackDuringSuperBoost ||= player.superBoost > 0;
       recordAcceptedActionStart(state, playerId, 'special', observer);
       armCombatBoostLock(state, player, combatBoostStepState);
@@ -1356,7 +1420,7 @@ function movement(
     || player.combatBoostLockRemaining <= 0
   );
   if (boostHeld && !player.boostActive) {
-    if (startCommittedBoost(player, target, playerInput)) {
+    if (startCommittedBoost(state, player, target, playerInput)) {
       recordAcceptedActionStart(state, playerId, 'boost', observer);
     }
   } else if (!boostHeld) {
@@ -1369,6 +1433,7 @@ function movement(
       tuning.boostHoldSpeed
       * playerStats.boostSpeedMultiplier
       * playerMoves.boost.holdSpeedMultiplier,
+      tuning.ordinaryBoostAccelerationSeconds,
       actionRecoveryControlMultiplier,
     );
     if (playerMoves.boost.holdFuelPerSecond > 0) {
@@ -1689,9 +1754,22 @@ function applyDefensiveReset(
 function resolveNaturalControlReturns(
   state: GameState,
   launchedBy: PlayersById<PlayerId | null>,
+  observer?: SimulationStepObserver,
 ): void {
   const globalMultiplier = state.tuning.naturalRecoveryResetMultiplier;
   let resetApplied = false;
+  const returningPlayers = (['P1', 'P2'] as const).flatMap((playerId) => {
+    const attackerId = launchedBy[playerId];
+    return attackerId
+      ? [{
+          playerId,
+          preResetDistance: distanceVec2(
+            state.players[playerId].pos,
+            state.players[attackerId].pos,
+          ),
+        }]
+      : [];
+  });
 
   for (const playerId of ['P1', 'P2'] as const) {
     const attackerId = launchedBy[playerId];
@@ -1717,6 +1795,17 @@ function resolveNaturalControlReturns(
     }
 
     defender.lastLaunchedBy = null;
+  }
+  for (const returned of returningPlayers) {
+    observer?.onControlReturnReset?.({
+      playerId: returned.playerId,
+      kind: 'natural',
+      preResetDistance: returned.preResetDistance,
+      postResetDistance: distanceVec2(
+        state.players[returned.playerId].pos,
+        state.players[OPPONENT_BY_ID[returned.playerId]].pos,
+      ),
+    });
   }
 }
 
@@ -1817,7 +1906,7 @@ export function step(
     P1: updatePlayer(state, 'P1', dt),
     P2: updatePlayer(state, 'P2', dt),
   };
-  resolveNaturalControlReturns(state, naturalControlReturns);
+  resolveNaturalControlReturns(state, naturalControlReturns, observer);
   resolveCloseRangeSeparation(state);
   updateProjectiles(state, dt);
 

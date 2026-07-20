@@ -38,7 +38,11 @@ import {
 import { createCharacterBalanceConfig } from './characterBalance';
 import { createInitialState } from './sim';
 import { createDefaultTuning } from './tuning';
-import type { GameTuning } from './types';
+import type { FrameInput, GameTuning } from './types';
+import {
+  COMBAT_ORDINARY_BOOST_WINDOW_SCHEMA_VERSION,
+  type CombatOrdinaryBoostCounterplayEvidence,
+} from './combatEventTelemetry';
 
 function createSummaryFixture() {
   const state = createInitialState();
@@ -46,7 +50,23 @@ function createSummaryFixture() {
   summary.combat.events = [];
   summary.combat.eventCount = 0;
   summary.combat.eventCounts.distance_band_change = 0;
+  delete summary.combat.controlReturnWindows;
   return summary;
+}
+
+function neutralFrameInput(): FrameInput {
+  const player = () => ({
+    moveX: 0,
+    moveY: 0,
+    boost: false,
+    superBoost: false,
+    special: false,
+    launch: false,
+    dunk: false,
+    parry: false,
+    breakLaunch: false,
+  });
+  return { p1: player(), p2: player() };
 }
 
 function addVariedActionEvents(summary: ReturnType<typeof createSummaryFixture>): void {
@@ -60,7 +80,154 @@ function addVariedActionEvents(summary: ReturnType<typeof createSummaryFixture>)
   );
 }
 
+function createOrdinaryBoostWindow(
+  overrides: Partial<CombatOrdinaryBoostCounterplayEvidence> = {},
+): CombatOrdinaryBoostCounterplayEvidence {
+  return {
+    schemaVersion: COMBAT_ORDINARY_BOOST_WINDOW_SCHEMA_VERSION,
+    boosterId: 'P1',
+    targetId: 'P2',
+    startAttribution: 'simulation',
+    startFrame: 60,
+    startSeconds: 1,
+    startDistance: 24,
+    startSeparationSpeed: -40,
+    availableReactionSeconds: 0.4,
+    combinedRadius: 4,
+    boostDirection: { x: 1, y: 0 },
+    observedFrames: 18,
+    durationSeconds: 0.3,
+    minimumDistance: 6,
+    maximumDistance: 24,
+    finalDistance: 8,
+    distanceDelta: -16,
+    contactMade: false,
+    passedTarget: true,
+    targetFirstAcceptedAction: null,
+    targetSuperBoostResponse: null,
+    targetMovementIntentFrames: {
+      approach: 0,
+      orbit: 12,
+      retreat: 6,
+      idle: 0,
+      uncontrollable: 0,
+    },
+    targetDominantMovementIntent: 'orbit',
+    outcome: 'clean_pass',
+    outcomeFrame: 78,
+    outcomeSeconds: 1.3,
+    ...overrides,
+  };
+}
+
 describe('balance lab flow model', () => {
+  test('distinguishes an empty current ordinary-Boost sample from historical telemetry', () => {
+    const currentSummary = createSummaryFixture();
+
+    expect(buildBalanceLabFlowModel(currentSummary).ordinaryBoostCounterplay).toMatchObject({
+      opportunities: 0,
+      players: {
+        P1: { opportunities: 0, responseCoverageRatio: 0 },
+        P2: { opportunities: 0, responseCoverageRatio: 0 },
+      },
+    });
+
+    delete currentSummary.combat.ordinaryBoostCounterplay;
+    expect(buildBalanceLabFlowModel(currentSummary).ordinaryBoostCounterplay).toBeNull();
+  });
+
+  test('summarises ordinary-Boost reads by defender without changing loop-stage status', () => {
+    const summary = createSummaryFixture();
+    const baselineStages = buildBalanceLabFlowModel(summary).loopStages;
+    summary.combat.ordinaryBoostCounterplay = [
+      createOrdinaryBoostWindow({
+        targetFirstAcceptedAction: {
+          action: 'super_boost',
+          frame: 66,
+          timeSeconds: 1.1,
+          delaySeconds: 0.1,
+          distance: 18,
+          movementIntent: 'orbit',
+        },
+        targetSuperBoostResponse: {
+          action: 'super_boost',
+          frame: 66,
+          timeSeconds: 1.1,
+          delaySeconds: 0.1,
+          distance: 18,
+          movementIntent: 'orbit',
+        },
+      }),
+      createOrdinaryBoostWindow({
+        startFrame: 180,
+        startSeconds: 3,
+        startDistance: 30,
+        availableReactionSeconds: 0.5,
+        contactMade: true,
+        passedTarget: false,
+        outcome: 'contact',
+        outcomeFrame: 207,
+        outcomeSeconds: 3.45,
+      }),
+      createOrdinaryBoostWindow({
+        boosterId: 'P2',
+        targetId: 'P1',
+        startFrame: 300,
+        startSeconds: 5,
+        startDistance: 20,
+        availableReactionSeconds: 0.25,
+        passedTarget: false,
+        contactMade: true,
+        targetFirstAcceptedAction: {
+          action: 'parry',
+          frame: 312,
+          timeSeconds: 5.2,
+          delaySeconds: 0.2,
+          distance: 12,
+          movementIntent: 'retreat',
+        },
+        outcome: 'combat_conversion',
+        outcomeFrame: 324,
+        outcomeSeconds: 5.4,
+      }),
+    ];
+
+    const model = buildBalanceLabFlowModel(summary);
+
+    expect(model.ordinaryBoostCounterplay).toMatchObject({
+      opportunities: 3,
+      players: {
+        P1: {
+          opportunities: 1,
+          completedOpportunities: 1,
+          firstResponses: 1,
+          targetSuperBoostResponses: 0,
+          responseCoverageRatio: 1,
+          superBoostResponseRatio: 0,
+          averageFirstResponseSeconds: 0.2,
+          averageAvailableReactionSeconds: 0.25,
+          averageStartDistance: 20,
+          firstResponseActions: { parry: 1, none: 0 },
+          outcomes: { combat_conversion: 1 },
+        },
+        P2: {
+          opportunities: 2,
+          completedOpportunities: 2,
+          firstResponses: 1,
+          targetSuperBoostResponses: 1,
+          responseCoverageRatio: 0.5,
+          superBoostResponseRatio: 0.5,
+          averageFirstResponseSeconds: 0.1,
+          averageAvailableReactionSeconds: 0.45,
+          averageStartDistance: 27,
+          firstResponseActions: { super_boost: 1, none: 1 },
+          outcomes: { clean_pass: 1, contact: 1 },
+        },
+      },
+    });
+    expect(model.loopStages).toEqual(baselineStages);
+  });
+
   test('selects the longest pressure exchange and prefers the latest exact tie', () => {
     const exchange = (
       exchangeNumber: number,
@@ -189,7 +356,10 @@ describe('balance lab flow model', () => {
       returnFrame: 240,
       returnSeconds: 4,
       returnKind: 'natural',
+      preResetDistance: null,
       returnDistance: 12,
+      maximumDistance: null,
+      outcome: null,
       startedInPressure: true,
       firstAcceptedAction: 'super_boost',
       firstActionFrame: 252,
@@ -202,6 +372,7 @@ describe('balance lab flow model', () => {
       controlWindowSeconds: 1.5,
       sustainedResetAfterReturn: false,
       sustainedResetAfterFirstAction: false,
+      players: null,
       ...overrides,
     });
     const immediateWithoutAction = review({
@@ -575,7 +746,11 @@ describe('balance lab flow model', () => {
     });
     expect(model.loopStages.find((stage) => stage.id === 'commitment')).toMatchObject({
       status: 'blocked',
-      relatedGlobalTuning: ['combatBoostReacquireDelaySeconds'],
+      reasonId: 'commitment.shared_agency_saturation',
+      relatedGlobalTuning: [
+        'combatBoostReacquireDelaySeconds',
+        'ordinaryBoostAccelerationSeconds',
+      ],
     });
   });
 
@@ -816,6 +991,13 @@ describe('balance lab flow model', () => {
       blockedRounds: 1,
       waitingRatio: 0.5,
       issueRatio: 0.5,
+      issueReasons: [{
+        reasonId: 'commitment.no_accepted_actions',
+        watchRounds: 0,
+        blockedRounds: 1,
+        rounds: 1,
+        issueRatio: 0.5,
+      }],
     });
     expect(aggregates.finish.waitingRounds).toBe(1);
     expect(aggregates.finish.blockedRounds).toBe(1);
@@ -1107,6 +1289,7 @@ describe('balance lab flow model', () => {
       'neutralHoldDistance',
       'commitmentObserveFrames',
       'commitmentResetFrames',
+      'postControlChaseLockFrames',
       'postEventRetreatChanceOffset',
     ]);
     expect(unresolvedDiagnostic?.severity).toBe('critical');
@@ -1270,9 +1453,9 @@ describe('balance lab flow model', () => {
       relaunchesWithAcceptedAction: 1,
       returnsWithAcceptedAction: 2,
       averageFirstActionDelaySeconds: 0.15,
-      controlReturnsInPressure: 2,
+      controlReturnsInPressure: 1,
       sustainedResetsAfterControlReturn: 1,
-      controlReturnResetRatio: 0.5,
+      controlReturnResetRatio: 1,
       firstActionsInPressure: 2,
       sustainedResetsAfterFirstAction: 1,
       postReturnResetRatio: 0.5,
@@ -1308,8 +1491,9 @@ describe('balance lab flow model', () => {
       {
         playerId: 'P2',
         returnSeconds: 6,
-        returnDistance: 10,
-        startedInPressure: true,
+        preResetDistance: 10,
+        returnDistance: 26,
+        startedInPressure: false,
         firstAcceptedAction: 'special',
         firstActionMovementIntent: 'orbit',
         firstActionDelaySeconds: 0.2,
@@ -1346,12 +1530,79 @@ describe('balance lab flow model', () => {
       .toContain('naturalRecoveryResetMultiplier');
     expect(model.loopStages.find((stage) => stage.id === 'chase')).toMatchObject({
       status: 'blocked',
+      reasonId: 'chase.immediate_relaunch',
       relatedPlayerIds: ['P2'],
     });
     expect(model.loopStages.find((stage) => stage.id === 'chase')?.relatedAiBehavior)
       .toContain('postRecoveryThreatParryChance');
     expect(model.loopStages.find((stage) => stage.id === 'chase')?.detail)
       .toContain('launched again within 1s');
+  });
+
+  test('attributes post-return closure and first actions to both fighters', () => {
+    const state = createInitialState({ seed: 28 });
+    state.players.P1.pos = { x: -4, y: 0 };
+    state.players.P2.pos = { x: 4, y: 0 };
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P1.pos = { x: -10, y: 0 };
+    state.players.P2.pos = { x: 10, y: 0 };
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralFrameInput(), state, 0.1);
+
+    state.players.P1.vel = { x: 4, y: 0 };
+    state.players.P2.vel = { x: -2, y: 0 };
+    state.players.P1.pos = { x: -9.6, y: 0 };
+    state.players.P2.pos = { x: 9.8, y: 0 };
+    const actionInput = neutralFrameInput();
+    actionInput.p1.moveX = 1;
+    actionInput.p2.moveX = -1;
+    tracker.recordFrame(actionInput, state, 0.1, [
+      { playerId: 'P1', action: 'boost' },
+      { playerId: 'P2', action: 'super_boost' },
+    ]);
+
+    state.players.P1.vel = { x: 0, y: 0 };
+    state.players.P2.vel = { x: 0, y: 0 };
+    state.players.P1.chain += 1;
+    state.players.P2.helpless = 1;
+    tracker.recordFrame(neutralFrameInput(), state, 0.1);
+
+    const control = buildBalanceLabFlowModel(tracker.toSummary()).players.P2.controlReturn;
+    expect(control.causal).toMatchObject({
+      windows: 1,
+      outcomes: { relaunched_in_pressure: 1 },
+      averageControlGrantedDistance: 20,
+      averageMaximumDistance: 20,
+      returnedPlayerClosingDistance: 0.2,
+      opponentClosingDistance: 0.4,
+      returnedPlayerClosingShare: 0.333,
+      returnedPlayerClosedMore: 0,
+      opponentClosedMore: 1,
+      balancedClosure: 0,
+      returnedPlayerFirstActions: 1,
+      opponentFirstActions: 1,
+    });
+    expect(control.reviews[0]).toMatchObject({
+      playerId: 'P2',
+      preResetDistance: 8,
+      returnDistance: 20,
+      maximumDistance: 20,
+      outcome: 'relaunched_in_pressure',
+      startedInPressure: true,
+      players: {
+        P1: {
+          closingDistance: 0.4,
+          firstAcceptedAction: 'boost',
+        },
+        P2: {
+          closingDistance: 0.2,
+          firstAcceptedAction: 'super_boost',
+        },
+      },
+    });
   });
 
   test('rejects delayed re-engagement that never creates a post-control reset', () => {
@@ -2420,6 +2671,9 @@ describe('balance lab drafts', () => {
     delete legacyAiBehavior.postCommitmentDecisionScale;
     delete legacyAiBehavior.repositionWeightScale;
     delete legacyAiBehavior.postControlCounterstepScale;
+    delete legacyAiBehavior.postControlChaseLockFrames;
+    delete legacyAiBehavior.postControlRepeatDashWeightScale;
+    delete legacyAiBehavior.exchangeRepositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2427,7 +2681,7 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       neutralHoldFrames: 21,
       commitmentObserveFrames: 0,
       commitmentPressFrames: 0,
@@ -2438,6 +2692,9 @@ describe('balance lab drafts', () => {
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
       postControlCounterstepScale: 0,
+      postControlChaseLockFrames: 0,
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
     });
   });
 
@@ -2457,6 +2714,9 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.postCommitmentDecisionScale;
     delete previousAiBehavior.repositionWeightScale;
     delete previousAiBehavior.postControlCounterstepScale;
+    delete previousAiBehavior.postControlChaseLockFrames;
+    delete previousAiBehavior.postControlRepeatDashWeightScale;
+    delete previousAiBehavior.exchangeRepositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2464,13 +2724,16 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.25,
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
       postControlCounterstepScale: 0,
+      postControlChaseLockFrames: 0,
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
     });
   });
 
@@ -2489,6 +2752,9 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.postCommitmentDecisionScale;
     delete previousAiBehavior.repositionWeightScale;
     delete previousAiBehavior.postControlCounterstepScale;
+    delete previousAiBehavior.postControlChaseLockFrames;
+    delete previousAiBehavior.postControlRepeatDashWeightScale;
+    delete previousAiBehavior.exchangeRepositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2496,13 +2762,16 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
       postControlCounterstepScale: 0,
+      postControlChaseLockFrames: 0,
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
     });
   });
 
@@ -2520,6 +2789,9 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.postCommitmentDecisionScale;
     delete previousAiBehavior.repositionWeightScale;
     delete previousAiBehavior.postControlCounterstepScale;
+    delete previousAiBehavior.postControlChaseLockFrames;
+    delete previousAiBehavior.postControlRepeatDashWeightScale;
+    delete previousAiBehavior.exchangeRepositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2527,13 +2799,16 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       opponentControlReturnObserveFrames: 0,
       postControlSteeringFrames: 0,
       finishPursuitReachScale: 0.7,
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
       postControlCounterstepScale: 0,
+      postControlChaseLockFrames: 0,
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
     });
   });
 
@@ -2550,6 +2825,9 @@ describe('balance lab drafts', () => {
     delete previousAiBehavior.postCommitmentDecisionScale;
     delete previousAiBehavior.repositionWeightScale;
     delete previousAiBehavior.postControlCounterstepScale;
+    delete previousAiBehavior.postControlChaseLockFrames;
+    delete previousAiBehavior.postControlRepeatDashWeightScale;
+    delete previousAiBehavior.exchangeRepositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2557,10 +2835,13 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       postCommitmentDecisionScale: 0,
       repositionWeightScale: 0,
       postControlCounterstepScale: 0,
+      postControlChaseLockFrames: 0,
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
     });
   });
 
@@ -2576,6 +2857,9 @@ describe('balance lab drafts', () => {
     previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v10';
     delete previousAiBehavior.repositionWeightScale;
     delete previousAiBehavior.postControlCounterstepScale;
+    delete previousAiBehavior.postControlChaseLockFrames;
+    delete previousAiBehavior.postControlRepeatDashWeightScale;
+    delete previousAiBehavior.exchangeRepositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2583,9 +2867,12 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       repositionWeightScale: 0,
       postControlCounterstepScale: 0,
+      postControlChaseLockFrames: 0,
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
     });
   });
 
@@ -2600,6 +2887,9 @@ describe('balance lab drafts', () => {
     const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
     previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v11';
     delete previousAiBehavior.postControlCounterstepScale;
+    delete previousAiBehavior.postControlChaseLockFrames;
+    delete previousAiBehavior.postControlRepeatDashWeightScale;
+    delete previousAiBehavior.exchangeRepositionWeightScale;
 
     const parsed = parseBalanceLabDraft({
       ...draft,
@@ -2607,8 +2897,86 @@ describe('balance lab drafts', () => {
     });
 
     expect(parsed?.aiBehaviorTuning).toMatchObject({
-      schemaVersion: 'gw.ai-behavior-tuning.v12',
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
       postControlCounterstepScale: 0,
+      postControlChaseLockFrames: 0,
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
+    });
+  });
+
+  test('fills chase lock tuning when loading a v3 draft with v12 AI tuning', () => {
+    const draft = createBalanceLabDraft(
+      'Pre-chase-lock behavior draft',
+      createDefaultTuning(),
+      {},
+      '2026-07-13T12:00:00.000Z',
+      createDefaultAiBehaviorTuning(),
+    );
+    const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
+    previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v12';
+    delete previousAiBehavior.postControlChaseLockFrames;
+    delete previousAiBehavior.postControlRepeatDashWeightScale;
+    delete previousAiBehavior.exchangeRepositionWeightScale;
+
+    const parsed = parseBalanceLabDraft({
+      ...draft,
+      aiBehaviorTuning: previousAiBehavior,
+    });
+
+    expect(parsed?.aiBehaviorTuning).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
+      postControlChaseLockFrames: 0,
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
+    });
+  });
+
+  test('fills repeat-dash weight when loading a v3 draft with v13 AI tuning', () => {
+    const draft = createBalanceLabDraft(
+      'Pre-repeat-dash behavior draft',
+      createDefaultTuning(),
+      {},
+      '2026-07-13T12:00:00.000Z',
+      createDefaultAiBehaviorTuning(),
+    );
+    const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
+    previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v13';
+    delete previousAiBehavior.postControlRepeatDashWeightScale;
+    delete previousAiBehavior.exchangeRepositionWeightScale;
+
+    const parsed = parseBalanceLabDraft({
+      ...draft,
+      aiBehaviorTuning: previousAiBehavior,
+    });
+
+    expect(parsed?.aiBehaviorTuning).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
+      postControlRepeatDashWeightScale: 1,
+      exchangeRepositionWeightScale: 0,
+    });
+  });
+
+  test('fills between-exchange repositioning when loading a v3 draft with v14 AI tuning', () => {
+    const draft = createBalanceLabDraft(
+      'Pre-exchange-reposition behavior draft',
+      createDefaultTuning(),
+      {},
+      '2026-07-13T12:00:00.000Z',
+      createDefaultAiBehaviorTuning(),
+    );
+    const previousAiBehavior = { ...draft.aiBehaviorTuning } as Record<string, unknown>;
+    previousAiBehavior.schemaVersion = 'gw.ai-behavior-tuning.v14';
+    delete previousAiBehavior.exchangeRepositionWeightScale;
+
+    const parsed = parseBalanceLabDraft({
+      ...draft,
+      aiBehaviorTuning: previousAiBehavior,
+    });
+
+    expect(parsed?.aiBehaviorTuning).toMatchObject({
+      schemaVersion: 'gw.ai-behavior-tuning.v15',
+      exchangeRepositionWeightScale: 0,
     });
   });
 
@@ -2632,6 +3000,7 @@ describe('balance lab drafts', () => {
     delete tuning.helplessReleaseSpeedRatio;
     delete tuning.actionRecoveryControlMultiplier;
     delete tuning.combatBoostReacquireDelaySeconds;
+    delete tuning.committedLocomotionInputAuthority;
     delete tuning.startupClashGraceSeconds;
     delete tuning.launchClashSeparationPadding;
     delete tuning.launchClashRecoilMultiplier;

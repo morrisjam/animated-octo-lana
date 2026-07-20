@@ -1,7 +1,6 @@
-import { createCombinedInput } from './input/combined';
+import { createInputBindingStore } from './input/bindings';
 import { createEmptyPlayerInput } from './input/frame';
-import { createGamepadInput } from './input/gamepad';
-import { createKeyboardInput } from './input/keyboard';
+import { createLazyGameplayInput } from './input/lazyGameplay';
 import { loadRuntimeConfig, shouldEnableOnlineDiagnostics } from './config/features';
 import {
   fetchLocalFlowReviewCatalog,
@@ -20,6 +19,7 @@ import type {
 } from './dev/localRankedRecoverySmoke';
 import type { LocalRankedSmokeInputDriver } from './dev/localRankedSmokeInputDriver';
 import type { LocalRankedSmokeFrameTransport } from './dev/localRankedSmokeTransport';
+import { buildLocalSmokeRtcConfiguration } from './dev/localSmokeIceConfig';
 import { fetchMatchmakingIceConfig } from './net/connectivityApi';
 import { createInputTimelineBuffer } from './net/inputTimeline';
 import {
@@ -92,6 +92,11 @@ import {
   rankedSeedFromSessionId,
   type RankedMatchProof,
 } from './sim/rankedProof';
+import {
+  RankedInputCommitmentRecorder,
+  type RankedInputCommitmentReceipt,
+  type RankedInputCommitmentSubmission,
+} from './sim/rankedInputCommitment';
 import { createPlatformServices, type PlatformAuthSession } from './platform';
 import {
   findFirstChecksumMismatch,
@@ -104,10 +109,17 @@ import {
 } from './sim/replay';
 import type { ReplayReviewData } from './sim/replayReview';
 import {
+  describeBalanceReplayComparison,
+  selectBalanceReplaySample,
+  type BalanceReplayComparison,
+  type BalanceReplayVariant,
+} from './sim/balanceReplayComparison';
+import {
   createInitialState,
   getRenderSnapshot,
   step,
   type SimulationActionStart,
+  type SimulationControlReturnReset,
   type SimulationLaunchClash,
 } from './sim/sim';
 import {
@@ -219,7 +231,8 @@ import { preloadAssetManifest } from './view/assets/loader';
 import { loadStageModelAssets } from './view/stageModelRuntime';
 import { getRequiredPackagedAtlasRuntimeReadyPromise } from './view/characterVisual';
 import type { OnlineDiagnosticsUpdate, OnlineDevSectionId } from './view/onlineDevMenu';
-import { createOnlineDiagnosticsOverlay } from './view/onlineDiagnosticsOverlay';
+import type { OnlineDiagnosticsOverlayController } from './view/onlineDiagnosticsOverlay';
+import type { ReplayViewerComparisonContext } from './view/replayViewer';
 import {
   createLazyOnlineDevMenu,
   createLazyPauseMenu,
@@ -265,6 +278,16 @@ import {
 
 type AppPhase = 'home' | 'playing' | 'round_transition' | 'match_over' | 'replay_review' | 'online_dev' | 'online_bootstrap';
 type ReplayReturnPhase = 'home' | 'playing' | 'round_transition';
+interface PreparedReplayReview {
+  data: ReplayReviewData;
+  sourceLabel: string;
+  initialFrame: number;
+}
+interface ReplayComparisonReviewSession {
+  comparison: BalanceReplayComparison;
+  samples: Record<BalanceReplayVariant, PreparedReplayReview | null>;
+  activeVariant: BalanceReplayVariant;
+}
 interface StoredSettings {
   mode?: string;
   menuThemeId?: string;
@@ -317,6 +340,7 @@ interface ArcadePendingLossState {
 function toCombatAudioEventType(eventType: CombatVfxEvent['type']): 'combat.boost' | 'combat.launch' | 'combat.parry' | 'combat.projectile' | 'combat.dunk' {
   switch (eventType) {
     case 'boost':
+    case 'super_boost':
       return 'combat.boost';
     case 'launch':
       return 'combat.launch';
@@ -410,10 +434,19 @@ const sceneContext = createScene(canvas, {
   },
 });
 const hud = createHud();
-const input = createCombinedInput([
-  createKeyboardInput(),
-  createGamepadInput(),
-]);
+const inputBindings = createInputBindingStore();
+const input = createLazyGameplayInput(canvas, inputBindings);
+function refreshInputBindingLegend(): void {
+  void inputBindings.whenReady()
+    .then(() => import('./input/bindingLegend'))
+    .then(({ renderInputBindingLegend }) => {
+      renderInputBindingLegend(inputBindings.getProfile());
+    })
+    .catch((error: unknown) => {
+      console.warn('[input] Control legend failed to update.', error);
+    });
+}
+refreshInputBindingLegend();
 const enabledModes = getEnabledModes();
 const loadedSettings = loadSettings();
 audioSettings = loadedSettings.audio;
@@ -823,6 +856,22 @@ interface RankedResultSubmitResponse {
     roundCount: number;
     frameCount: number;
     derivedOutcome: 'p1_win' | 'p2_win';
+    inputAttestation?: {
+      status: 'participant_verified' | 'match_verified';
+      evidence: {
+        schemaVersion: string;
+        minimumObservationRatio: number;
+        participants: Array<{
+          accountId: string;
+          side: PlayerId;
+          commitmentCount: number;
+          committedFrameCount: number;
+          observedDurationMs: number;
+          observationRatio: number;
+          finalChainDigest: string;
+        }>;
+      };
+    };
   };
   ratingDeltas?: RankedResultDeltaView[];
 }
@@ -871,6 +920,7 @@ interface OnlineMatchContext {
   transportAttemptGeneration: number;
   roundEpoch: number;
   rankedProofRecorder: RankedMatchProofRecorder | null;
+  rankedInputCommitmentRecorder: RankedInputCommitmentRecorder | null;
   rankedProof: RankedMatchProof | null;
   replayRecorder: OnlineMatchReplayRecorder;
   replayPayload: ReplayPayload | null;
@@ -1000,6 +1050,8 @@ const pauseMenu = createLazyPauseMenu({
     hud.setVoiceSubtitlesEnabled(audioSettings.subtitlesEnabled);
     persistSettings();
   },
+  inputBindings,
+  onInputBindingsChange: refreshInputBindingLegend,
   enableDebugTab: runtimeConfig.features.debugToolsEnabled,
   canExportTrainingTelemetry: () => selectedMode === 'training',
   onExportTrainingTelemetry: async () => {
@@ -1028,8 +1080,8 @@ const pauseMenu = createLazyPauseMenu({
     liveAiRoundReplayRecorder?.buildPayload() ?? latestAiRoundReplayPayload
   ),
   getBalanceSampleSequence: () => balanceLabSampleSequence,
-  onReviewAiReplaySample: (payload, request, label) => {
-    void reviewCapturedAiReplaySample(payload, request, label);
+  onReviewAiReplayComparison: (comparison) => {
+    void reviewCapturedAiReplayComparison(comparison);
   },
   onRestartTraining: () => {
     restartTrainingRound();
@@ -1171,7 +1223,7 @@ const pauseMenu = createLazyPauseMenu({
   onLoadError: reportLazyUiLoadFailure,
 });
 pauseMenu.setCanRestartTraining(selectedMode === 'training');
-pauseMenu.setBalanceLabAvailable(selectedMode === 'balance_sparring');
+pauseMenu.setBalanceLabAvailable(isLocalBalanceLabMode(selectedMode));
 hud.setVoiceSubtitlesEnabled(audioSettings.subtitlesEnabled);
 const replayViewer = createLazyReplayViewer({
   onTogglePause: () => {
@@ -1190,6 +1242,9 @@ const replayViewer = createLazyReplayViewer({
   onSeek: (frameIndex) => {
     setReplayFrameIndex(frameIndex);
     replayPaused = true;
+  },
+  onSelectVariant: (variant) => {
+    selectReplayComparisonVariant(variant);
   },
   onExit: () => {
     exitReplayReview();
@@ -1230,7 +1285,17 @@ let onlineMatchContext: OnlineMatchContext | null = null;
 let rankedResumeRequiredSessionId: string | null = null;
 let explicitRankedRejoinArmed = false;
 let sessionAccountId: string | null = null;
-const diagnosticsOverlay = diagnosticsEnabled ? createOnlineDiagnosticsOverlay() : null;
+let diagnosticsOverlay: OnlineDiagnosticsOverlayController | null = null;
+if (diagnosticsEnabled) {
+  void import('./view/onlineDiagnosticsOverlay')
+    .then(({ createOnlineDiagnosticsOverlay }) => {
+      diagnosticsOverlay = createOnlineDiagnosticsOverlay();
+      updateOnlineDiagnosticsOverlay();
+    })
+    .catch((error: unknown) => {
+      console.error('Online diagnostics failed to load.', error);
+    });
+}
 const onlineDevMenuEnabled = platform.kind === 'web' && runtimeConfig.features.onlineDevMenuEnabled;
 const onlineDevMenu = onlineDevMenuEnabled
   ? createLazyOnlineDevMenu({
@@ -1335,6 +1400,46 @@ async function requestOnlineRaw(
     signal: options?.signal,
   });
   return response;
+}
+
+async function submitOnlineRankedInputCommitment(
+  accountId: string,
+  sessionToken: string,
+  submission: RankedInputCommitmentSubmission,
+): Promise<RankedInputCommitmentReceipt> {
+  const maxAttempts = 3;
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await requestOnlineRaw(
+        'POST',
+        `/ranked/sessions/${submission.sessionId}/input-commitments`,
+        accountId,
+        { ...submission, sessionToken },
+        { matchSessionToken: sessionToken },
+      );
+      if (response.ok) {
+        return await response.json() as RankedInputCommitmentReceipt;
+      }
+      const failure = await parseOnlineApiFailure(response);
+      const requestError = new OnlineRequestError(failure.message, failure.status, failure.code);
+      if (response.status !== 429 && response.status < 500) {
+        throw requestError;
+      }
+      lastError = requestError;
+    } catch (error) {
+      if (error instanceof OnlineRequestError && error.status !== 429 && error.status < 500) {
+        throw error;
+      }
+      lastError = error;
+    }
+    if (attempt < maxAttempts) {
+      await waitForMilliseconds(attempt * 250);
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Ranked input commitment submission failed.');
 }
 
 function cloneOnlinePlayerInput(input: PlayerFrameInput): PlayerFrameInput {
@@ -2291,6 +2396,7 @@ async function submitOnlineRankedResult(context: OnlineMatchContext): Promise<vo
   }
 
   try {
+    await context.rankedInputCommitmentRecorder?.flush();
     if (
       !context.rankedProofRecorder
       || (context.finalOutcome !== 'p1_win' && context.finalOutcome !== 'p2_win')
@@ -3068,6 +3174,9 @@ const startMenu = createStartMenu({
   onOpenReplayReview: () => {
     void beginReplayReviewFromFixture('smoke.replay.json');
   },
+  onOpenControls: () => {
+    void inputBindings.whenReady().then(() => pauseMenu.openBindings());
+  },
   onMenuThemeChange: (themeId: string) => {
     selectedMenuThemeId = resolveMenuTheme(themeId).id;
     applyMenuTheme(resolveMenuTheme(selectedMenuThemeId), document.documentElement.style);
@@ -3136,6 +3245,7 @@ let frameDataToggleLockUntil = 0;
 let trainingFrameDataVisible = selectedMode === 'training';
 let replayReviewData: ReplayReviewData | null = null;
 let replayReviewSourceLabel = '';
+let replayComparisonReviewSession: ReplayComparisonReviewSession | null = null;
 let replayFrameIndex = 0;
 let replayAccumulator = 0;
 let replayPaused = true;
@@ -3381,7 +3491,7 @@ function buildHistorySyncProfileSettingsPayload(
 
 function applyLoadedProfileSettings(profileSettings: LoadedSettings): void {
   selectedMode = profileSettings.mode;
-  pauseMenu.setBalanceLabAvailable(selectedMode === 'balance_sparring');
+  pauseMenu.setBalanceLabAvailable(isLocalBalanceLabMode(selectedMode));
   selectedMenuThemeId = profileSettings.menuThemeId;
   selectedStageAtmosphereId = profileSettings.stageAtmosphereId;
   selectedLoadout = profileSettings.loadout;
@@ -3872,6 +3982,7 @@ function resetRoundState(options: { advanceOfflineRound?: boolean } = {}): void 
     })
     : null;
   onlineMatchContext?.rankedProofRecorder?.startRound(onlineMatchContext.roundEpoch);
+  onlineMatchContext?.rankedInputCommitmentRecorder?.startRound(onlineMatchContext.roundEpoch);
   onlineMatchContext?.replayRecorder.startRound(onlineMatchContext.roundEpoch);
   matchTelemetry = createMatchTelemetryTracker(state);
   aiDecisionTelemetry.startRound();
@@ -4000,7 +4111,7 @@ function beginMode(
     selectedArcadeSettings = sanitiseArcadeMenuSettings(arcadeSettings);
   }
   selectedMode = resolvedMode;
-  pauseMenu.setBalanceLabAvailable(selectedMode === 'balance_sparring');
+  pauseMenu.setBalanceLabAvailable(isLocalBalanceLabMode(selectedMode));
   if (selectedMode === 'training') {
     trainingTelemetry = createTrainingTelemetryForCurrentSelection();
   }
@@ -4265,7 +4376,7 @@ function clearOnlineMatchContext(): void {
     onlineMatchContext.inputPump.clear();
     closeOnlineTransport(onlineMatchContext);
     selectedMode = onlineMatchContext.restoreMode;
-    pauseMenu.setBalanceLabAvailable(selectedMode === 'balance_sparring');
+    pauseMenu.setBalanceLabAvailable(isLocalBalanceLabMode(selectedMode));
     selectedLoadout = {
       P1: onlineMatchContext.restoreLoadout.P1,
       P2: onlineMatchContext.restoreLoadout.P2,
@@ -4556,6 +4667,7 @@ async function completeOnlineSession(context: OnlineMatchContext): Promise<void>
   context.sessionCompletionStatus = 'completing';
   let terminalResolutionReached = false;
   try {
+    await context.rankedInputCommitmentRecorder?.flush();
     const retryIntervalMs = 500;
     const result = await reconcileOnlineCompletionConsensus({
       attest: async () => await requestOnlineJson<MatchSessionView>(
@@ -4713,6 +4825,18 @@ function beginOnlineMatch(
         balanceProfileId: matchStart.balanceProfileId as string,
         seed: selectedMatchSeed,
         loadout: matchLoadout,
+      })
+      : null,
+    rankedInputCommitmentRecorder: matchStart.queueType === 'ranked'
+      ? new RankedInputCommitmentRecorder({
+        sessionId: matchStart.sessionId,
+        accountId: matchStart.localPlayer.accountId,
+        side: localPlayerId,
+        submit: async (submission) => await submitOnlineRankedInputCommitment(
+          matchStart.localPlayer.accountId,
+          matchStart.sessionToken,
+          submission,
+        ),
       })
       : null,
     rankedProof: null,
@@ -4930,7 +5054,9 @@ async function beginRankedSessionBootstrap(
     localAccountId: matchStart.localPlayer.accountId,
     remoteAccountId: matchStart.peer.accountId,
     initiator: matchStart.localPlayer.side === 'P1',
-    rtcConfiguration: buildRtcConfiguration(activeIceConfig, requestedConnectionPath),
+    rtcConfiguration: localRankedRootSmokeConfig.enabled
+      ? buildLocalSmokeRtcConfiguration(activeIceConfig, localRankedRootSmokeConfig.forceRelay)
+      : buildRtcConfiguration(activeIceConfig, requestedConnectionPath),
     signalTransport: {
       publish: (signal) => publishOnlineSessionSignal(
         matchStart,
@@ -5477,14 +5603,8 @@ async function reviewCurrentAiRound(request?: {
   );
 }
 
-async function reviewCapturedAiReplaySample(
-  payload: ReplayPayload,
-  request: {
-    focusFrame: number;
-    endFrame?: number;
-    label: string;
-  },
-  label: string,
+async function reviewCapturedAiReplayComparison(
+  comparison: BalanceReplayComparison,
 ): Promise<boolean> {
   if (
     (selectedMode !== 'cpu_vs_cpu' && selectedMode !== 'balance_sparring')
@@ -5494,22 +5614,68 @@ async function reviewCapturedAiReplaySample(
     return false;
   }
   const returnPhase = appPhase;
-  const reviewFocus: ReplayReviewFocus = {
+  let baselineSelection: ReturnType<typeof selectBalanceReplaySample>;
+  let candidateSelection: ReturnType<typeof selectBalanceReplaySample> | null;
+  try {
+    baselineSelection = selectBalanceReplaySample(comparison, 'baseline');
+    candidateSelection = comparison.candidate
+      ? selectBalanceReplaySample(comparison, 'candidate')
+      : null;
+  } catch (error) {
+    console.error('[replay-review] invalid Balance Lab incident comparison', error);
+    return false;
+  }
+  const toFocus = (selection: typeof baselineSelection): ReplayReviewFocus => ({
     schemaVersion: 'gw.replay-focus.v1',
     source: 'balance_lab_incident_comparison',
-    label: request.label,
-    focusFrame: Math.max(0, Math.floor(request.focusFrame)),
-    endFrame: request.endFrame === undefined
-      ? undefined
-      : Math.max(0, Math.floor(request.endFrame)),
+    label: selection.focus.label,
+    focusFrame: selection.focus.focusFrame,
+    endFrame: selection.focus.endFrame,
+  });
+  const [baseline, candidate] = await Promise.all([
+    prepareReplayReviewFromPayload(
+      baselineSelection.payload,
+      'Baseline incident',
+      true,
+      toFocus(baselineSelection),
+    ),
+    candidateSelection
+      ? prepareReplayReviewFromPayload(
+          candidateSelection.payload,
+          'Candidate incident',
+          true,
+          toFocus(candidateSelection),
+        )
+      : Promise.resolve(null),
+  ]);
+  if (!baseline || (candidateSelection && !candidate)) {
+    return false;
+  }
+  const session: ReplayComparisonReviewSession = {
+    comparison,
+    samples: { baseline, candidate },
+    activeVariant: 'baseline',
   };
-  return await beginReplayReviewFromPayload(
-    payload,
-    label,
-    true,
+  beginReplayReview(
+    baseline.data,
+    baseline.sourceLabel,
+    baseline.initialFrame,
     returnPhase,
-    reviewFocus,
+    session,
   );
+  return true;
+}
+
+function createReplayViewerComparisonContext(
+  session: ReplayComparisonReviewSession,
+  initialFrame: number,
+): ReplayViewerComparisonContext {
+  return {
+    activeVariant: session.activeVariant,
+    candidateAvailable: session.samples.candidate !== null,
+    ruleChangeLabel: describeBalanceReplayComparison(session.comparison).label,
+    initialFrame,
+  };
 }
 
 function beginReplayReview(
@@ -5517,9 +5683,11 @@ function beginReplayReview(
   sourceLabel: string,
   initialFrame = 0,
   returnPhase: ReplayReturnPhase = 'home',
+  comparisonSession: ReplayComparisonReviewSession | null = null,
 ): void {
   replayReviewData = review;
   replayReviewSourceLabel = sourceLabel;
+  replayComparisonReviewSession = comparisonSession;
   replayReturnPhase = returnPhase;
   replayFrameIndex = Math.max(0, Math.min(review.totalFrames - 1, Math.floor(initialFrame)));
   replayAccumulator = 0;
@@ -5540,7 +5708,10 @@ function beginReplayReview(
   syncTrainingFrameDataVisibility();
   hud.setRollbackDiagnosticsVisible(false);
   hud.updateRollbackDiagnostics(null);
-  replayViewer.show(replayReviewData, replayReviewSourceLabel);
+  const comparisonContext = comparisonSession
+    ? createReplayViewerComparisonContext(comparisonSession, replayFrameIndex)
+    : undefined;
+  replayViewer.show(replayReviewData, replayReviewSourceLabel, comparisonContext);
   replayViewer.updatePlayback(replayFrameIndex, replayPaused, replaySpeedOptions[replaySpeedIndex]);
   const initialSnapshot = replayReviewData.frames[replayFrameIndex]?.snapshot;
   if (initialSnapshot) {
@@ -5550,22 +5721,21 @@ function beginReplayReview(
   }
 }
 
-async function beginReplayReviewFromPayload(
+async function prepareReplayReviewFromPayload(
   payloadRaw: unknown,
   sourceLabel: string,
   requireChecksums = false,
-  returnPhase: ReplayReturnPhase = 'home',
   reviewFocusOverride?: ReplayReviewFocus,
-): Promise<boolean> {
+): Promise<PreparedReplayReview | null> {
   const validation = validateReplayPayload(payloadRaw);
   if (validation.ok === false) {
     console.error('[replay-review] invalid replay payload', sourceLabel, validation.error);
-    return false;
+    return null;
   }
 
   if (requireChecksums && !validation.payload.expectedChecksums) {
     console.error('[replay-review] local replay is missing deterministic checksums', sourceLabel);
-    return false;
+    return null;
   }
 
   if (validation.payload.expectedChecksums) {
@@ -5575,7 +5745,7 @@ async function beginReplayReviewFromPayload(
     );
     if (mismatch) {
       console.error('[replay-review] deterministic checksum mismatch', sourceLabel, mismatch);
-      return false;
+      return null;
     }
   }
 
@@ -5591,10 +5761,33 @@ async function beginReplayReviewFromPayload(
       }
     : validation.payload;
   const { buildReplayReviewData } = await import('./sim/replayReview');
+  return {
+    data: buildReplayReviewData(reviewPayload),
+    sourceLabel: focusedSourceLabel,
+    initialFrame: focus?.focusFrame ?? 0,
+  };
+}
+
+async function beginReplayReviewFromPayload(
+  payloadRaw: unknown,
+  sourceLabel: string,
+  requireChecksums = false,
+  returnPhase: ReplayReturnPhase = 'home',
+  reviewFocusOverride?: ReplayReviewFocus,
+): Promise<boolean> {
+  const prepared = await prepareReplayReviewFromPayload(
+    payloadRaw,
+    sourceLabel,
+    requireChecksums,
+    reviewFocusOverride,
+  );
+  if (!prepared) {
+    return false;
+  }
   beginReplayReview(
-    buildReplayReviewData(reviewPayload),
-    focusedSourceLabel,
-    focus?.focusFrame ?? 0,
+    prepared.data,
+    prepared.sourceLabel,
+    prepared.initialFrame,
     returnPhase,
   );
   return true;
@@ -5616,6 +5809,39 @@ async function beginReplayReviewFromFixture(fileName: string): Promise<void> {
   await beginReplayReviewFromPayload(payloadRaw, fileName);
 }
 
+function selectReplayComparisonVariant(variant: BalanceReplayVariant): void {
+  const session = replayComparisonReviewSession;
+  const sample = session?.samples[variant] ?? null;
+  if (appPhase !== 'replay_review' || !session || !sample) {
+    return;
+  }
+  session.activeVariant = variant;
+  replayReviewData = sample.data;
+  replayReviewSourceLabel = sample.sourceLabel;
+  replayFrameIndex = Math.max(
+    0,
+    Math.min(sample.data.totalFrames - 1, replayFrameIndex),
+  );
+  replayAccumulator = 0;
+  replayPaused = true;
+  replayViewer.show(
+    sample.data,
+    sample.sourceLabel,
+    createReplayViewerComparisonContext(session, replayFrameIndex),
+  );
+  replayViewer.updatePlayback(
+    replayFrameIndex,
+    replayPaused,
+    replaySpeedOptions[replaySpeedIndex] ?? 1,
+  );
+  const snapshot = sample.data.frames[replayFrameIndex]?.snapshot;
+  if (snapshot) {
+    sceneContext.cameraPlayerTracks.P1.set(snapshot.players.P1.pos.x, snapshot.players.P1.pos.y);
+    sceneContext.cameraPlayerTracks.P2.set(snapshot.players.P2.pos.x, snapshot.players.P2.pos.y);
+    sceneContext.launchCameraActive = false;
+  }
+}
+
 function exitReplayReview(): void {
   if (appPhase !== 'replay_review') {
     return;
@@ -5627,6 +5853,7 @@ function exitReplayReview(): void {
   replayAccumulator = 0;
   replayPaused = true;
   replayReviewSourceLabel = '';
+  replayComparisonReviewSession = null;
   replayReturnPhase = 'home';
   if (returnPhase === 'home') {
     returnToHome();
@@ -6285,6 +6512,10 @@ function updateOnlineRoundResolution(
         confirmedWinner,
         winningFrame?.checksum ?? computeStateChecksum(state),
       );
+      context.rankedInputCommitmentRecorder?.finalizeRound(
+        context.roundEpoch,
+        finalFrame,
+      );
       context.replayRecorder.finalizeRound(
         context.roundEpoch,
         finalFrame,
@@ -6331,6 +6562,7 @@ function tick(nowMs: number): void {
     pauseDown
     && !pauseButtonWasDown
     && nowSeconds >= pauseToggleLockUntil
+    && !pauseMenu.isCapturingBinding()
     && (appPhase === 'playing' || appPhase === 'round_transition')
   ) {
     requestGameplayPauseToggle();
@@ -6343,6 +6575,7 @@ function tick(nowMs: number): void {
     frameDataToggleDown
     && !frameDataToggleButtonWasDown
     && nowSeconds >= frameDataToggleLockUntil
+    && !pauseMenu.isCapturingBinding()
     && selectedMode === 'training'
     && appPhase === 'playing'
   ) {
@@ -6393,12 +6626,28 @@ function tick(nowMs: number): void {
         const resolvedOnlineFrameInput = onlineMatchContext.localPlayerId === 'P1'
           ? { p1: localInput, p2: createEmptyPlayerInput() }
           : { p1: createEmptyPlayerInput(), p2: localInput };
-        onlineMatchContext.rankedProofRecorder?.recordInput(
-          onlineMatchContext.roundEpoch,
-          simulationFrame,
-          onlineMatchContext.localPlayerId,
-          localInput,
-        );
+        try {
+          onlineMatchContext.rankedProofRecorder?.recordInput(
+            onlineMatchContext.roundEpoch,
+            simulationFrame,
+            onlineMatchContext.localPlayerId,
+            localInput,
+          );
+          onlineMatchContext.rankedInputCommitmentRecorder?.recordInput(
+            onlineMatchContext.roundEpoch,
+            simulationFrame,
+            localInput,
+          );
+        } catch (error) {
+          interruptOnlineMatch(
+            onlineMatchContext,
+            error instanceof Error
+              ? `Ranked input evidence failed: ${error.message}`
+              : 'Ranked input evidence failed.',
+          );
+          accumulator = 0;
+          break;
+        }
         if (rollbackSession) {
           recordPendingRankedRemoteInputs(onlineMatchContext, simulationFrame);
           const remoteInputBatch = applyPendingRemoteInputs(
@@ -6510,6 +6759,7 @@ function tick(nowMs: number): void {
         inputTimeline.setLocalInput(simulationFrame, 'P2', frameInput.p2);
         let acceptedActionStarts: SimulationActionStart[] | undefined;
         let launchClashes: SimulationLaunchClash[] | undefined;
+        let controlReturnResets: SimulationControlReturnReset[] | undefined;
         if (rollbackSession) {
           const rollbackResult = rollbackSession.advanceFrame({
             localInput: frameInput.p1,
@@ -6531,13 +6781,22 @@ function tick(nowMs: number): void {
         } else {
           acceptedActionStarts = [];
           launchClashes = [];
+          controlReturnResets = [];
           step(state, frameInput, fixedDt, {
             onActionStart: (event) => acceptedActionStarts?.push(event),
             onLaunchClash: (event) => launchClashes?.push(event),
+            onControlReturnReset: (event) => controlReturnResets?.push(event),
           });
         }
         aiDecisionTelemetry.recordFrame(simulationFrame, aiDecisions);
-        matchTelemetry.recordFrame(frameInput, state, fixedDt, acceptedActionStarts, launchClashes);
+        matchTelemetry.recordFrame(
+          frameInput,
+          state,
+          fixedDt,
+          acceptedActionStarts,
+          launchClashes,
+          controlReturnResets,
+        );
         liveAiRoundReplayRecorder?.recordFrame(frameInput, state, aiDecisions);
         if (selectedMode === 'training') {
           trainingTelemetry.recordFrame(frameInput, state, fixedDt);
@@ -6698,12 +6957,15 @@ function buildLocalRankedRootSmokeSnapshot(): LocalRankedRootSmokeSnapshot {
   const result = context?.rankedResultResponse ?? null;
   const rollbackDiagnostics = rollbackSession?.getDiagnosticsSnapshot() ?? null;
   const inputPumpDiagnostics = context?.inputPump.getDiagnostics() ?? null;
+  const inputCommitmentDiagnostics = context?.rankedInputCommitmentRecorder?.getDiagnostics() ?? null;
   return {
     schemaVersion: LOCAL_RANKED_ROOT_SMOKE_SCHEMA_VERSION,
     rootPath: window.location.pathname,
     releaseProfile: {
       environment: runtimeConfig.environment,
       buildId: diagnosticsBuildId,
+      rulesetVersion: getOnlineRulesetVersion(),
+      balanceProfileId: activeBalanceProfile.id,
       onlineEnabled: runtimeConfig.features.onlineEnabled,
       rankedEnabled: runtimeConfig.features.rankedEnabled,
       onlineMatchRuntimeEnabled: runtimeConfig.features.onlineMatchRuntimeEnabled,
@@ -6756,6 +7018,7 @@ function buildLocalRankedRootSmokeSnapshot(): LocalRankedRootSmokeSnapshot {
         roundCount: proof.rounds.length,
         frameCount: proof.rounds.reduce((total, round) => total + round.inputs.length, 0),
       } : null,
+      inputCommitments: inputCommitmentDiagnostics,
       replay: {
         status: context.replayStatus,
         replayId: context.replayId,
@@ -6772,6 +7035,18 @@ function buildLocalRankedRootSmokeSnapshot(): LocalRankedRootSmokeSnapshot {
         proofDigest: result?.proof?.digest ?? null,
         proofRoundCount: result?.proof?.roundCount ?? null,
         proofFrameCount: result?.proof?.frameCount ?? null,
+        inputAttestation: result?.proof?.inputAttestation ? {
+          status: result.proof.inputAttestation.status,
+          schemaVersion: result.proof.inputAttestation.evidence.schemaVersion,
+          minimumObservationRatio: result.proof.inputAttestation.evidence.minimumObservationRatio,
+          participants: result.proof.inputAttestation.evidence.participants.map((participant) => ({
+            accountId: participant.accountId,
+            side: participant.side,
+            commitmentCount: participant.commitmentCount,
+            committedFrameCount: participant.committedFrameCount,
+            finalChainDigest: participant.finalChainDigest,
+          })),
+        } : null,
         outcome: result?.outcome ?? null,
         winnerAccountId: result?.winnerAccountId ?? null,
         ratingDeltas: (result?.ratingDeltas ?? []).map((delta) => ({

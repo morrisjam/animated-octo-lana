@@ -122,6 +122,11 @@ function createPackagePayload(args: NewCharacterArgs): Record<string, unknown> {
       version: '0.1.0',
       tags: ['custom', 'todo'],
     },
+    ai: {
+      neutralApproachMultiplier: 1,
+      neutralBoostDistanceOffset: 0,
+      postControlSpacingFrames: 0,
+    },
     stats: {
       fuelCapacityMultiplier: 1,
       moveAccelMultiplier: 1,

@@ -1,6 +1,9 @@
 import process from 'node:process';
 import type { RankedMatchProof } from '../../game-web/src/sim/rankedProof';
-import { createRankedProofFixture } from './rankedProofFixture';
+import {
+  createRankedInputCommitmentFixture,
+  createRankedProofFixture,
+} from './rankedProofFixture';
 import { assertSafeSmokeTarget } from './smokeTargetGuard';
 
 const SMOKE_BUILD_VERSION = 'prototype-2026.02';
@@ -118,6 +121,20 @@ interface RankedProofView {
   roundCount: number;
   frameCount: number;
   derivedOutcome: 'p1_win' | 'p2_win';
+  inputAttestation?: {
+    status: 'participant_verified' | 'match_verified';
+    evidence: {
+      schemaVersion: string;
+      minimumObservationRatio: number;
+      participants: Array<{
+        accountId: string;
+        side: 'P1' | 'P2';
+        commitmentCount: number;
+        committedFrameCount: number;
+        finalChainDigest: string;
+      }>;
+    };
+  };
 }
 
 interface RankedResultSubmitResponse {
@@ -277,6 +294,41 @@ async function submitRankedDraw(
       proof,
     }),
   });
+}
+
+async function submitRankedInputCommitments(
+  baseUrl: string,
+  accountId: string,
+  sessionId: string,
+  sessionToken: string,
+  side: 'P1' | 'P2',
+  proof: RankedMatchProof,
+): Promise<number> {
+  const commitments = await createRankedInputCommitmentFixture(proof, accountId, side);
+  for (const commitment of commitments) {
+    const response = await requestJson<{
+      sequence?: number;
+      chainDigest?: string;
+    }>(`${baseUrl}/ranked/sessions/${sessionId}/input-commitments`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: authorizationHeader(accountId),
+        'x-match-session-token': sessionToken,
+      },
+      body: JSON.stringify({ ...commitment, sessionToken }),
+    });
+    if (
+      response.status !== 200
+      || response.body.sequence !== commitment.sequence
+      || !/^[0-9a-f]{64}$/.test(response.body.chainDigest ?? '')
+    ) {
+      throw new Error(
+        `Ranked input commitment ${commitment.sequence} failed for ${accountId}: status=${response.status}.`,
+      );
+    }
+  }
+  return commitments.length;
 }
 
 async function getProgression(baseUrl: string, accountId: string): Promise<RankedProgressionResponse> {
@@ -663,6 +715,20 @@ async function run(): Promise<void> {
     throw new Error(`Expected ranked draw to be rejected as no-contest, got ${JSON.stringify(drawSubmission)}.`);
   }
 
+  const account1Side = initialSession.participants.find(({ accountId }) => accountId === account1)?.side;
+  const account2Side = initialSession.participants.find(({ accountId }) => accountId === account2)?.side;
+  if (!account1Side || !account2Side) {
+    throw new Error('Ranked smoke session did not expose both server-assigned player sides.');
+  }
+  const account1CommitmentCount = await submitRankedInputCommitments(
+    baseUrl,
+    account1,
+    sessionId,
+    ticket1.matchStart.sessionToken,
+    account1Side,
+    rankedProof,
+  );
+
   const firstSubmission = await submitRankedResult(
     baseUrl,
     account1,
@@ -728,6 +794,15 @@ async function run(): Promise<void> {
     throw new Error(`Tampered proof returned unexpected verification error: ${JSON.stringify(tamperedProofError)}`);
   }
 
+  const account2CommitmentCount = await submitRankedInputCommitments(
+    baseUrl,
+    account2,
+    sessionId,
+    ticket2.matchStart.sessionToken,
+    account2Side,
+    rankedProof,
+  );
+
   const peerSubmission = await submitRankedResult(
     baseUrl,
     account2,
@@ -742,6 +817,19 @@ async function run(): Promise<void> {
   }
   if (peerSubmission.body.proof?.digest !== verifiedProofDigest) {
     throw new Error('Peer settlement did not reference the same verified proof digest.');
+  }
+  const inputAttestation = peerSubmission.body.proof.inputAttestation;
+  if (
+    inputAttestation?.status !== 'match_verified'
+    || inputAttestation.evidence.schemaVersion !== 'gw.ranked-input-attestation.v1'
+    || inputAttestation.evidence.participants.length !== 2
+    || !inputAttestation.evidence.participants.every((participant) => (
+      participant.commitmentCount > 0
+      && participant.committedFrameCount > 0
+      && /^[0-9a-f]{64}$/.test(participant.finalChainDigest)
+    ))
+  ) {
+    throw new Error('Peer settlement did not retain both server-observed input commitment chains.');
   }
 
   const duplicateSubmission = await submitRankedResult(
@@ -952,6 +1040,12 @@ async function run(): Promise<void> {
     rulesetVersion: SMOKE_RULESET_VERSION,
     balanceProfileId: SMOKE_BALANCE_PROFILE_ID,
   });
+  const limiterSession = await getSession(baseUrl, limitedAccount, limitedSessionId);
+  const protectedPeerSide = limiterSession.participants
+    .find(({ accountId }) => accountId === protectedPeer)?.side;
+  if (!protectedPeerSide) {
+    throw new Error('Ranked proof limiter session did not expose the protected peer side.');
+  }
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     const invalidProof = structuredClone(limiterRankedProof);
     invalidProof.rounds[0].finalChecksum = (
@@ -988,6 +1082,14 @@ async function run(): Promise<void> {
   ) {
     throw new Error(`Expected exhausted proof budget to return retryable 429, got ${JSON.stringify(limitedSubmission)}.`);
   }
+  await submitRankedInputCommitments(
+    baseUrl,
+    protectedPeer,
+    limitedSessionId,
+    protectedTicket.matchStart.sessionToken,
+    protectedPeerSide,
+    limiterRankedProof,
+  );
   const protectedPeerSubmission = await submitRankedResult(
     baseUrl,
     protectedPeer,
@@ -1051,6 +1153,11 @@ async function run(): Promise<void> {
     drawSubmissionStatus: drawSubmission.status,
     drawPolicyCode: drawSubmission.body.code,
     proofDigest: verifiedProofDigest,
+    inputCommitments: {
+      account1: account1CommitmentCount,
+      account2: account2CommitmentCount,
+      attestedParticipants: inputAttestation.evidence.participants.length,
+    },
     tamperedProofStatus: tamperedProofSubmission.status,
     tamperedProofErrorCode: tamperedProofError.proofErrorCode,
     peerSubmissionStatus: peerSubmission.status,

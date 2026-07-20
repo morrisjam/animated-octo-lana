@@ -22,16 +22,15 @@ import {
   createStageModelRuntime,
   type StageModelRuntime,
 } from './stageModelRuntime';
+import {
+  ACTION_READABILITY_BY_ID,
+  ACTION_READABILITY_DEFINITIONS,
+  type ActionReadabilityId,
+} from './actionReadability';
 
 const MAX_RENDER_PIXEL_RATIO = 1.25;
 
-interface PlayerIndicatorMeshes {
-  parry: THREE.Mesh;
-  launch: THREE.Mesh;
-  special: THREE.Mesh;
-  break: THREE.Mesh;
-  dunk: THREE.Mesh;
-}
+type PlayerIndicatorMeshes = Record<ActionReadabilityId, THREE.Group>;
 
 interface WormholeBackdrop {
   group: THREE.Group;
@@ -572,33 +571,96 @@ function createPlayerVisuals(scene: THREE.Scene): {
   };
 }
 
-function createIndicator(scene: THREE.Scene, radius: number, thickness: number, color: string): THREE.Mesh {
+function createIndicatorMaterial(color: string): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  });
+}
+
+function addIndicatorRing(
+  group: THREE.Group,
+  color: string,
+  innerRadius: number,
+  outerRadius: number,
+  segments: number,
+  thetaStart = 0,
+  thetaLength = Math.PI * 2,
+): void {
   const mesh = new THREE.Mesh(
-    new THREE.TorusGeometry(radius, thickness, 16, 64),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, depthWrite: false }),
+    new THREE.RingGeometry(innerRadius, outerRadius, segments, 1, thetaStart, thetaLength),
+    createIndicatorMaterial(color),
   );
-  mesh.rotation.x = Math.PI / 2;
-  mesh.visible = false;
-  scene.add(mesh);
-  return mesh;
+  mesh.renderOrder = 5;
+  group.add(mesh);
+}
+
+function createIndicator(scene: THREE.Scene, id: ActionReadabilityId): THREE.Group {
+  const definition = ACTION_READABILITY_BY_ID[id];
+  const group = new THREE.Group();
+  group.name = `action-indicator-${id}`;
+  group.visible = false;
+  let baseRotation = 0;
+  let rotationSpeed = 0;
+
+  switch (id) {
+    case 'boost':
+      addIndicatorRing(group, definition.color, 4.0, 4.55, 48, -Math.PI * 0.72, Math.PI * 1.45);
+      rotationSpeed = 1.25;
+      break;
+    case 'super_boost':
+      addIndicatorRing(group, definition.color, 3.75, 4.05, 48);
+      addIndicatorRing(group, definition.color, 4.48, 4.82, 48);
+      rotationSpeed = -1.75;
+      break;
+    case 'special':
+      addIndicatorRing(group, definition.color, 3.85, 4.65, 3);
+      baseRotation = Math.PI / 2;
+      rotationSpeed = 0.45;
+      break;
+    case 'launch':
+      addIndicatorRing(group, definition.color, 3.9, 4.72, 4);
+      baseRotation = Math.PI / 4;
+      break;
+    case 'dunk':
+      addIndicatorRing(group, definition.color, 4.0, 4.82, 3);
+      baseRotation = -Math.PI / 2;
+      break;
+    case 'parry':
+      addIndicatorRing(group, definition.color, 3.9, 4.55, 6);
+      baseRotation = Math.PI / 6;
+      rotationSpeed = -0.35;
+      break;
+    case 'launch_break':
+      addIndicatorRing(group, definition.color, 4.05, 5.0, 8);
+      baseRotation = Math.PI / 8;
+      rotationSpeed = 1.8;
+      break;
+  }
+
+  group.userData.motion = [baseRotation, rotationSpeed];
+  scene.add(group);
+  return group;
+}
+
+function createPlayerIndicatorSet(scene: THREE.Scene): PlayerIndicatorMeshes {
+  return Object.fromEntries(
+    ACTION_READABILITY_DEFINITIONS.map((definition) => [
+      definition.id,
+      createIndicator(scene, definition.id),
+    ]),
+  ) as PlayerIndicatorMeshes;
 }
 
 function createPlayerIndicators(scene: THREE.Scene): PlayersById<PlayerIndicatorMeshes> {
   return {
-    P1: {
-      parry: createIndicator(scene, 3.0, 0.14, '#b4fbff'),
-      launch: createIndicator(scene, 3.35, 0.2, '#ffcb61'),
-      special: createIndicator(scene, 2.6, 0.12, '#58b6ff'),
-      break: createIndicator(scene, 3.8, 0.16, '#ff9f48'),
-      dunk: createIndicator(scene, 4.3, 0.2, '#8affb6'),
-    },
-    P2: {
-      parry: createIndicator(scene, 3.0, 0.14, '#ffd9f0'),
-      launch: createIndicator(scene, 3.35, 0.2, '#ffcb61'),
-      special: createIndicator(scene, 2.6, 0.12, '#ff74b8'),
-      break: createIndicator(scene, 3.8, 0.16, '#ff9f48'),
-      dunk: createIndicator(scene, 4.3, 0.2, '#8affb6'),
-    },
+    P1: createPlayerIndicatorSet(scene),
+    P2: createPlayerIndicatorSet(scene),
   };
 }
 

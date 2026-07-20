@@ -15,11 +15,14 @@ import {
   runWebRtcRollbackScenario,
   type WebRtcRollbackScenarioReport,
 } from '../src/dev/webRtcRollbackScenario';
+import { buildLocalSmokeRtcConfiguration } from '../src/dev/localSmokeIceConfig';
+import { resolveWebRtcSoakReleaseIdentity } from '../src/dev/webRtcSoakReleaseIdentity';
 
 interface BrowserSmokeReport {
   schemaVersion?: string;
   ok?: boolean;
   forceRelayRequested?: boolean;
+  expectedReleaseSha?: string | null;
   sessionId?: string;
   accounts?: string[];
   connectionPaths?: string[];
@@ -198,8 +201,9 @@ interface TwoClientLifecycleStallReport {
 }
 
 interface TwoClientBrowserSmokeReport {
-  schemaVersion: 'gw.webrtc-two-client-smoke.v4';
+  schemaVersion: 'gw.webrtc-two-client-smoke.v5';
   forceRelayRequested: boolean;
+  buildVersion: string;
   isolatedBrowserContexts: boolean;
   pageCount: number;
   sessionId: string;
@@ -433,9 +437,10 @@ function validateReport(
   report: BrowserSmokeReport,
   forceRelayExpected: boolean,
   soakOptions: BrowserSoakOptions,
+  expectedBuildVersion: string,
 ): void {
   if (
-    report.schemaVersion !== 'gw.webrtc-browser-smoke.v7'
+    report.schemaVersion !== 'gw.webrtc-browser-smoke.v8'
     || report.ok !== true
     || report.forceRelayRequested !== forceRelayExpected
     || !report.sessionId
@@ -576,8 +581,9 @@ function validateReport(
   const twoClient = report.twoClient;
   if (
     !twoClient
-    || twoClient.schemaVersion !== 'gw.webrtc-two-client-smoke.v4'
+    || twoClient.schemaVersion !== 'gw.webrtc-two-client-smoke.v5'
     || twoClient.forceRelayRequested !== forceRelayExpected
+    || twoClient.buildVersion !== expectedBuildVersion
     || twoClient.isolatedBrowserContexts !== true
     || twoClient.pageCount !== 2
     || !twoClient.sessionId
@@ -686,6 +692,15 @@ function validateReport(
     || twoClient.turnCredentialModes.some((mode) => mode !== 'time_limited')
   )) {
     throw new Error('Forced-relay smoke did not keep every browser connection on short-lived TURN relay.');
+  }
+  if (!forceRelayExpected && (
+    report.connectionPaths.some((path) => path !== 'direct')
+    || report.recovery?.connectionPaths?.some((path) => path !== 'direct')
+    || report.iceTransportPolicies.some((policy) => policy !== 'all')
+    || twoClient.connectionPaths.some((path) => path !== 'direct')
+    || twoClient.iceTransportPolicies.some((policy) => policy !== 'all')
+  )) {
+    throw new Error('Direct smoke did not keep every browser connection off the TURN relay.');
   }
 }
 
@@ -1166,8 +1181,8 @@ async function runTwoClientBrowserSmoke(
   timeoutMs: number,
   forceRelay: boolean,
   soakOptions: BrowserSoakOptions,
+  buildVersion: string,
 ): Promise<TwoClientBrowserSmokeReport> {
-  const buildVersion = `webrtc-two-client-smoke-${Date.now()}`;
   const [account1, account2] = await Promise.all([
     createRunnerAccount(apiBaseUrl),
     createRunnerAccount(apiBaseUrl),
@@ -1189,6 +1204,8 @@ async function runTwoClientBrowserSmoke(
     requestRunnerIceConfig(apiBaseUrl, account1, match1, forceRelay),
     requestRunnerIceConfig(apiBaseUrl, account2, match2, forceRelay),
   ]);
+  const rtcConfig1 = buildLocalSmokeRtcConfiguration(iceConfig1, forceRelay);
+  const rtcConfig2 = buildLocalSmokeRtcConfiguration(iceConfig2, forceRelay);
 
   const peerUrl = new URL('/webrtc-peer-smoke.html', webUrl).toString();
   const consoleMessages: [string[], string[]] = [[], []];
@@ -1241,14 +1258,14 @@ async function runTwoClientBrowserSmoke(
           throw new Error('Peer runtime is unavailable.');
         }
         return await runtime.connect(options);
-      }, { apiBaseUrl, account: account1, match: match1, iceConfig: iceConfig1 }),
+      }, { apiBaseUrl, account: account1, match: match1, iceConfig: rtcConfig1 }),
       page2.evaluate(async (options) => {
         const runtime = window.gravityWellPeerSmoke;
         if (!runtime) {
           throw new Error('Peer runtime is unavailable.');
         }
         return await runtime.connect(options);
-      }, { apiBaseUrl, account: account2, match: match2, iceConfig: iceConfig2 }),
+      }, { apiBaseUrl, account: account2, match: match2, iceConfig: rtcConfig2 }),
     ]) as [RunnerPeerIdentity, RunnerPeerIdentity];
     if (
       identity1.localAccountId !== account1.id
@@ -1374,8 +1391,9 @@ async function runTwoClientBrowserSmoke(
     ]) as [PeerSmokeTransportDiagnostics, PeerSmokeTransportDiagnostics];
 
     return {
-      schemaVersion: 'gw.webrtc-two-client-smoke.v4',
+      schemaVersion: 'gw.webrtc-two-client-smoke.v5',
       forceRelayRequested: forceRelay,
+      buildVersion,
       isolatedBrowserContexts,
       pageCount: 2,
       sessionId: match1.sessionId,
@@ -1423,6 +1441,11 @@ async function run(): Promise<void> {
     process.env.WEBRTC_BROWSER_SMOKE_FORCE_RELAY,
   );
   const soakOptions = parseSoakOptions();
+  const releaseIdentity = resolveWebRtcSoakReleaseIdentity({
+    configuredBuildVersion: process.env.WEBRTC_BROWSER_SMOKE_BUILD_VERSION,
+    expectedReleaseSha: process.env.WEBRTC_BROWSER_SMOKE_EXPECT_RELEASE_SHA,
+    fallbackBuildVersion: `webrtc-two-client-smoke-${Date.now()}`,
+  });
   const screenshotPath = resolve(
     process.env.WEBRTC_BROWSER_SMOKE_FAILURE_SCREENSHOT ?? DEFAULT_FAILURE_SCREENSHOT,
   );
@@ -1483,13 +1506,15 @@ async function run(): Promise<void> {
       timeoutMs,
       forceRelay,
       soakOptions,
+      releaseIdentity.buildVersion,
     );
     report = {
       ...report,
-      schemaVersion: 'gw.webrtc-browser-smoke.v7',
+      schemaVersion: 'gw.webrtc-browser-smoke.v8',
+      expectedReleaseSha: releaseIdentity.expectedReleaseSha,
       twoClient,
     };
-    validateReport(report, forceRelay, soakOptions);
+    validateReport(report, forceRelay, soakOptions, releaseIdentity.buildVersion);
 
     const unexpectedConsoleErrors = consoleMessages.filter((entry) => (
       entry.startsWith('[error]') && !isExpectedStaleAttemptConflict(entry)
@@ -1516,10 +1541,11 @@ async function run(): Promise<void> {
   } catch (error) {
     await captureFailure(page, screenshotPath);
     const failure = {
-      schemaVersion: 'gw.webrtc-browser-smoke.v7',
+      schemaVersion: 'gw.webrtc-browser-smoke.v8',
       generatedAt: new Date().toISOString(),
       ok: false,
       forceRelayExpected: forceRelay,
+      expectedReleaseSha: releaseIdentity.expectedReleaseSha,
       soakRequested: soakOptions.enabled,
       webUrl,
       apiBaseUrl,

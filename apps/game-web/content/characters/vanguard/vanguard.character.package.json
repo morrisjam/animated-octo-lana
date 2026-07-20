@@ -6,8 +6,13 @@
   "mechanicsTag": "defensive anchor",
   "metadata": {
     "author": "Gravity Well Team",
-    "version": "0.3.3",
+    "version": "0.3.5",
     "tags": ["alpha", "defense", "anchor"]
+  },
+  "ai": {
+    "neutralApproachMultiplier": 1,
+    "neutralBoostDistanceOffset": 0,
+    "postControlSpacingFrames": 0
   },
   "stats": {
     "fuelCapacityMultiplier": 1.1,

@@ -3,7 +3,7 @@ import type { LocalRankedRecoverySmokeDiagnostics } from './localRankedRecoveryS
 import type { LocalRankedSmokeInputDriverDiagnostics } from './localRankedSmokeInputDriver';
 import type { LocalRankedSmokeTransportDiagnostics } from './localRankedSmokeTransport';
 
-export const LOCAL_RANKED_ROOT_SMOKE_SCHEMA_VERSION = 'gw.local-ranked-root-smoke.v3' as const;
+export const LOCAL_RANKED_ROOT_SMOKE_SCHEMA_VERSION = 'gw.local-ranked-root-smoke.v5' as const;
 export const LOCAL_RANKED_ROOT_SMOKE_QUERY = 'rankedRootSmoke';
 export const LOCAL_RANKED_ROOT_SMOKE_SIMULATION_RATE = 8;
 export const LOCAL_RANKED_ROOT_SMOKE_INBOUND_DELAY_POLLS = 1;
@@ -35,6 +35,8 @@ export interface LocalRankedRootSmokeSnapshot {
   releaseProfile: {
     environment: string;
     buildId: string;
+    rulesetVersion: string;
+    balanceProfileId: string;
     onlineEnabled: boolean;
     rankedEnabled: boolean;
     onlineMatchRuntimeEnabled: boolean;
@@ -87,6 +89,13 @@ export interface LocalRankedRootSmokeSnapshot {
       roundCount: number;
       frameCount: number;
     } | null;
+    inputCommitments: {
+      queuedChunks: number;
+      acknowledgedChunks: number;
+      committedFrames: number;
+      finalChainDigest: string | null;
+      failed: boolean;
+    } | null;
     replay: {
       status: string;
       replayId: string | null;
@@ -103,6 +112,18 @@ export interface LocalRankedRootSmokeSnapshot {
       proofDigest: string | null;
       proofRoundCount: number | null;
       proofFrameCount: number | null;
+      inputAttestation: {
+        status: 'participant_verified' | 'match_verified';
+        schemaVersion: string;
+        minimumObservationRatio: number;
+        participants: Array<{
+          accountId: string;
+          side: PlayerId;
+          commitmentCount: number;
+          committedFrameCount: number;
+          finalChainDigest: string;
+        }>;
+      } | null;
       outcome: string | null;
       winnerAccountId: string | null;
       ratingDeltas: LocalRankedRootSmokeRatingDelta[];
@@ -140,6 +161,62 @@ export interface LocalRankedRootSmokeSnapshot {
       occurredAt: string | null;
     }>;
   } | null;
+}
+
+export interface LocalRankedReleaseIdentityExpectation {
+  buildId: string;
+  rulesetVersion: string;
+  balanceProfileId: string;
+}
+
+export interface LocalRankedTransportSelection {
+  connectionPath: string;
+  iceTransportPolicy: string;
+  relayAvailable: boolean;
+  forceRelay: boolean;
+}
+
+export function assertLocalRankedReleaseIdentity(
+  profile: LocalRankedRootSmokeSnapshot['releaseProfile'],
+  expectation: LocalRankedReleaseIdentityExpectation,
+): void {
+  for (const [label, actual, expected] of [
+    ['build', profile.buildId, expectation.buildId],
+    ['ruleset', profile.rulesetVersion, expectation.rulesetVersion],
+    ['balance profile', profile.balanceProfileId, expectation.balanceProfileId],
+  ] as const) {
+    if (!expected.trim()) {
+      throw new Error(`Expected ranked-root ${label} identity is required.`);
+    }
+    if (actual !== expected) {
+      throw new Error(`Ranked-root ${label} identity mismatch: expected ${expected}, got ${actual}.`);
+    }
+  }
+}
+
+export function assertLocalRankedTransportSelection(
+  selection: LocalRankedTransportSelection,
+  subject = 'Ranked root transport',
+): void {
+  const validPath = selection.connectionPath === 'direct' || selection.connectionPath === 'relay';
+  if (!validPath) {
+    throw new Error(`${subject} selected invalid connection path ${selection.connectionPath}.`);
+  }
+
+  if (selection.forceRelay) {
+    if (selection.connectionPath !== 'relay') {
+      throw new Error(`${subject} used ${selection.connectionPath}; expected forced relay.`);
+    }
+    if (selection.iceTransportPolicy !== 'relay') {
+      throw new Error(`${subject} used ICE policy ${selection.iceTransportPolicy}; expected relay.`);
+    }
+  } else if (selection.iceTransportPolicy !== 'all') {
+    throw new Error(`${subject} used ICE policy ${selection.iceTransportPolicy}; expected all.`);
+  }
+
+  if (!selection.relayAvailable) {
+    throw new Error(`${subject} had no release-required relay fallback.`);
+  }
 }
 
 export interface LocalRankedRootSmokeBridge {

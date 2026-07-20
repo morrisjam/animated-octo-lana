@@ -61,8 +61,6 @@ jobs:
       WEB_PRODUCTION_RELEASE_ATTESTATION_URL: ${{ vars.WEB_PRODUCTION_RELEASE_ATTESTATION_URL }}
       WEB_CANARY_EXPECTED_HOSTNAME: ${{ vars.WEB_CANARY_EXPECTED_HOSTNAME }}
       WEB_PRODUCTION_EXPECTED_HOSTNAME: ${{ vars.WEB_PRODUCTION_EXPECTED_HOSTNAME }}
-      DEPLOY_EXPECT_MIGRATION_HEAD: 030_matchmaking_runtime_fences.sql
-      DEPLOY_EXPECT_MIGRATION_COUNT: "30"
       DEPLOY_EXPECT_MAX_RESIDENT_TICKETS: "64"
       DEPLOY_EXPECT_DATABASE_TARGET: remote
       DEPLOY_MAX_CRITICAL_ALERTS: "0"
@@ -76,7 +74,9 @@ jobs:
       DEPLOY_REQUIRE_ALPHA_ALLOWLIST: "true"
       DEPLOY_REQUIRE_TURN: "true"
       DEPLOY_REQUIRE_DURABLE_REPLAY_STORE: "true"
+      DEPLOY_REQUIRE_FORWARD_COMPATIBLE_MIGRATIONS: "true"
       DEPLOY_REQUIRE_WEB_RELEASE_ATTESTATION: "true"
+      DEPLOY_REQUIRE_SECURE_AUTH: "true"
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Validate immutable release inputs
@@ -133,19 +133,46 @@ jobs:
             fi
           done
 
+      - name: Resolve exact release migration identity
+        id: release_migrations
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const directory = 'apps/api/migrations';
+          const files = fs.readdirSync(directory)
+            .filter((filename) => filename.endsWith('.sql'))
+            .sort();
+          if (files.length === 0) {
+            throw new Error('The release contains no API migrations.');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `head=${files.at(-1)}`,
+            `count=${files.length}`,
+            '',
+          ].join('\n'));
+          NODE
+
       - name: Verify same-SHA canary evidence for production
         if: inputs.target == 'production'
         env:
           CANARY_RUN_ID: ${{ inputs.canary_run_id }}
+          CANDIDATE_MIGRATION_HEAD: ${{ steps.release_migrations.outputs.head }}
+          CANDIDATE_MIGRATION_COUNT: ${{ steps.release_migrations.outputs.count }}
         run: |
           set -euo pipefail
           if [[ ! "${CANARY_RUN_ID}" =~ ^[0-9]+$ ]]; then
             echo "Production requires the numeric run ID from a successful canary rollout."
             exit 1
           fi
-          RUN_CONCLUSION="$(gh run view "${CANARY_RUN_ID}" --json conclusion --jq .conclusion)"
-          if [[ "${RUN_CONCLUSION}" != "success" ]]; then
-            echo "Canary run ${CANARY_RUN_ID} did not complete successfully."
+          RUN_METADATA="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANARY_RUN_ID}")"
+          RUN_CONCLUSION="$(jq -r .conclusion <<<"${RUN_METADATA}")"
+          RUN_EVENT="$(jq -r .event <<<"${RUN_METADATA}")"
+          RUN_WORKFLOW_PATH="$(jq -r .path <<<"${RUN_METADATA}")"
+          RUN_HEAD_BRANCH="$(jq -r .head_branch <<<"${RUN_METADATA}")"
+          if [[ "${RUN_CONCLUSION}" != "success" || "${RUN_EVENT}" != "workflow_dispatch" || "${RUN_WORKFLOW_PATH}" != ".github/workflows/safe-rollout.yml" || "${RUN_HEAD_BRANCH}" != "master" ]]; then
+            echo "Canary run ${CANARY_RUN_ID} is not a successful master Safe Rollout run."
             exit 1
           fi
           mkdir -p /tmp/gravity-well-canary-evidence
@@ -156,19 +183,29 @@ jobs:
           const fs = require('node:fs');
           const evidence = JSON.parse(fs.readFileSync('/tmp/gravity-well-canary-evidence/evidence.json', 'utf8'));
           if (
-            evidence.schemaVersion !== 'gw.safe-rollout.v2'
+            evidence.schemaVersion !== 'gw.safe-rollout.v5'
             || evidence.target !== 'canary'
+            || String(evidence.workflowRunId) !== process.env.CANARY_RUN_ID
             || String(evidence.releaseSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
-            || evidence.migrationHead !== process.env.DEPLOY_EXPECT_MIGRATION_HEAD
-            || String(evidence.migrationCount) !== process.env.DEPLOY_EXPECT_MIGRATION_COUNT
+            || String(evidence.rollbackSha).toLowerCase() !== process.env.ROLLBACK_SHA.toLowerCase()
+            || evidence.migrationHead !== process.env.CANDIDATE_MIGRATION_HEAD
+            || String(evidence.migrationCount) !== process.env.CANDIDATE_MIGRATION_COUNT
+            || evidence.migrationForwardCompatibleSuffixAllowed !== true
             || String(evidence.maxResidentTickets) !== process.env.DEPLOY_EXPECT_MAX_RESIDENT_TICKETS
             || evidence.migrationChecksumsVerified !== true
             || evidence.webReleaseAttestationSchema !== 'gw.web-release.v1'
             || String(evidence.webReleaseSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
-            || evidence.rollbackCompatibilitySchema !== 'gw.rollback-schema-compatibility.v1'
+            || evidence.deploymentHealthGateSchema !== 'gw.deployment-health-gate.v2'
+            || evidence.exactReleaseBuildAllowlisted !== true
+            || evidence.runtimeSecurityConfigurationReady !== true
+            || evidence.steamTicketVerifierConfigured !== true
+            || evidence.rollbackCompatibilitySchema !== 'gw.rollback-schema-compatibility.v2'
             || String(evidence.rollbackCompatibilityCandidateSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
             || String(evidence.rollbackCompatibilityRollbackSha).toLowerCase() !== process.env.ROLLBACK_SHA.toLowerCase()
             || evidence.rollbackCompatibilityPassed !== true
+            || evidence.rollbackCompatibilityRuntimeDependenciesSource !== 'rollback_install'
+            || evidence.rollbackCompatibilityCandidateMigrationHead !== process.env.CANDIDATE_MIGRATION_HEAD
+            || String(evidence.rollbackCompatibilityCandidateMigrationCount) !== process.env.CANDIDATE_MIGRATION_COUNT
           ) {
             throw new Error(`Canary evidence does not match release ${process.env.RELEASE_SHA}.`);
           }
@@ -219,6 +256,9 @@ jobs:
             if (parsed.username || parsed.password || parsed.hash || (requireBaseUrl && parsed.search)) {
               throw new Error(`${name} contains unsupported URL components.`);
             }
+            if (name === 'DEPLOY_HOOK' && parsed.searchParams.has('ref')) {
+              throw new Error('DEPLOY_HOOK must not contain a preconfigured ref query parameter.');
+            }
             if (expectedHostname && parsed.hostname.toLowerCase() !== expectedHostname.toLowerCase()) {
               throw new Error(`${name} does not match its independently configured hostname.`);
             }
@@ -258,6 +298,39 @@ jobs:
           "${ROLLBACK_SHA}"
           rollout-evidence/rollback-schema-compatibility.json
 
+      - name: Bind rollout migration phases to compatibility evidence
+        id: migration_pair
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync(
+            'rollout-evidence/rollback-schema-compatibility.json',
+            'utf8',
+          ));
+          if (
+            report.schemaVersion !== 'gw.rollback-schema-compatibility.v2'
+            || report.ok !== true
+            || report.runtimeDependenciesSource !== 'rollback_install'
+            || String(report.candidate?.sha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
+            || String(report.rollback?.sha).toLowerCase() !== process.env.ROLLBACK_SHA.toLowerCase()
+            || report.candidate?.migrationHead !== process.env.CANDIDATE_MIGRATION_HEAD
+            || String(report.candidate?.migrationCount) !== process.env.CANDIDATE_MIGRATION_COUNT
+          ) {
+            throw new Error('Rollback compatibility evidence does not match the exact rollout migration pair.');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `candidate_head=${report.candidate.migrationHead}`,
+            `candidate_count=${report.candidate.migrationCount}`,
+            `rollback_head=${report.rollback.migrationHead}`,
+            `rollback_count=${report.rollback.migrationCount}`,
+            '',
+          ].join('\n'));
+          NODE
+        env:
+          CANDIDATE_MIGRATION_HEAD: ${{ steps.release_migrations.outputs.head }}
+          CANDIDATE_MIGRATION_COUNT: ${{ steps.release_migrations.outputs.count }}
+
       - name: Verify rollback baseline readiness and compatibility
         env:
           API_SLO_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
@@ -265,6 +338,8 @@ jobs:
           API_BASE_URL: ${{ steps.target.outputs.api_base }}
           DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
           DEPLOY_EXPECT_RELEASE_SHA: ${{ inputs.rollback_sha }}
+          DEPLOY_EXPECT_MIGRATION_HEAD: ${{ steps.migration_pair.outputs.rollback_head }}
+          DEPLOY_EXPECT_MIGRATION_COUNT: ${{ steps.migration_pair.outputs.rollback_count }}
           DEPLOY_EXPECT_DATABASE_ID: ${{ steps.target.outputs.database_id }}
           DEPLOY_EXPECT_ENVIRONMENT: ${{ steps.target.outputs.target }}
           DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: ${{ steps.target.outputs.target }}
@@ -281,6 +356,7 @@ jobs:
           API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
           API_BASE_URL: ${{ steps.target.outputs.api_base }}
           DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
+          DEPLOY_RESUME_ON_DRAIN_FAILURE: "true"
         run: npm run api:deploy:drain-gate
 
       - name: Stop rollout when drain fails
@@ -308,21 +384,10 @@ jobs:
             exit 1
           fi
 
-      - name: Resume matchmaking when deploy trigger fails
-        id: deploy_failure_resume
-        if: steps.deploy.outcome == 'failure'
-        continue-on-error: true
-        env:
-          API_OPS_ADMIN_KEY: ${{ secrets.SLO_ADMIN_KEY }}
-          API_BASE_URL: ${{ steps.target.outputs.api_base }}
-          DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
-          DEPLOY_DRAIN_ACTION: resume
-        run: npm run api:deploy:drain-gate
-
       - name: Mark deploy trigger failure
         if: steps.deploy.outcome == 'failure'
         run: |
-          echo "Exact-SHA deploy trigger failed; resume outcome=${{ steps.deploy_failure_resume.outcome }}."
+          echo "Exact-SHA deploy trigger failed or had an indeterminate response. Matchmaking remains drained until an operator verifies provider state."
           exit 1
 
       - name: Wait for exact release readiness before resuming
@@ -334,6 +399,8 @@ jobs:
           API_BASE_URL: ${{ steps.target.outputs.api_base }}
           DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
           DEPLOY_EXPECT_RELEASE_SHA: ${{ inputs.release_sha }}
+          DEPLOY_EXPECT_MIGRATION_HEAD: ${{ steps.migration_pair.outputs.candidate_head }}
+          DEPLOY_EXPECT_MIGRATION_COUNT: ${{ steps.migration_pair.outputs.candidate_count }}
           DEPLOY_EXPECT_DATABASE_ID: ${{ steps.target.outputs.database_id }}
           DEPLOY_EXPECT_ENVIRONMENT: ${{ steps.target.outputs.target }}
           DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: ${{ steps.target.outputs.target }}
@@ -378,6 +445,8 @@ jobs:
           API_BASE_URL: ${{ steps.target.outputs.api_base }}
           DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
           DEPLOY_EXPECT_RELEASE_SHA: ${{ inputs.release_sha }}
+          DEPLOY_EXPECT_MIGRATION_HEAD: ${{ steps.migration_pair.outputs.candidate_head }}
+          DEPLOY_EXPECT_MIGRATION_COUNT: ${{ steps.migration_pair.outputs.candidate_count }}
           DEPLOY_EXPECT_DATABASE_ID: ${{ steps.target.outputs.database_id }}
           DEPLOY_EXPECT_ENVIRONMENT: ${{ steps.target.outputs.target }}
           DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: ${{ steps.target.outputs.target }}
@@ -385,6 +454,7 @@ jobs:
           DEPLOY_MAX_ACTIVE_SESSIONS: "1000000"
           DEPLOY_WEB_RELEASE_ATTESTATION_URL: ${{ steps.target.outputs.web_release_attestation_url }}
           DEPLOY_EXPECT_WEB_HOSTNAME: ${{ steps.target.outputs.web_hostname }}
+          DEPLOY_HEALTH_REPORT_PATH: rollout-evidence/final-health-gate.json
         run: npm run api:deploy:health-gate
 
       - name: Re-drain matchmaking before rollback
@@ -429,6 +499,8 @@ jobs:
           API_BASE_URL: ${{ steps.target.outputs.api_base }}
           DEPLOY_EXPECT_API_HOSTNAME: ${{ steps.target.outputs.api_hostname }}
           DEPLOY_EXPECT_RELEASE_SHA: ${{ inputs.rollback_sha }}
+          DEPLOY_EXPECT_MIGRATION_HEAD: ${{ steps.migration_pair.outputs.candidate_head }}
+          DEPLOY_EXPECT_MIGRATION_COUNT: ${{ steps.migration_pair.outputs.candidate_count }}
           DEPLOY_EXPECT_DATABASE_ID: ${{ steps.target.outputs.database_id }}
           DEPLOY_EXPECT_ENVIRONMENT: ${{ steps.target.outputs.target }}
           DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE: ${{ steps.target.outputs.target }}
@@ -467,6 +539,8 @@ jobs:
         if: inputs.target == 'canary' && steps.final_gate.outcome == 'success'
         env:
           DATABASE_ID: ${{ steps.target.outputs.database_id }}
+          CANDIDATE_MIGRATION_HEAD: ${{ steps.migration_pair.outputs.candidate_head }}
+          CANDIDATE_MIGRATION_COUNT: ${{ steps.migration_pair.outputs.candidate_count }}
         run: |
           mkdir -p rollout-evidence
           node - <<'NODE'
@@ -475,33 +549,85 @@ jobs:
             'rollout-evidence/rollback-schema-compatibility.json',
             'utf8',
           ));
+          const finalHealthGate = JSON.parse(fs.readFileSync(
+            'rollout-evidence/final-health-gate.json',
+            'utf8',
+          ));
           if (
-            rollbackCompatibility.schemaVersion !== 'gw.rollback-schema-compatibility.v1'
+            rollbackCompatibility.schemaVersion !== 'gw.rollback-schema-compatibility.v2'
             || rollbackCompatibility.ok !== true
             || rollbackCompatibility.localOnly !== true
             || rollbackCompatibility.hostedServicesContacted !== false
+            || rollbackCompatibility.runtimeDependenciesSource !== 'rollback_install'
             || rollbackCompatibility.candidate.dirty !== false
             || String(rollbackCompatibility.candidate.sha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
             || String(rollbackCompatibility.rollback.sha).toLowerCase() !== process.env.ROLLBACK_SHA.toLowerCase()
+            || rollbackCompatibility.candidate.migrationHead !== process.env.CANDIDATE_MIGRATION_HEAD
+            || String(rollbackCompatibility.candidate.migrationCount) !== process.env.CANDIDATE_MIGRATION_COUNT
+            || !rollbackCompatibility.phases.some((phase) => (
+              phase.name === 'rollback_post_upgrade_migrations' && phase.status === 'passed'
+            ))
           ) {
             throw new Error('Rollback schema compatibility evidence does not match this rollout pair.');
           }
+          if (
+            finalHealthGate.schemaVersion !== 'gw.deployment-health-gate.v2'
+            || finalHealthGate.ok !== true
+            || String(finalHealthGate.checks?.releaseSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
+            || String(finalHealthGate.checks?.expectedReleaseSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
+            || finalHealthGate.checks?.migrationHead !== process.env.CANDIDATE_MIGRATION_HEAD
+            || String(finalHealthGate.checks?.migrationCount) !== process.env.CANDIDATE_MIGRATION_COUNT
+            || finalHealthGate.checks?.migrationChecksumsVerified !== true
+            || finalHealthGate.checks?.migrationForwardCompatibleSuffixAllowed !== true
+            || finalHealthGate.checks?.requireForwardCompatibleMigrations !== true
+            || String(finalHealthGate.checks?.databaseId) !== process.env.DATABASE_ID
+            || Number(finalHealthGate.checks?.maxResidentTickets) !== Number(process.env.DEPLOY_EXPECT_MAX_RESIDENT_TICKETS)
+            || finalHealthGate.checks?.webReleaseAttestationSchema !== 'gw.web-release.v1'
+            || finalHealthGate.checks?.webReleaseAttestationStatus !== 200
+            || String(finalHealthGate.checks?.webReleaseSha).toLowerCase() !== process.env.RELEASE_SHA.toLowerCase()
+            || finalHealthGate.checks?.matchmakingAccessMode !== 'allowlist'
+            || finalHealthGate.checks?.matchmakingAccessReady !== true
+            || finalHealthGate.checks?.exactReleaseBuildCheckStatus !== 200
+            || finalHealthGate.checks?.exactReleaseBuildAllowlisted !== true
+            || finalHealthGate.checks?.runtimeSecurityPostureStatus !== 200
+            || finalHealthGate.checks?.runtimeSecurityPostureSchema !== 'gw.runtime-security-posture.v1'
+            || finalHealthGate.checks?.runtimeSecurityConfigurationReady !== true
+            || finalHealthGate.checks?.signedSessionAuthReady !== true
+            || finalHealthGate.checks?.authThrottleIsolationReady !== true
+            || finalHealthGate.checks?.steamTicketVerifierConfigured !== true
+            || finalHealthGate.checks?.steamDevelopmentTicketsDisabled !== true
+          ) {
+            throw new Error('Final canary health evidence does not prove exact-release matchmaking access.');
+          }
           fs.writeFileSync('rollout-evidence/evidence.json', JSON.stringify({
-            schemaVersion: 'gw.safe-rollout.v2',
+            schemaVersion: 'gw.safe-rollout.v5',
             target: 'canary',
-            releaseSha: process.env.RELEASE_SHA,
-            migrationHead: process.env.DEPLOY_EXPECT_MIGRATION_HEAD,
-            migrationCount: Number(process.env.DEPLOY_EXPECT_MIGRATION_COUNT),
-            maxResidentTickets: Number(process.env.DEPLOY_EXPECT_MAX_RESIDENT_TICKETS),
-            migrationChecksumsVerified: true,
-            webReleaseAttestationSchema: 'gw.web-release.v1',
-            webReleaseSha: process.env.RELEASE_SHA,
+            releaseSha: finalHealthGate.checks.releaseSha,
+            rollbackSha: rollbackCompatibility.rollback.sha,
+            migrationHead: finalHealthGate.checks.migrationHead,
+            migrationCount: finalHealthGate.checks.migrationCount,
+            maxResidentTickets: finalHealthGate.checks.maxResidentTickets,
+            migrationChecksumsVerified: finalHealthGate.checks.migrationChecksumsVerified,
+            migrationForwardCompatibleSuffixAllowed:
+              finalHealthGate.checks.migrationForwardCompatibleSuffixAllowed,
+            webReleaseAttestationSchema: finalHealthGate.checks.webReleaseAttestationSchema,
+            webReleaseSha: finalHealthGate.checks.webReleaseSha,
+            deploymentHealthGateSchema: finalHealthGate.schemaVersion,
+            exactReleaseBuildAllowlisted: finalHealthGate.checks.exactReleaseBuildAllowlisted,
+            runtimeSecurityConfigurationReady: finalHealthGate.checks.runtimeSecurityConfigurationReady,
+            steamTicketVerifierConfigured: finalHealthGate.checks.steamTicketVerifierConfigured,
             rollbackCompatibilitySchema: rollbackCompatibility.schemaVersion,
+            rollbackCompatibilityRuntimeDependenciesSource:
+              rollbackCompatibility.runtimeDependenciesSource,
             rollbackCompatibilityCandidateSha: rollbackCompatibility.candidate.sha,
             rollbackCompatibilityRollbackSha: rollbackCompatibility.rollback.sha,
             rollbackCompatibilityPassed: rollbackCompatibility.ok,
             rollbackCompatibilityCandidateMigrationDigest: rollbackCompatibility.candidate.migrationDigest,
             rollbackCompatibilityRollbackMigrationDigest: rollbackCompatibility.rollback.migrationDigest,
+            rollbackCompatibilityCandidateMigrationHead: rollbackCompatibility.candidate.migrationHead,
+            rollbackCompatibilityCandidateMigrationCount: rollbackCompatibility.candidate.migrationCount,
+            rollbackCompatibilityRollbackMigrationHead: rollbackCompatibility.rollback.migrationHead,
+            rollbackCompatibilityRollbackMigrationCount: rollbackCompatibility.rollback.migrationCount,
             rollbackCompatibilityExceptionCount: rollbackCompatibility.compatibilityExceptions.length,
             databaseId: process.env.DATABASE_ID,
             workflowRunId: process.env.GITHUB_RUN_ID,
@@ -517,6 +643,7 @@ jobs:
           name: gravity-well-canary-${{ inputs.release_sha }}
           path: |
             rollout-evidence/evidence.json
+            rollout-evidence/final-health-gate.json
             rollout-evidence/rollback-schema-compatibility.json
           if-no-files-found: error
           retention-days: 30

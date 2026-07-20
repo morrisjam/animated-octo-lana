@@ -15,6 +15,7 @@ import {
   type WebRtcSignalType,
 } from '../net/webRtcSession';
 import type { PlayerFrameInput } from '../sim/types';
+import { buildLocalSmokeRtcConfiguration } from './localSmokeIceConfig';
 import { runWebRtcRollbackScenario } from './webRtcRollbackScenario';
 
 interface SmokeAccount {
@@ -261,6 +262,7 @@ async function runTransportRecoveryDrill(options: {
   match2: SmokeMatchStart;
   iceConfig1: SmokeIceConfig;
   iceConfig2: SmokeIceConfig;
+  forceRelay: boolean;
   peer1: ConnectedWebRtcSession;
   peer2: ConnectedWebRtcSession;
   frameTransport1: WebRtcFrameTransport;
@@ -383,10 +385,7 @@ async function runTransportRecoveryDrill(options: {
       localAccountId: options.account1.id,
       remoteAccountId: options.account2.id,
       initiator: match1.localPlayer.side === 'P1',
-      rtcConfiguration: {
-        iceServers: options.iceConfig1.iceServers,
-        iceTransportPolicy: options.iceConfig1.iceTransportPolicy,
-      },
+      rtcConfiguration: buildLocalSmokeRtcConfiguration(options.iceConfig1, options.forceRelay),
       signalTransport: createSignalTransport(options.baseUrl, options.account1, match1),
       connectTimeoutMs: 12_000,
     }),
@@ -395,10 +394,7 @@ async function runTransportRecoveryDrill(options: {
       localAccountId: options.account2.id,
       remoteAccountId: options.account1.id,
       initiator: match2.localPlayer.side === 'P1',
-      rtcConfiguration: {
-        iceServers: options.iceConfig2.iceServers,
-        iceTransportPolicy: options.iceConfig2.iceTransportPolicy,
-      },
+      rtcConfiguration: buildLocalSmokeRtcConfiguration(options.iceConfig2, options.forceRelay),
       signalTransport: createSignalTransport(options.baseUrl, options.account2, match2),
       connectTimeoutMs: 12_000,
     }),
@@ -775,10 +771,7 @@ async function runSmoke(baseUrl: string, forceRelay: boolean): Promise<Record<st
       localAccountId: account1.id,
       remoteAccountId: account2.id,
       initiator: match1.localPlayer.side === 'P1',
-      rtcConfiguration: {
-        iceServers: iceConfig1.iceServers,
-        iceTransportPolicy: iceConfig1.iceTransportPolicy,
-      },
+      rtcConfiguration: buildLocalSmokeRtcConfiguration(iceConfig1, forceRelay),
       signalTransport: createSignalTransport(baseUrl, account1, match1),
       connectTimeoutMs: 12_000,
     }),
@@ -787,10 +780,7 @@ async function runSmoke(baseUrl: string, forceRelay: boolean): Promise<Record<st
       localAccountId: account2.id,
       remoteAccountId: account1.id,
       initiator: match2.localPlayer.side === 'P1',
-      rtcConfiguration: {
-        iceServers: iceConfig2.iceServers,
-        iceTransportPolicy: iceConfig2.iceTransportPolicy,
-      },
+      rtcConfiguration: buildLocalSmokeRtcConfiguration(iceConfig2, forceRelay),
       signalTransport: createSignalTransport(baseUrl, account2, match2),
       connectTimeoutMs: 12_000,
     }),
@@ -868,6 +858,7 @@ async function runSmoke(baseUrl: string, forceRelay: boolean): Promise<Record<st
       match2,
       iceConfig1,
       iceConfig2,
+      forceRelay,
       peer1,
       peer2,
       frameTransport1,

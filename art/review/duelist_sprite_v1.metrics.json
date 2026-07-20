@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "gw.character-sprite-source-metrics.v1",
+  "assetId": "duelist_sprite_v1",
+  "characterId": "duelist",
+  "blenderVersion": "5.2.0 LTS",
+  "renderEngine": "BLENDER_WORKBENCH",
+  "source": "art/source/blender/duelist_sprite_v1.py",
+  "sourceSha256": "580ccb347c19a4b5bd2205e4ab33736b32151e533c3292c5fd5058bb942595e3",
+  "sourceBlend": "art/source/blender/duelist_sprite_v1.blend",
+  "sharedRenderHelpers": "art/source/blender/vanguard_sprite_v1.py",
+  "sharedRenderHelpersSha256": "8147489494e79dfbb90ae2dd74a7e64d97a0a4a5aa4ae557739eaf759ed733ca",
+  "conceptReference": {
+    "path": "art/source/generated/duelist/duelist-concept-sheet-v2.png",
+    "sha256": "e189dfb3a25a41b27f02ca0089de67f420489da8d85e3a49831b80e6b4c72e4e",
+    "bytes": 2079306
+  },
+  "frameOrder": [
+    "idle_a",
+    "idle_b",
+    "boost",
+    "launch",
+    "guard",
+    "special",
+    "dunk",
+    "helpless"
+  ],
+  "runtimeLayout": {
+    "columns": 4,
+    "rows": 2,
+    "frameWidthPixels": 128,
+    "frameHeightPixels": 128,
+    "anchorX": 0.5,
+    "anchorY": 0.1
+  },
+  "artifacts": {
+    "reviewAtlas": {
+      "path": "art/review/duelist_sprite_v1_atlas.png",
+      "sha256": "d782c11879b23ac274c70954aec508f83feadcaa05e8567aa91af392b52e7e52",
+      "bytes": 513059,
+      "widthPixels": 1536,
+      "heightPixels": 768
+    },
+    "reviewPortrait": {
+      "path": "art/review/duelist_sprite_v1_portrait.png",
+      "sha256": "293adedb367970c376a6a015b80d0b598d40bfbebd3e5204239f212018951fbe",
+      "bytes": 50097,
+      "widthPixels": 256,
+      "heightPixels": 256
+    },
+    "runtimeAtlas": {
+      "path": "apps/game-web/public/assets/characters/duelist/duelist-alpha-atlas-v2.png",
+      "sha256": "c6e4791614dd6a8cfe4fe4c60dc41ce19c65cb63101ec2c6438f58b3f7c8c2a3",
+      "bytes": 82366,
+      "widthPixels": 512,
+      "heightPixels": 256
+    },
+    "runtimePortrait": {
+      "path": "apps/game-web/public/assets/characters/duelist/duelist-alpha-portrait-v2.png",
+      "sha256": "293adedb367970c376a6a015b80d0b598d40bfbebd3e5204239f212018951fbe",
+      "bytes": 50097,
+      "widthPixels": 256,
+      "heightPixels": 256
+    }
+  }
+}

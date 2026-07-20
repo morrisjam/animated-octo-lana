@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { MATCHMAKING_RUNTIME_COORDINATION_MODE } from '../src/matchmaking/runtimeCoordinator';
 
@@ -6,6 +8,7 @@ const MIN_FETCH_TIMEOUT_MS = 100;
 const MAX_FETCH_TIMEOUT_MS = 30_000;
 const SHA_REGEX = /^[0-9a-f]{40}$/i;
 const WEB_RELEASE_ATTESTATION_SCHEMA = 'gw.web-release.v1';
+const RUNTIME_SECURITY_POSTURE_SCHEMA = 'gw.runtime-security-posture.v1';
 
 interface SloAlert {
   code: string;
@@ -32,6 +35,10 @@ interface MatchmakingAccessStatus {
   buildAllowlistCount?: number;
 }
 
+interface MatchmakingBuildAccessCheck {
+  allowlisted?: boolean;
+}
+
 interface MatchmakingQueueConfig {
   maxResidentTickets?: number;
 }
@@ -45,10 +52,28 @@ interface DeploymentReadiness {
   migrationHead?: string | null;
   migrationCount?: number;
   migrationChecksumsVerified?: boolean;
+  migrationForwardCompatibleSuffixAllowed?: boolean;
   replayBlobProvider?: 'local' | 'postgres';
   replayBlobDurable?: boolean;
   matchmakingRuntimeCoordination?: string;
   matchmakingRuntimeNamespace?: string;
+}
+
+interface RuntimeSecurityPosture {
+  schemaVersion?: string;
+  configurationReady?: boolean;
+  productionMode?: boolean;
+  hostedDeployment?: boolean;
+  signedSessionAuthReady?: boolean;
+  sessionRotationReady?: boolean;
+  authThrottleIsolationReady?: boolean;
+  insecureAccountHeaderDisabled?: boolean;
+  proxySourceBoundaryReady?: boolean;
+  corsBoundaryReady?: boolean;
+  identityAdminBoundaryReady?: boolean;
+  operationsCredentialsReady?: boolean;
+  steamTicketVerifierConfigured?: boolean;
+  steamDevelopmentTicketsDisabled?: boolean;
 }
 
 interface WebReleaseAttestation {
@@ -99,6 +124,49 @@ export function validateMatchmakingResidentCapacity(
     );
   }
   return actual;
+}
+
+export function validateExactReleaseBuildAccess(body: unknown): true {
+  if (typeof body !== 'object' || body === null) {
+    throw new Error('Exact release build access check must be a JSON object.');
+  }
+  const keys = Object.keys(body);
+  const check = body as MatchmakingBuildAccessCheck;
+  if (keys.length !== 1 || keys[0] !== 'allowlisted' || check.allowlisted !== true) {
+    throw new Error('The exact release SHA is not present in the matchmaking build allowlist.');
+  }
+  return true;
+}
+
+export function validateRuntimeSecurityPosture(body: unknown): RuntimeSecurityPosture {
+  if (typeof body !== 'object' || body === null) {
+    throw new Error('Runtime security posture must be a JSON object.');
+  }
+  const posture = body as RuntimeSecurityPosture;
+  const requiredTrueFields: Array<keyof RuntimeSecurityPosture> = [
+    'configurationReady',
+    'productionMode',
+    'hostedDeployment',
+    'signedSessionAuthReady',
+    'sessionRotationReady',
+    'authThrottleIsolationReady',
+    'insecureAccountHeaderDisabled',
+    'proxySourceBoundaryReady',
+    'corsBoundaryReady',
+    'identityAdminBoundaryReady',
+    'operationsCredentialsReady',
+    'steamTicketVerifierConfigured',
+    'steamDevelopmentTicketsDisabled',
+  ];
+  if (
+    posture.schemaVersion !== RUNTIME_SECURITY_POSTURE_SCHEMA
+    || requiredTrueFields.some((field) => posture[field] !== true)
+  ) {
+    throw new Error(
+      'Runtime security posture did not confirm production signed auth and the configured Steam verifier.',
+    );
+  }
+  return posture;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
@@ -247,7 +315,11 @@ export async function run(): Promise<void> {
   const requireAlphaAllowlist = parseBoolean(process.env.DEPLOY_REQUIRE_ALPHA_ALLOWLIST);
   const requireAdminChecks = parseBoolean(process.env.DEPLOY_REQUIRE_ADMIN_CHECKS);
   const requireDurableReplayStore = parseBoolean(process.env.DEPLOY_REQUIRE_DURABLE_REPLAY_STORE);
+  const requireForwardCompatibleMigrations = parseBoolean(
+    process.env.DEPLOY_REQUIRE_FORWARD_COMPATIBLE_MIGRATIONS,
+  );
   const requireWebReleaseAttestation = parseBoolean(process.env.DEPLOY_REQUIRE_WEB_RELEASE_ATTESTATION);
+  const requireSecureAuth = parseBoolean(process.env.DEPLOY_REQUIRE_SECURE_AUTH);
   const expectedReleaseSha = optionalExpectedValue(process.env.DEPLOY_EXPECT_RELEASE_SHA);
   const expectedMigrationHead = optionalExpectedValue(process.env.DEPLOY_EXPECT_MIGRATION_HEAD);
   const expectedMigrationCount = optionalExpectedValue(process.env.DEPLOY_EXPECT_MIGRATION_COUNT);
@@ -257,9 +329,23 @@ export async function run(): Promise<void> {
   const expectedMatchmakingRuntimeNamespace = optionalExpectedValue(
     process.env.DEPLOY_EXPECT_MATCHMAKING_RUNTIME_NAMESPACE,
   );
+  const apiSloAdminKey = String(process.env.API_SLO_ADMIN_KEY ?? '').trim();
+  const apiOpsAdminKey = String(process.env.API_OPS_ADMIN_KEY ?? apiSloAdminKey).trim();
 
   if (expectedReleaseSha !== null && !SHA_REGEX.test(expectedReleaseSha)) {
     throw new Error('DEPLOY_EXPECT_RELEASE_SHA must be an exact 40-character Git SHA.');
+  }
+  if (requireAdminChecks && (!apiSloAdminKey || !apiOpsAdminKey)) {
+    throw new Error('Deployment gate requires both SLO and operations admin credentials.');
+  }
+  if (requireAlphaAllowlist && expectedReleaseSha === null) {
+    throw new Error('DEPLOY_EXPECT_RELEASE_SHA is required when alpha allowlist checks are enabled.');
+  }
+  if (requireAlphaAllowlist && !apiOpsAdminKey) {
+    throw new Error('Alpha allowlist checks require an operations admin credential.');
+  }
+  if (requireSecureAuth && !apiOpsAdminKey) {
+    throw new Error('Runtime security posture checks require an operations admin credential.');
   }
   let webReleaseAttestationUrl: string | null = null;
   if (requireWebReleaseAttestation) {
@@ -316,6 +402,14 @@ export async function run(): Promise<void> {
   if (parsedReadiness.migrationChecksumsVerified !== true) {
     throw new Error('Readiness endpoint did not verify every applied migration checksum.');
   }
+  if (
+    requireForwardCompatibleMigrations
+    && parsedReadiness.migrationForwardCompatibleSuffixAllowed !== true
+  ) {
+    throw new Error(
+      'Readiness endpoint did not enable forward-compatible migration suffix handling.',
+    );
+  }
   if (requireDurableReplayStore && parsedReadiness.replayBlobDurable !== true) {
     throw new Error(
       `Durable replay storage is required for this rollout but /readyz reports ${parsedReadiness.replayBlobProvider ?? 'unknown'}.`,
@@ -325,6 +419,27 @@ export async function run(): Promise<void> {
     throw new Error(
       `Coordinated matchmaking runtime is required but /readyz reports ${parsedReadiness.matchmakingRuntimeCoordination ?? 'missing'}.`,
     );
+  }
+  let runtimeSecurityPostureStatus: number | null = null;
+  let runtimeSecurityPosture: RuntimeSecurityPosture | null = null;
+  if (requireSecureAuth) {
+    const securityPostureResponse = await fetchJson(
+      `${baseUrl}/ops/security/posture`,
+      fetchTimeoutMs,
+      {
+        headers: {
+          'x-admin-key': apiOpsAdminKey,
+        },
+      },
+    );
+    runtimeSecurityPostureStatus = securityPostureResponse.status;
+    if (securityPostureResponse.status !== 200) {
+      throw new Error(`Runtime security posture check failed: status=${securityPostureResponse.status}.`);
+    }
+    if (!hasNoStoreDirective(securityPostureResponse.cacheControl)) {
+      throw new Error('Runtime security posture must return Cache-Control: no-store.');
+    }
+    runtimeSecurityPosture = validateRuntimeSecurityPosture(securityPostureResponse.body);
   }
   const queueConfig = await fetchJson(`${baseUrl}/matchmaking/queue/config`, fetchTimeoutMs);
   if (queueConfig.status !== 200) {
@@ -344,6 +459,27 @@ export async function run(): Promise<void> {
     && (parsedAccessStatus.mode !== 'allowlist' || parsedAccessStatus.ready !== true)
   ) {
     throw new Error('Controlled alpha rollout requires non-empty account and build allowlists.');
+  }
+  let exactReleaseBuildCheckStatus: number | null = null;
+  let exactReleaseBuildAllowlisted = false;
+  if (requireAlphaAllowlist && expectedReleaseSha !== null) {
+    const exactBuildCheck = await fetchJson(
+      `${baseUrl}/ops/matchmaking/access/build-check`,
+      fetchTimeoutMs,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-admin-key': apiOpsAdminKey,
+        },
+        body: JSON.stringify({ buildVersion: expectedReleaseSha }),
+      },
+    );
+    exactReleaseBuildCheckStatus = exactBuildCheck.status;
+    if (exactBuildCheck.status !== 200) {
+      throw new Error(`Exact release build access check failed: status=${exactBuildCheck.status}.`);
+    }
+    exactReleaseBuildAllowlisted = validateExactReleaseBuildAccess(exactBuildCheck.body);
   }
   const networkConfig = await fetchJson(`${baseUrl}/matchmaking/network/status`, fetchTimeoutMs);
   if (networkConfig.status !== 200 || typeof networkConfig.body !== 'object' || networkConfig.body === null) {
@@ -383,11 +519,6 @@ export async function run(): Promise<void> {
 
   let criticalAlerts = 0;
   let warningAlerts = 0;
-  const apiSloAdminKey = String(process.env.API_SLO_ADMIN_KEY ?? '').trim();
-  const apiOpsAdminKey = String(process.env.API_OPS_ADMIN_KEY ?? apiSloAdminKey).trim();
-  if (requireAdminChecks && (!apiSloAdminKey || !apiOpsAdminKey)) {
-    throw new Error('Deployment gate requires both SLO and operations admin credentials.');
-  }
   let matchmakingRuntimeFetched = false;
   let activeSessions: number | null = null;
   let queuedTickets: number | null = null;
@@ -443,70 +574,88 @@ export async function run(): Promise<void> {
     }
   }
 
-  console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        baseUrl,
-        checks: {
-          healthStatus: health.status,
-          readinessStatus: readiness.status,
-          releaseSha: parsedReadiness.releaseSha ?? 'unknown',
-          migrationHead: parsedReadiness.migrationHead ?? null,
-          migrationCount: parsedReadiness.migrationCount ?? null,
-          migrationChecksumsVerified: parsedReadiness.migrationChecksumsVerified === true,
-          databaseTarget: parsedReadiness.databaseTarget ?? 'unknown',
-          databaseId: parsedReadiness.databaseId ?? 'unknown',
-          deploymentEnvironment: parsedReadiness.deploymentEnvironment ?? 'unknown',
-          expectedReleaseSha,
-          expectedMigrationHead,
-          expectedMigrationCount,
-          expectedDatabaseTarget,
-          expectedDatabaseId,
-          expectedEnvironment,
-          expectedMatchmakingRuntimeNamespace,
-          fetchTimeoutMs,
-          requireWebReleaseAttestation,
-          webReleaseAttestationSchema: requireWebReleaseAttestation
-            ? WEB_RELEASE_ATTESTATION_SCHEMA
-            : null,
-          webReleaseAttestationStatus,
-          webReleaseSha,
-          matchmakingRuntimeCoordination: parsedReadiness.matchmakingRuntimeCoordination,
-          matchmakingRuntimeNamespace: parsedReadiness.matchmakingRuntimeNamespace ?? 'unknown',
-          replayBlobProvider: parsedReadiness.replayBlobProvider ?? 'unknown',
-          replayBlobDurable: parsedReadiness.replayBlobDurable === true,
-          requireDurableReplayStore,
-          queueConfigStatus: queueConfig.status,
-          maxResidentTickets,
-          expectedMaxResidentTickets: optionalExpectedValue(
-            process.env.DEPLOY_EXPECT_MAX_RESIDENT_TICKETS,
-          ),
-          accessStatusCode: accessStatus.status,
-          matchmakingAccessMode: parsedAccessStatus.mode ?? 'unknown',
-          matchmakingAccessReady: parsedAccessStatus.ready === true,
-          alphaAccountAllowlistCount: parsedAccessStatus.accountAllowlistCount ?? 0,
-          alphaBuildAllowlistCount: parsedAccessStatus.buildAllowlistCount ?? 0,
-          requireAlphaAllowlist,
-          networkConfigStatus: networkConfig.status,
-          relayAvailable: parsedNetworkConfig.relayAvailable === true,
-          turnCredentialMode: parsedNetworkConfig.turnCredentialMode ?? 'none',
-          requireTurn,
-          matchmakingRuntimeFetched,
-          activeSessions,
-          queuedTickets,
-          maxActiveSessions,
-          expectMatchmakingDraining,
-          sloSummaryFetched,
-          criticalAlerts,
-          warningAlerts,
-          windowHours,
-        },
-      },
-      null,
-      2,
-    ),
-  );
+  const report = {
+    schemaVersion: 'gw.deployment-health-gate.v2',
+    generatedAt: new Date().toISOString(),
+    ok: true,
+    apiHostname: new URL(baseUrl).hostname,
+    checks: {
+      healthStatus: health.status,
+      readinessStatus: readiness.status,
+      releaseSha: parsedReadiness.releaseSha ?? 'unknown',
+      migrationHead: parsedReadiness.migrationHead ?? null,
+      migrationCount: parsedReadiness.migrationCount ?? null,
+      migrationChecksumsVerified: parsedReadiness.migrationChecksumsVerified === true,
+      migrationForwardCompatibleSuffixAllowed:
+        parsedReadiness.migrationForwardCompatibleSuffixAllowed === true,
+      requireForwardCompatibleMigrations,
+      databaseTarget: parsedReadiness.databaseTarget ?? 'unknown',
+      databaseId: parsedReadiness.databaseId ?? 'unknown',
+      deploymentEnvironment: parsedReadiness.deploymentEnvironment ?? 'unknown',
+      expectedReleaseSha,
+      expectedMigrationHead,
+      expectedMigrationCount,
+      expectedDatabaseTarget,
+      expectedDatabaseId,
+      expectedEnvironment,
+      expectedMatchmakingRuntimeNamespace,
+      fetchTimeoutMs,
+      requireWebReleaseAttestation,
+      webReleaseAttestationSchema: requireWebReleaseAttestation
+        ? WEB_RELEASE_ATTESTATION_SCHEMA
+        : null,
+      webReleaseAttestationStatus,
+      webReleaseSha,
+      matchmakingRuntimeCoordination: parsedReadiness.matchmakingRuntimeCoordination,
+      matchmakingRuntimeNamespace: parsedReadiness.matchmakingRuntimeNamespace ?? 'unknown',
+      replayBlobProvider: parsedReadiness.replayBlobProvider ?? 'unknown',
+      replayBlobDurable: parsedReadiness.replayBlobDurable === true,
+      requireDurableReplayStore,
+      requireSecureAuth,
+      runtimeSecurityPostureStatus,
+      runtimeSecurityPostureSchema: runtimeSecurityPosture?.schemaVersion ?? null,
+      runtimeSecurityConfigurationReady: runtimeSecurityPosture?.configurationReady === true,
+      signedSessionAuthReady: runtimeSecurityPosture?.signedSessionAuthReady === true,
+      authThrottleIsolationReady: runtimeSecurityPosture?.authThrottleIsolationReady === true,
+      steamTicketVerifierConfigured: runtimeSecurityPosture?.steamTicketVerifierConfigured === true,
+      steamDevelopmentTicketsDisabled:
+        runtimeSecurityPosture?.steamDevelopmentTicketsDisabled === true,
+      queueConfigStatus: queueConfig.status,
+      maxResidentTickets,
+      expectedMaxResidentTickets: optionalExpectedValue(
+        process.env.DEPLOY_EXPECT_MAX_RESIDENT_TICKETS,
+      ),
+      accessStatusCode: accessStatus.status,
+      matchmakingAccessMode: parsedAccessStatus.mode ?? 'unknown',
+      matchmakingAccessReady: parsedAccessStatus.ready === true,
+      alphaAccountAllowlistCount: parsedAccessStatus.accountAllowlistCount ?? 0,
+      alphaBuildAllowlistCount: parsedAccessStatus.buildAllowlistCount ?? 0,
+      requireAlphaAllowlist,
+      exactReleaseBuildCheckStatus,
+      exactReleaseBuildAllowlisted,
+      networkConfigStatus: networkConfig.status,
+      relayAvailable: parsedNetworkConfig.relayAvailable === true,
+      turnCredentialMode: parsedNetworkConfig.turnCredentialMode ?? 'none',
+      requireTurn,
+      matchmakingRuntimeFetched,
+      activeSessions,
+      queuedTickets,
+      maxActiveSessions,
+      expectMatchmakingDraining,
+      sloSummaryFetched,
+      criticalAlerts,
+      warningAlerts,
+      windowHours,
+    },
+  };
+  const serializedReport = `${JSON.stringify(report, null, 2)}\n`;
+  const reportPath = optionalExpectedValue(process.env.DEPLOY_HEALTH_REPORT_PATH);
+  if (reportPath !== null) {
+    const resolvedReportPath = path.resolve(reportPath);
+    mkdirSync(path.dirname(resolvedReportPath), { recursive: true });
+    writeFileSync(resolvedReportPath, serializedReport, 'utf8');
+  }
+  console.log(serializedReport.trimEnd());
 }
 
 const entrypoint = process.argv[1];

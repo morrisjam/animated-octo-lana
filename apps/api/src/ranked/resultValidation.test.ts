@@ -6,6 +6,8 @@ const ACCOUNT_1 = '11111111-1111-4111-8111-111111111111';
 const ACCOUNT_2 = '22222222-2222-4222-8222-222222222222';
 const ACCOUNT_3 = '33333333-3333-4333-8333-333333333333';
 const SESSION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const PROOF_DIGEST_A = 'a'.repeat(64);
+const PROOF_DIGEST_B = 'b'.repeat(64);
 
 test('marks submission as non-suspicious when session, participants, and winner align', () => {
   const evaluation = evaluateRankedResultSubmission(
@@ -84,15 +86,15 @@ test('flags submissions where caller omits themselves from payload participants'
 test('requires both ranked participants to report the same result', () => {
   assert.deepEqual(
     evaluateRankedResultConsensus(
-      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1 },
-      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1 },
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: PROOF_DIGEST_A },
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: PROOF_DIGEST_A },
     ),
     { suspicious: false, reasons: [] },
   );
   assert.deepEqual(
     evaluateRankedResultConsensus(
-      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1 },
-      { outcome: 'p2_win', winnerAccountId: ACCOUNT_2 },
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: PROOF_DIGEST_A },
+      { outcome: 'p2_win', winnerAccountId: ACCOUNT_2, proofDigest: PROOF_DIGEST_A },
     ),
     { suspicious: true, reasons: ['peer_result_mismatch'] },
   );
@@ -101,9 +103,28 @@ test('requires both ranked participants to report the same result', () => {
 test('flags peers that submit different verified proof timelines for the same result', () => {
   assert.deepEqual(
     evaluateRankedResultConsensus(
-      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: 'proof-a' },
-      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: 'proof-b' },
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: PROOF_DIGEST_A },
+      { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: PROOF_DIGEST_B },
     ),
     { suspicious: true, reasons: ['peer_proof_mismatch'] },
   );
+});
+
+test('fails closed when either peer proof is legacy, missing, or malformed', () => {
+  for (const proofDigest of [null, '', 'legacy-unverified', PROOF_DIGEST_A.toUpperCase()]) {
+    assert.deepEqual(
+      evaluateRankedResultConsensus(
+        { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest },
+        { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: PROOF_DIGEST_A },
+      ),
+      { suspicious: true, reasons: ['peer_proof_mismatch'] },
+    );
+    assert.deepEqual(
+      evaluateRankedResultConsensus(
+        { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest: PROOF_DIGEST_A },
+        { outcome: 'p1_win', winnerAccountId: ACCOUNT_1, proofDigest },
+      ),
+      { suspicious: true, reasons: ['peer_proof_mismatch'] },
+    );
+  }
 });

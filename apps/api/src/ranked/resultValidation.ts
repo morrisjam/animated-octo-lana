@@ -26,8 +26,10 @@ export interface RankedResultEvaluation {
 export interface RankedResultConsensusInput {
   outcome: string;
   winnerAccountId: string | null;
-  proofDigest?: string | null;
+  proofDigest: string | null;
 }
+
+const VERIFIED_PROOF_DIGEST_REGEX = /^[0-9a-f]{64}$/;
 
 function sortUnique(values: string[]): string[] {
   return [...new Set(values)].sort();
@@ -71,9 +73,10 @@ export function evaluateRankedResultConsensus(
 ): RankedResultEvaluation {
   const resultMatches = first.outcome === second.outcome
     && first.winnerAccountId === second.winnerAccountId;
-  const proofMatches = first.proofDigest === undefined
-    || second.proofDigest === undefined
-    || first.proofDigest === second.proofDigest;
+  const proofMatches = typeof first.proofDigest === 'string'
+    && typeof second.proofDigest === 'string'
+    && VERIFIED_PROOF_DIGEST_REGEX.test(first.proofDigest)
+    && first.proofDigest === second.proofDigest;
   const reasons: RankedResultSuspiciousReason[] = [];
   if (!resultMatches) {
     reasons.push('peer_result_mismatch');

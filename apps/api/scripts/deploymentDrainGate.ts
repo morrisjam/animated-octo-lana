@@ -13,6 +13,13 @@ interface MatchmakingRuntimeResponse {
   closedQueuedTickets?: number;
 }
 
+export interface DeploymentDrainGateRunOptions {
+  env?: NodeJS.ProcessEnv;
+  requestJson?: typeof fetchJson;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
   if (!value) {
     return fallback;
@@ -119,13 +126,27 @@ export async function fetchJson(
   }
 }
 
+export function validateResumeState(body: unknown): MatchmakingRuntimeResponse {
+  if (typeof body !== 'object' || body === null) {
+    throw new Error('Matchmaking resume response must be a JSON object.');
+  }
+  const runtime = body as MatchmakingRuntimeResponse;
+  if (runtime.draining !== false || runtime.acceptingJoins !== true) {
+    throw new Error(
+      'Matchmaking resume response did not confirm draining=false and acceptingJoins=true.',
+    );
+  }
+  return runtime;
+}
+
 async function setDrainState(
   baseUrl: string,
   adminKey: string,
   draining: boolean,
   fetchTimeoutMs: number,
+  requestJson: typeof fetchJson,
 ): Promise<{ status: number; body: MatchmakingRuntimeResponse | unknown }> {
-  return await fetchJson(`${baseUrl}/ops/matchmaking/drain`, fetchTimeoutMs, {
+  return await requestJson(`${baseUrl}/ops/matchmaking/drain`, fetchTimeoutMs, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -135,17 +156,35 @@ async function setDrainState(
   });
 }
 
-export async function run(): Promise<void> {
-  const allowInsecureLoopback = parseBoolean(process.env.DEPLOY_ALLOW_INSECURE_LOCALHOST);
+async function resumeMatchmaking(
+  baseUrl: string,
+  adminKey: string,
+  fetchTimeoutMs: number,
+  requestJson: typeof fetchJson,
+): Promise<MatchmakingRuntimeResponse> {
+  const response = await setDrainState(baseUrl, adminKey, false, fetchTimeoutMs, requestJson);
+  if (response.status !== 200) {
+    throw new Error(`Failed to stop matchmaking drain: status=${response.status}`);
+  }
+  return validateResumeState(response.body);
+}
+
+export async function run(options: DeploymentDrainGateRunOptions = {}): Promise<void> {
+  const env = options.env ?? process.env;
+  const requestJson = options.requestJson ?? fetchJson;
+  const sleepFor = options.sleep ?? sleep;
+  const now = options.now ?? Date.now;
+  const allowInsecureLoopback = parseBoolean(env.DEPLOY_ALLOW_INSECURE_LOCALHOST);
   const baseUrl = validateApiBaseUrl({
-    value: process.env.API_BASE_URL,
-    expectedHostname: process.env.DEPLOY_EXPECT_API_HOSTNAME,
+    value: env.API_BASE_URL,
+    expectedHostname: env.DEPLOY_EXPECT_API_HOSTNAME,
     allowInsecureLoopback,
   });
-  const fetchTimeoutMs = parseFetchTimeoutMs(process.env.DEPLOY_FETCH_TIMEOUT_MS);
-  const adminKey = String(process.env.API_OPS_ADMIN_KEY ?? process.env.API_SLO_ADMIN_KEY ?? '').trim();
-  const allowLegacyBypass = parseBoolean(process.env.DEPLOY_ALLOW_LEGACY_NO_DRAIN);
-  const action = String(process.env.DEPLOY_DRAIN_ACTION ?? 'drain').trim().toLowerCase();
+  const fetchTimeoutMs = parseFetchTimeoutMs(env.DEPLOY_FETCH_TIMEOUT_MS);
+  const adminKey = String(env.API_OPS_ADMIN_KEY ?? env.API_SLO_ADMIN_KEY ?? '').trim();
+  const allowLegacyBypass = parseBoolean(env.DEPLOY_ALLOW_LEGACY_NO_DRAIN);
+  const resumeOnDrainFailure = parseBoolean(env.DEPLOY_RESUME_ON_DRAIN_FAILURE);
+  const action = String(env.DEPLOY_DRAIN_ACTION ?? 'drain').trim().toLowerCase();
   const draining = action !== 'resume';
   if (!adminKey) {
     if (allowLegacyBypass) {
@@ -155,79 +194,84 @@ export async function run(): Promise<void> {
     throw new Error('API_OPS_ADMIN_KEY or API_SLO_ADMIN_KEY is required for the matchmaking drain gate.');
   }
 
-  let initial: Awaited<ReturnType<typeof setDrainState>>;
-  try {
-    initial = await setDrainState(baseUrl, adminKey, draining, fetchTimeoutMs);
-  } catch (error) {
-    if (draining) {
-      await setDrainState(baseUrl, adminKey, false, fetchTimeoutMs).catch(() => undefined);
-    }
-    throw error;
-  }
-  if ((initial.status === 404 || initial.status === 501) && allowLegacyBypass) {
-    console.log(JSON.stringify({
-      ok: true,
-      skipped: true,
-      reason: 'legacy_api_without_drain_endpoint',
-      status: initial.status,
-      baseUrl,
-    }, null, 2));
-    return;
-  }
-  if (initial.status !== 200) {
-    if (draining) {
-      await setDrainState(baseUrl, adminKey, false, fetchTimeoutMs).catch(() => undefined);
-    }
-    throw new Error(`Failed to ${draining ? 'start' : 'stop'} matchmaking drain: status=${initial.status}`);
-  }
   if (!draining) {
-    console.log(JSON.stringify({ ok: true, action: 'resume', baseUrl, runtime: initial.body }, null, 2));
-    return;
-  }
-
-  const timeoutSeconds = parsePositiveInteger(process.env.DEPLOY_DRAIN_TIMEOUT_SECONDS, 180);
-  const pollIntervalMs = parsePositiveInteger(process.env.DEPLOY_DRAIN_POLL_INTERVAL_MS, 2_000);
-  const deadline = Date.now() + timeoutSeconds * 1000;
-  let latest = initial.body as MatchmakingRuntimeResponse;
-  while (Date.now() <= deadline) {
-    if (latest.readyForProcessReplacement === true && latest.draining === true) {
+    const response = await setDrainState(baseUrl, adminKey, false, fetchTimeoutMs, requestJson);
+    if ((response.status === 404 || response.status === 501) && allowLegacyBypass) {
       console.log(JSON.stringify({
         ok: true,
-        action: 'drain',
+        skipped: true,
+        reason: 'legacy_api_without_drain_endpoint',
+        status: response.status,
         baseUrl,
-        timeoutSeconds,
-        runtime: latest,
       }, null, 2));
       return;
     }
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      break;
+    if (response.status !== 200) {
+      throw new Error(`Failed to stop matchmaking drain: status=${response.status}`);
     }
-    await sleep(Math.min(pollIntervalMs, remainingMs));
-    let runtime: Awaited<ReturnType<typeof fetchJson>>;
-    try {
-      runtime = await fetchJson(
-        `${baseUrl}/ops/matchmaking/runtime`,
-        Math.max(1, Math.min(fetchTimeoutMs, deadline - Date.now())),
-        { headers: { 'x-admin-key': adminKey } },
-      );
-    } catch (error) {
-      await setDrainState(baseUrl, adminKey, false, fetchTimeoutMs).catch(() => undefined);
-      throw error;
-    }
-    if (runtime.status !== 200) {
-      await setDrainState(baseUrl, adminKey, false, fetchTimeoutMs).catch(() => undefined);
-      throw new Error(`Failed to poll matchmaking drain state: status=${runtime.status}`);
-    }
-    latest = runtime.body as MatchmakingRuntimeResponse;
+    const runtime = validateResumeState(response.body);
+    console.log(JSON.stringify({ ok: true, action: 'resume', baseUrl, runtime }, null, 2));
+    return;
   }
 
-  await setDrainState(baseUrl, adminKey, false, fetchTimeoutMs).catch(() => undefined);
-  throw new Error(
-    `Matchmaking drain timed out after ${timeoutSeconds}s `
-    + `(queued=${latest.queuedTickets ?? 'unknown'}, active=${latest.activeSessions ?? 'unknown'}).`,
-  );
+  try {
+    const initial = await setDrainState(baseUrl, adminKey, true, fetchTimeoutMs, requestJson);
+    if ((initial.status === 404 || initial.status === 501) && allowLegacyBypass) {
+      console.log(JSON.stringify({
+        ok: true,
+        skipped: true,
+        reason: 'legacy_api_without_drain_endpoint',
+        status: initial.status,
+        baseUrl,
+      }, null, 2));
+      return;
+    }
+    if (initial.status !== 200) {
+      throw new Error(`Failed to start matchmaking drain: status=${initial.status}`);
+    }
+
+    const timeoutSeconds = parsePositiveInteger(env.DEPLOY_DRAIN_TIMEOUT_SECONDS, 180);
+    const pollIntervalMs = parsePositiveInteger(env.DEPLOY_DRAIN_POLL_INTERVAL_MS, 2_000);
+    const deadline = now() + timeoutSeconds * 1000;
+    let latest = initial.body as MatchmakingRuntimeResponse;
+    while (now() <= deadline) {
+      if (latest.readyForProcessReplacement === true && latest.draining === true) {
+        console.log(JSON.stringify({
+          ok: true,
+          action: 'drain',
+          baseUrl,
+          timeoutSeconds,
+          runtime: latest,
+        }, null, 2));
+        return;
+      }
+      const remainingMs = deadline - now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      await sleepFor(Math.min(pollIntervalMs, remainingMs));
+      const runtime = await requestJson(
+        `${baseUrl}/ops/matchmaking/runtime`,
+        Math.max(1, Math.min(fetchTimeoutMs, deadline - now())),
+        { headers: { 'x-admin-key': adminKey } },
+      );
+      if (runtime.status !== 200) {
+        throw new Error(`Failed to poll matchmaking drain state: status=${runtime.status}`);
+      }
+      latest = runtime.body as MatchmakingRuntimeResponse;
+    }
+
+    throw new Error(
+      `Matchmaking drain timed out after ${timeoutSeconds}s `
+      + `(queued=${latest.queuedTickets ?? 'unknown'}, active=${latest.activeSessions ?? 'unknown'}).`,
+    );
+  } catch (error) {
+    // Only callers that still trust the old release may opt into reopening after a failed drain.
+    if (resumeOnDrainFailure) {
+      await resumeMatchmaking(baseUrl, adminKey, fetchTimeoutMs, requestJson).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 const entrypoint = process.argv[1];

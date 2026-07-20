@@ -29,6 +29,7 @@ export type MatchmakingSessionSignalAccessResult =
     ok: true;
     value: {
       peerAccountId: string;
+      side: 'P1' | 'P2';
     };
   }
   | {
@@ -46,10 +47,17 @@ export interface ValidateMatchmakingSessionSignalAccessInput {
   transportAttemptId: string;
 }
 
+export interface ValidateMatchmakingLiveSessionAccessInput {
+  sessionId: string;
+  accountId: string;
+  sessionToken: string;
+}
+
 interface SessionAccessProjection {
   sessionId: string;
   accountId: string;
   peerAccountId: string;
+  side: 'P1' | 'P2';
   sessionTokenHashHex: string;
   sessionTokenExpiresAt: string;
   transportAttemptId: string;
@@ -86,6 +94,7 @@ export class MatchmakingSessionAccessStore {
           session_id uuid,
           account_id uuid,
           peer_account_id uuid,
+          player_side text,
           session_token_hash_hex text,
           session_token_expires_at timestamptz,
           transport_attempt_id uuid,
@@ -100,6 +109,7 @@ export class MatchmakingSessionAccessStore {
           session_id,
           account_id,
           peer_account_id,
+          player_side,
           session_token_hash,
           session_token_expires_at,
           transport_attempt_id,
@@ -113,6 +123,7 @@ export class MatchmakingSessionAccessStore {
           session_id,
           account_id,
           peer_account_id,
+          player_side,
           DECODE(session_token_hash_hex, 'hex'),
           session_token_expires_at,
           transport_attempt_id,
@@ -124,6 +135,7 @@ export class MatchmakingSessionAccessStore {
         ON CONFLICT (snapshot_key, session_id, account_id)
         DO UPDATE SET
           peer_account_id = EXCLUDED.peer_account_id,
+          player_side = EXCLUDED.player_side,
           session_token_hash = EXCLUDED.session_token_hash,
           session_token_expires_at = EXCLUDED.session_token_expires_at,
           transport_attempt_id = EXCLUDED.transport_attempt_id,
@@ -157,6 +169,7 @@ export class MatchmakingSessionAccessStore {
 
   public async validateSignalAccess(
     input: ValidateMatchmakingSessionSignalAccessInput,
+    database: MatchmakingSessionAccessDatabase = this.database,
   ): Promise<MatchmakingSessionSignalAccessResult> {
     assertUuid(input.sessionId, 'sessionId');
     assertUuid(input.accountId, 'accountId');
@@ -164,7 +177,27 @@ export class MatchmakingSessionAccessStore {
     if (typeof input.sessionToken !== 'string' || input.sessionToken.length === 0) {
       throw new TypeError('sessionToken is required.');
     }
-    const result = await this.database.query(
+    return await this.validateLiveAccess(input, database, input.transportAttemptId);
+  }
+
+  public async validateLiveSessionAccess(
+    input: ValidateMatchmakingLiveSessionAccessInput,
+    database: MatchmakingSessionAccessDatabase = this.database,
+  ): Promise<MatchmakingSessionSignalAccessResult> {
+    assertUuid(input.sessionId, 'sessionId');
+    assertUuid(input.accountId, 'accountId');
+    if (typeof input.sessionToken !== 'string' || input.sessionToken.length === 0) {
+      throw new TypeError('sessionToken is required.');
+    }
+    return await this.validateLiveAccess(input, database, null);
+  }
+
+  private async validateLiveAccess(
+    input: ValidateMatchmakingLiveSessionAccessInput,
+    database: MatchmakingSessionAccessDatabase,
+    transportAttemptId: string | null,
+  ): Promise<MatchmakingSessionSignalAccessResult> {
+    const result = await database.query(
       `
       WITH session_rows AS MATERIALIZED (
         SELECT *
@@ -175,6 +208,7 @@ export class MatchmakingSessionAccessStore {
         EXISTS(SELECT 1 FROM session_rows) AS session_exists,
         access.account_id,
         access.peer_account_id,
+        access.player_side,
         access.session_token_hash,
         access.session_token_expires_at,
         access.transport_attempt_id,
@@ -221,13 +255,21 @@ export class MatchmakingSessionAccessStore {
     ) {
       return accessError('invalid_token', 'Session token is invalid.');
     }
-    if (requiredString(row.transport_attempt_id, 'transport_attempt_id') !== input.transportAttemptId) {
+    if (
+      transportAttemptId !== null
+      && requiredString(row.transport_attempt_id, 'transport_attempt_id') !== transportAttemptId
+    ) {
       return accessError('stale_transport_attempt', 'Transport attempt is stale.');
+    }
+    const side = row.player_side;
+    if (side !== 'P1' && side !== 'P2') {
+      throw new Error('PostgreSQL returned an invalid player_side value.');
     }
     return {
       ok: true,
       value: {
         peerAccountId: requiredString(row.peer_account_id, 'peer_account_id'),
+        side,
       },
     };
   }
@@ -283,6 +325,7 @@ function buildSessionAccessProjections(snapshot: MatchmakingQueueSnapshot): Sess
         sessionId: session.sessionId,
         accountId: participant.accountId,
         peerAccountId: peer.accountId,
+        side: participant.side,
         sessionTokenHashHex: hashSessionToken(participant.sessionToken).toString('hex'),
         sessionTokenExpiresAt: isoTimestamp(participant.sessionTokenExpiresAtMs, 'sessionTokenExpiresAtMs'),
         transportAttemptId: session.transportAttemptId,
@@ -303,6 +346,7 @@ function toDatabaseProjection(projection: SessionAccessProjection): Record<strin
     session_id: projection.sessionId,
     account_id: projection.accountId,
     peer_account_id: projection.peerAccountId,
+    player_side: projection.side,
     session_token_hash_hex: projection.sessionTokenHashHex,
     session_token_expires_at: projection.sessionTokenExpiresAt,
     transport_attempt_id: projection.transportAttemptId,

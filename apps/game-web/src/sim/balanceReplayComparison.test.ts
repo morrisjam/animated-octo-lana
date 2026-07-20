@@ -4,6 +4,7 @@ import { computeStateChecksum } from './checksum';
 import {
   attachBalanceReplayCandidate,
   createBalanceReplayComparison,
+  describeBalanceReplayComparison,
   selectBalanceReplaySample,
 } from './balanceReplayComparison';
 import type { BalanceLabRuleChange } from './balanceLab';
@@ -15,6 +16,7 @@ const FIXED_DT = 1 / 60;
 function createReplay(options: {
   frames?: number;
   seed?: number;
+  rulesetVersion?: string;
   tuning?: Partial<GameTuning>;
 } = {}): ReplayPayload {
   const state = createInitialState({ seed: options.seed ?? 77 });
@@ -36,7 +38,7 @@ function createReplay(options: {
   return {
     header: {
       payloadVersion: 1,
-      rulesetVersion: 'test-rules',
+      rulesetVersion: options.rulesetVersion ?? 'test-rules',
       simBuildHash: 'test-build',
       seed: options.seed ?? 77,
       loadout: { ...state.loadout },
@@ -118,6 +120,53 @@ describe('balance replay comparison', () => {
     );
     expect(comparison.candidate).not.toBeNull();
     expect(comparison.ruleChanges).toEqual([]);
+    expect(describeBalanceReplayComparison(comparison)).toEqual({
+      mode: 'repeatability',
+      label: 'Repeatability control: no effective rule change.',
+    });
+  });
+
+  it('accepts the local draft suffix but rejects a different base ruleset', () => {
+    const comparison = createBalanceReplayComparison(createReplay());
+    expect(() => attachBalanceReplayCandidate(
+      comparison,
+      createReplay({ rulesetVersion: 'test-rules+custom_local' }),
+      [],
+    )).not.toThrow();
+    expect(() => attachBalanceReplayCandidate(
+      comparison,
+      createReplay({ rulesetVersion: 'other-rules+custom_local' }),
+      [],
+    )).toThrow('baseline base ruleset');
+  });
+
+  it('describes baseline-only and exact single-rule comparisons for the viewer', () => {
+    const baseline = createReplay();
+    const baselineOnly = createBalanceReplayComparison(baseline);
+    expect(describeBalanceReplayComparison(baselineOnly)).toEqual({
+      mode: 'baseline_only',
+      label: 'Baseline captured; run the matched candidate to unlock A/B review.',
+    });
+    expect(() => selectBalanceReplaySample(baselineOnly, 'candidate')).toThrow(
+      'Candidate replay is not available yet.',
+    );
+
+    const comparison = attachBalanceReplayCandidate(
+      baselineOnly,
+      createReplay({ tuning: { closeRangeSeparationImpulse: 11.25 } }),
+      [{
+        scope: 'global',
+        characterId: null,
+        path: 'closeRangeSeparationImpulse',
+        baselineValue: 10,
+        candidateValue: 11.25,
+        delta: 1.25,
+      }],
+    );
+    expect(describeBalanceReplayComparison(comparison)).toEqual({
+      mode: 'single_change',
+      label: 'Close Range Separation Impulse: 10 -> 11.25',
+    });
   });
 
   it('rejects multi-variable, unmatched, and checksum-invalid candidates', () => {

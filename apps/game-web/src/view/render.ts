@@ -1,7 +1,12 @@
 import * as THREE from 'three';
-import type { PlayerId, RenderSnapshot } from '../sim/types';
+import type {
+  PlayerId,
+  PlayerPresentationPhase,
+  PlayerRenderSnapshot,
+  RenderSnapshot,
+} from '../sim/types';
 import type { SceneContext } from './scene';
-import { ARENA_RADIUS, DUNK_RECOVERY_ARC_DEPTH, DUNK_RECOVERY_MIN_SCALE } from '../sim/constants';
+import { DUNK_RECOVERY_ARC_DEPTH, DUNK_RECOVERY_MIN_SCALE } from '../sim/constants';
 import {
   createCharacterVisualHandle,
   disposeCharacterVisualNode,
@@ -22,6 +27,11 @@ import {
   resolveWormholeParticleDepth,
 } from './stagePresentation';
 import { disposeStageModelRuntime } from './stageModelRuntime';
+import {
+  resolvePlayerActionReadability,
+  type ActionReadabilityId,
+} from './actionReadability';
+import { syncCameraTrackToWorld } from './cameraTracking';
 
 const LIVE_PROJECTILE_IDS = new Set<number>();
 
@@ -146,17 +156,75 @@ function updatePlayerMeshes(context: SceneContext, snapshot: RenderSnapshot): vo
   updateCharacterVisualHandle(context.playerVisuals.P2, p2, p1, snapshot.gameTime);
 }
 
-function setIndicatorState(mesh: THREE.Mesh, x: number, y: number, opacity: number, scale: number): void {
+function setIndicatorState(
+  indicator: THREE.Group,
+  x: number,
+  y: number,
+  opacity: number,
+  scale: number,
+  rotation: number,
+): void {
   const visible = opacity > 0.01;
-  mesh.visible = visible;
+  indicator.visible = visible;
   if (!visible) {
     return;
   }
 
-  mesh.position.set(x, y, 0.18);
-  mesh.scale.setScalar(scale);
-  const material = mesh.material as THREE.MeshBasicMaterial;
-  material.opacity = THREE.MathUtils.clamp(opacity, 0, 1);
+  indicator.position.set(x, y, 0.28);
+  indicator.rotation.z = rotation;
+  indicator.scale.setScalar(scale);
+  indicator.traverse((child) => {
+    if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshBasicMaterial) {
+      child.material.opacity = THREE.MathUtils.clamp(opacity, 0, 1);
+    }
+  });
+}
+
+function resolveIndicatorPulse(
+  phase: PlayerPresentationPhase,
+  gameTime: number,
+): { opacity: number; scale: number } {
+  switch (phase) {
+    case 'startup': {
+      const pulse = 0.5 + Math.sin(gameTime * 18) * 0.5;
+      return { opacity: 0.68 + pulse * 0.24, scale: 0.92 + pulse * 0.12 };
+    }
+    case 'active': {
+      const pulse = 0.5 + Math.sin(gameTime * 11) * 0.5;
+      return { opacity: 0.84 + pulse * 0.12, scale: 1 + pulse * 0.05 };
+    }
+    case 'sustain': {
+      const pulse = 0.5 + Math.sin(gameTime * 6) * 0.5;
+      return { opacity: 0.58 + pulse * 0.2, scale: 0.98 + pulse * 0.06 };
+    }
+    case 'recovery':
+      return { opacity: 0.42, scale: 1.04 };
+    case 'none':
+    default:
+      return { opacity: 0.7, scale: 1 };
+  }
+}
+
+function resolveIndicatorFlash(
+  player: PlayerRenderSnapshot,
+  id: ActionReadabilityId,
+): number {
+  switch (id) {
+    case 'launch':
+      return THREE.MathUtils.clamp(player.launchFlash / 0.24, 0, 1);
+    case 'special':
+      return THREE.MathUtils.clamp(player.specialFlash / 0.16, 0, 1);
+    case 'launch_break':
+      return THREE.MathUtils.clamp(player.breakFlash / 0.28, 0, 1);
+    case 'dunk':
+      return THREE.MathUtils.clamp(player.dunkFlash / 0.24, 0, 1);
+    case 'parry':
+      return THREE.MathUtils.clamp(player.parryFlash / 0.2, 0, 1);
+    case 'boost':
+    case 'super_boost':
+    default:
+      return 0;
+  }
 }
 
 function updatePlayerIndicators(context: SceneContext, snapshot: RenderSnapshot): void {
@@ -164,33 +232,28 @@ function updatePlayerIndicators(context: SceneContext, snapshot: RenderSnapshot)
   for (const playerId of playerIds) {
     const player = snapshot.players[playerId];
     const indicators = context.playerIndicators[playerId];
+    for (const indicator of Object.values(indicators)) {
+      indicator.visible = false;
+    }
 
-    const parryOpacity = Math.max(
-      player.parry > 0 ? 0.55 : 0,
-      THREE.MathUtils.clamp(player.parryFlash / 0.2, 0, 1) * 0.9,
+    const action = resolvePlayerActionReadability(player);
+    if (!action) {
+      continue;
+    }
+
+    const id = action.definition.id;
+    const indicator = indicators[id];
+    const pulse = resolveIndicatorPulse(action.phase, snapshot.gameTime);
+    const flash = resolveIndicatorFlash(player, id);
+    const [baseRotation, rotationSpeed] = indicator.userData.motion as [number, number];
+    setIndicatorState(
+      indicator,
+      player.pos.x,
+      player.pos.y,
+      pulse.opacity + flash * 0.08,
+      pulse.scale + flash * 0.12,
+      baseRotation + snapshot.gameTime * rotationSpeed,
     );
-    const parryScale = 1 + player.parryFlash * 2.5;
-    setIndicatorState(indicators.parry, player.pos.x, player.pos.y, parryOpacity, parryScale);
-
-    const launchPulse = player.helpless > 0 ? 0.1 + Math.abs(Math.sin(snapshot.gameTime * 14)) * 0.12 : 0;
-    const launchOpacity = Math.max(
-      player.helpless > 0 ? 0.45 + launchPulse : 0,
-      THREE.MathUtils.clamp(player.launchFlash / 0.24, 0, 1) * 0.95,
-    );
-    const launchScale = 1 + player.launchFlash * 2.8 + launchPulse * 0.8;
-    setIndicatorState(indicators.launch, player.pos.x, player.pos.y, launchOpacity, launchScale);
-
-    const specialOpacity = THREE.MathUtils.clamp(player.specialFlash / 0.16, 0, 1) * 0.9;
-    const specialScale = 1 + player.specialFlash * 3.2;
-    setIndicatorState(indicators.special, player.pos.x, player.pos.y, specialOpacity, specialScale);
-
-    const breakOpacity = THREE.MathUtils.clamp(player.breakFlash / 0.28, 0, 1) * 0.95;
-    const breakScale = 1 + player.breakFlash * 3.4;
-    setIndicatorState(indicators.break, player.pos.x, player.pos.y, breakOpacity, breakScale);
-
-    const dunkOpacity = THREE.MathUtils.clamp(player.dunkFlash / 0.24, 0, 1) * 0.95;
-    const dunkScale = 1 + player.dunkFlash * 3.2;
-    setIndicatorState(indicators.dunk, player.pos.x, player.pos.y, dunkOpacity, dunkScale);
   }
 }
 
@@ -290,8 +353,8 @@ function updateCamera(context: SceneContext, snapshot: RenderSnapshot): void {
     desiredLookAtX = 0;
     desiredLookAtY = 0;
   } else {
-    resolveCameraTrackedPosition(context.cameraPlayerTracks.P1, snapshot.players.P1.pos.x, snapshot.players.P1.pos.y);
-    resolveCameraTrackedPosition(context.cameraPlayerTracks.P2, snapshot.players.P2.pos.x, snapshot.players.P2.pos.y);
+    syncCameraTrackToWorld(context.cameraPlayerTracks.P1, snapshot.players.P1.pos.x, snapshot.players.P1.pos.y);
+    syncCameraTrackToWorld(context.cameraPlayerTracks.P2, snapshot.players.P2.pos.x, snapshot.players.P2.pos.y);
     const p1 = context.cameraPlayerTracks.P1;
     const p2 = context.cameraPlayerTracks.P2;
     const midX = (p1.x + p2.x) * 0.5;
@@ -323,46 +386,6 @@ function updateCamera(context: SceneContext, snapshot: RenderSnapshot): void {
   context.lookAtTarget.x += THREE.MathUtils.clamp(desiredLookAtX - context.lookAtTarget.x, -maxLookAtStep, maxLookAtStep);
   context.lookAtTarget.y += THREE.MathUtils.clamp(desiredLookAtY - context.lookAtTarget.y, -maxLookAtStep, maxLookAtStep);
   context.camera.lookAt(context.lookAtTarget);
-}
-
-function resolveCameraTrackedPosition(previous: THREE.Vector2, actualX: number, actualY: number): void {
-  const actualLengthSq = actualX * actualX + actualY * actualY;
-  let dirX = 1;
-  let dirY = 0;
-  if (actualLengthSq > 1e-6) {
-    const invLen = 1 / Math.sqrt(actualLengthSq);
-    dirX = actualX * invLen;
-    dirY = actualY * invLen;
-  }
-
-  const wrapX = dirX * ARENA_RADIUS * 2;
-  const wrapY = dirY * ARENA_RADIUS * 2;
-
-  const c0x = actualX;
-  const c0y = actualY;
-  const c1x = actualX + wrapX;
-  const c1y = actualY + wrapY;
-  const c2x = actualX - wrapX;
-  const c2y = actualY - wrapY;
-
-  let bestX = c0x;
-  let bestY = c0y;
-  let bestDistSq = (c0x - previous.x) * (c0x - previous.x) + (c0y - previous.y) * (c0y - previous.y);
-
-  const c1DistSq = (c1x - previous.x) * (c1x - previous.x) + (c1y - previous.y) * (c1y - previous.y);
-  if (c1DistSq < bestDistSq) {
-    bestX = c1x;
-    bestY = c1y;
-    bestDistSq = c1DistSq;
-  }
-
-  const c2DistSq = (c2x - previous.x) * (c2x - previous.x) + (c2y - previous.y) * (c2y - previous.y);
-  if (c2DistSq < bestDistSq) {
-    bestX = c2x;
-    bestY = c2y;
-  }
-
-  previous.set(bestX, bestY);
 }
 
 export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): void {
@@ -427,12 +450,19 @@ export function cleanupRender(context: SceneContext): void {
 
   for (const playerId of playerIds) {
     const indicators = context.playerIndicators[playerId];
-    const meshes = [indicators.parry, indicators.launch, indicators.special, indicators.break, indicators.dunk];
-    for (const mesh of meshes) {
-      context.scene.remove(mesh);
-      mesh.geometry.dispose();
-      const material = mesh.material as THREE.Material;
-      material.dispose();
+    for (const indicator of Object.values(indicators)) {
+      context.scene.remove(indicator);
+      indicator.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) {
+          return;
+        }
+        child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach((material) => material.dispose());
+        } else {
+          child.material.dispose();
+        }
+      });
     }
   }
 

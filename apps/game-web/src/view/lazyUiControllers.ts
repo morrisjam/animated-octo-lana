@@ -7,6 +7,7 @@ import type {
 import type { PauseMenu, PauseMenuOptions } from './pauseMenu';
 import type {
   ReplayViewerController,
+  ReplayViewerComparisonContext,
   ReplayViewerOptions,
 } from './replayViewer';
 
@@ -18,8 +19,10 @@ export interface LazyUiLifecycle {
 
 export interface PauseMenuController {
   isPaused(): boolean;
+  isCapturingBinding(): boolean;
   toggle(): void;
   setPaused(paused: boolean): void;
+  openBindings(): void;
   openBalanceLab(status?: string): void;
   setCanRestartTraining(enabled: boolean): void;
   setBalanceLabAvailable(enabled: boolean): void;
@@ -57,6 +60,7 @@ export function createLazyPauseMenu(
   let balanceLabAvailable = options.enableDebugTab ?? true;
   let pendingBalanceLabStatus: string | undefined;
   let balanceLabRequested = false;
+  let bindingsRequested = false;
 
   const ensureLoaded = (): Promise<PauseMenu> => {
     if (instance) {
@@ -70,7 +74,10 @@ export function createLazyPauseMenu(
           loaded.setCanRestartTraining(canRestartTraining);
           loaded.setBalanceLabAvailable(balanceLabAvailable);
           loaded.setPaused(paused);
-          if (balanceLabRequested) {
+          if (bindingsRequested) {
+            loaded.openBindings();
+            bindingsRequested = false;
+          } else if (balanceLabRequested) {
             loaded.openBalanceLab(pendingBalanceLabStatus);
             balanceLabRequested = false;
             pendingBalanceLabStatus = undefined;
@@ -80,6 +87,7 @@ export function createLazyPauseMenu(
         .catch((error: unknown) => {
           loadPromise = null;
           paused = false;
+          bindingsRequested = false;
           balanceLabRequested = false;
           pendingBalanceLabStatus = undefined;
           const failure = asError(error);
@@ -96,6 +104,7 @@ export function createLazyPauseMenu(
 
   return {
     isPaused: () => instance?.isPaused() ?? paused,
+    isCapturingBinding: () => instance?.isCapturingBinding() ?? false,
     toggle: () => {
       paused = !(instance?.isPaused() ?? paused);
       if (instance) {
@@ -112,8 +121,21 @@ export function createLazyPauseMenu(
         requestLoad();
       }
     },
+    openBindings: () => {
+      paused = true;
+      bindingsRequested = true;
+      balanceLabRequested = false;
+      pendingBalanceLabStatus = undefined;
+      if (instance) {
+        instance.openBindings();
+        bindingsRequested = false;
+      } else {
+        requestLoad();
+      }
+    },
     openBalanceLab: (status) => {
       paused = true;
+      bindingsRequested = false;
       balanceLabRequested = true;
       pendingBalanceLabStatus = status;
       if (instance) {
@@ -148,6 +170,7 @@ export function createLazyReplayViewer(
   let requestedVisible = false;
   let pendingReview: ReplayReviewData | null = null;
   let pendingSourceLabel = '';
+  let pendingComparison: ReplayViewerComparisonContext | undefined;
   let currentFrameIndex = 0;
   let currentPaused = true;
   let currentSpeed = 1;
@@ -169,7 +192,11 @@ export function createLazyReplayViewer(
           const loaded = module.createReplayViewer(options);
           instance = loaded;
           if (requestedVisible && pendingReview) {
-            loaded.show(pendingReview, pendingSourceLabel);
+            if (pendingComparison) {
+              loaded.show(pendingReview, pendingSourceLabel, pendingComparison);
+            } else {
+              loaded.show(pendingReview, pendingSourceLabel);
+            }
             loaded.updatePlayback(currentFrameIndex, currentPaused, currentSpeed);
           }
           return loaded;
@@ -179,6 +206,7 @@ export function createLazyReplayViewer(
           requestedVisible = false;
           pendingReview = null;
           pendingSourceLabel = '';
+          pendingComparison = undefined;
           const failure = asError(error);
           if (!disposed) {
             lifecycle.onLoadError?.('replay_viewer', failure);
@@ -194,12 +222,17 @@ export function createLazyReplayViewer(
   };
 
   return {
-    show: (data, sourceLabel) => {
+    show: (data, sourceLabel, comparison) => {
       requestedVisible = true;
       pendingReview = data;
       pendingSourceLabel = sourceLabel;
+      pendingComparison = comparison;
       if (instance) {
-        instance.show(data, sourceLabel);
+        if (comparison) {
+          instance.show(data, sourceLabel, comparison);
+        } else {
+          instance.show(data, sourceLabel);
+        }
         instance.updatePlayback(currentFrameIndex, currentPaused, currentSpeed);
       } else {
         requestLoad();
@@ -209,6 +242,7 @@ export function createLazyReplayViewer(
       requestedVisible = false;
       pendingReview = null;
       pendingSourceLabel = '';
+      pendingComparison = undefined;
       instance?.hide();
     },
     isVisible: () => requestedVisible,
@@ -222,6 +256,7 @@ export function createLazyReplayViewer(
       disposed = true;
       requestedVisible = false;
       pendingReview = null;
+      pendingComparison = undefined;
       instance?.dispose();
       instance = null;
     },

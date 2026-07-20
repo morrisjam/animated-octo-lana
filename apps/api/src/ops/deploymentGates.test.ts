@@ -4,7 +4,9 @@ import test from 'node:test';
 import {
   fetchJson as fetchHealthJson,
   validateDeploymentUrl,
+  validateExactReleaseBuildAccess,
   validateMatchmakingResidentCapacity,
+  validateRuntimeSecurityPosture,
   validateWebReleaseAttestation,
 } from '../../scripts/deploymentHealthGate';
 import {
@@ -120,6 +122,60 @@ test('deployment gate requires the exact positive resident-ticket ceiling', () =
   );
 });
 
+test('deployment gate accepts only a privacy-safe positive exact-build response', () => {
+  assert.equal(validateExactReleaseBuildAccess({ allowlisted: true }), true);
+  assert.throws(
+    () => validateExactReleaseBuildAccess({ allowlisted: false }),
+    /exact release SHA is not present/,
+  );
+  assert.throws(
+    () => validateExactReleaseBuildAccess({ allowlisted: true, buildVersion: RELEASE_SHA }),
+    /exact release SHA is not present/,
+  );
+  assert.throws(
+    () => validateExactReleaseBuildAccess('true'),
+    /must be a JSON object/,
+  );
+});
+
+test('deployment gate requires every production authentication and Steam posture invariant', () => {
+  const validPosture = {
+    schemaVersion: 'gw.runtime-security-posture.v1',
+    configurationReady: true,
+    productionMode: true,
+    hostedDeployment: true,
+    signedSessionAuthReady: true,
+    sessionRotationReady: true,
+    authThrottleIsolationReady: true,
+    insecureAccountHeaderDisabled: true,
+    proxySourceBoundaryReady: true,
+    corsBoundaryReady: true,
+    identityAdminBoundaryReady: true,
+    operationsCredentialsReady: true,
+    steamTicketVerifierConfigured: true,
+    steamDevelopmentTicketsDisabled: true,
+  };
+  assert.deepEqual(validateRuntimeSecurityPosture(validPosture), validPosture);
+
+  for (const field of [
+    'configurationReady',
+    'signedSessionAuthReady',
+    'authThrottleIsolationReady',
+    'steamTicketVerifierConfigured',
+    'steamDevelopmentTicketsDisabled',
+  ]) {
+    assert.throws(
+      () => validateRuntimeSecurityPosture({ ...validPosture, [field]: false }),
+      /did not confirm production signed auth/,
+      field,
+    );
+  }
+  assert.throws(
+    () => validateRuntimeSecurityPosture({ ...validPosture, schemaVersion: 'gw.runtime-security-posture.v0' }),
+    /did not confirm production signed auth/,
+  );
+});
+
 test('every deployment gate fetch has a deadline and rejects redirects', async () => {
   const originalFetch = globalThis.fetch;
   const fetchers = [fetchHealthJson, fetchDrainJson];
@@ -159,4 +215,41 @@ test('automatic rollback cannot replace an API until the replacement drain succe
   assert.ok(rollbackStep, 'safe rollout workflow is missing the exact rollback step');
   assert.match(rollbackStep, /steps\.rollback_drain\.outcome == 'success'/);
   assert.doesNotMatch(rollbackStep, /replacement re-drain outcome=/);
+});
+
+test('an indeterminate candidate deploy trigger leaves matchmaking drained', () => {
+  const deployFailureStep = safeRolloutWorkflow.match(
+    /- name: Mark deploy trigger failure[\s\S]*?(?=\n\s+- name:)/,
+  )?.[0];
+  assert.ok(deployFailureStep, 'safe rollout workflow is missing the deploy failure step');
+  assert.match(deployFailureStep, /Matchmaking remains drained/);
+  assert.doesNotMatch(deployFailureStep, /DEPLOY_DRAIN_ACTION:\s*resume/);
+  assert.doesNotMatch(deployFailureStep, /api:deploy:drain-gate/);
+});
+
+test('only the pre-deploy drain may recover its own partial drain failure', () => {
+  const initialDrainStep = safeRolloutWorkflow.match(
+    /- name: Drain matchmaking[\s\S]*?(?=\n\s+- name:)/,
+  )?.[0];
+  const rollbackDrainStep = safeRolloutWorkflow.match(
+    /- name: Re-drain matchmaking before rollback[\s\S]*?(?=\n\s+- name:)/,
+  )?.[0];
+  assert.ok(initialDrainStep, 'safe rollout workflow is missing the pre-deploy drain');
+  assert.ok(rollbackDrainStep, 'safe rollout workflow is missing the rollback drain');
+  assert.match(initialDrainStep, /DEPLOY_RESUME_ON_DRAIN_FAILURE:\s*"true"/);
+  assert.doesNotMatch(rollbackDrainStep, /DEPLOY_RESUME_ON_DRAIN_FAILURE/);
+});
+
+test('canary promotion evidence is bound to the exact allowlisted release build', () => {
+  const finalGateStep = safeRolloutWorkflow.match(
+    /- name: Verify resumed deployment[\s\S]*?(?=\n\s+- name:)/,
+  )?.[0];
+  assert.ok(finalGateStep, 'safe rollout workflow is missing the final resumed-deployment gate');
+  assert.match(finalGateStep, /DEPLOY_EXPECT_RELEASE_SHA: \$\{\{ inputs\.release_sha \}\}/);
+  assert.match(finalGateStep, /DEPLOY_HEALTH_REPORT_PATH: rollout-evidence\/final-health-gate\.json/);
+  assert.match(safeRolloutWorkflow, /schemaVersion: 'gw\.safe-rollout\.v5'/);
+  assert.match(safeRolloutWorkflow, /exactReleaseBuildAllowlisted/);
+  assert.match(safeRolloutWorkflow, /runtimeSecurityConfigurationReady/);
+  assert.match(safeRolloutWorkflow, /steamTicketVerifierConfigured/);
+  assert.match(safeRolloutWorkflow, /rollout-evidence\/final-health-gate\.json/);
 });

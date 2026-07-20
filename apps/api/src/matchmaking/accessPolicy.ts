@@ -19,6 +19,7 @@ export type MatchmakingAccessDecision =
 
 export interface MatchmakingAccessPolicy {
   getStatus(): MatchmakingAccessStatus;
+  isBuildAllowlisted(buildVersion: string): boolean;
   evaluate(accountId: string, buildVersion: string | null | undefined): MatchmakingAccessDecision;
 }
 
@@ -90,6 +91,11 @@ export function createMatchmakingAccessPolicyFromEnv(
   return {
     getStatus(): MatchmakingAccessStatus {
       return { ...status };
+    },
+    isBuildAllowlisted(buildVersion: string): boolean {
+      const trimmedBuild = buildVersion.trim();
+      return BUILD_VERSION_REGEX.test(trimmedBuild)
+        && buildAllowlist.has(normalizeBuildVersion(trimmedBuild));
     },
     evaluate(accountId: string, buildVersion: string | null | undefined): MatchmakingAccessDecision {
       if (mode === 'open') {

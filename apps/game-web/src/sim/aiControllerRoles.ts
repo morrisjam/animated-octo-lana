@@ -243,6 +243,17 @@ export function tickAiControllerWithRole(
 
   return {
     input,
+    diagnostics: {
+      postControlChaseLockPending: false,
+      postControlChaseLockActive: false,
+      postControlBoostSuppressed: false,
+      postControlDashSuppressed: false,
+      postControlChaseLockConsumed: false,
+      postControlRepeatDashPending: false,
+      postControlRepeatDashWeightApplied: false,
+      postControlRepeatDashConsumed: false,
+      postControlRepeatDashSelected: false,
+    },
     decision: buildScriptedDecision(
       base.decision,
       roleId,
@@ -266,6 +277,8 @@ export function tickAiControllerWithRole(
       postControlCounterstepFramesRemaining: 0,
       postControlCounterstepSeparatedFrames: 0,
       postControlCounterstepActionRequested: false,
+      postControlChaseLockPending: false,
+      postControlChaseLockFramesRemaining: 0,
       postRecoveryUseSuperBoost: false,
     },
   };

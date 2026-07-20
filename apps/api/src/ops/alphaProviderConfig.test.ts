@@ -29,6 +29,7 @@ function createValidEnvironment(): Record<string, string> {
     RANKED_SUPPORTED_RULESET_VERSIONS: 'prototype-2026.02',
     MATCHMAKING_TURN_URLS: 'turn:relay.gravitywell.space:3478?transport=udp,turns:relay.gravitywell.space:5349?transport=tcp',
     MATCHMAKING_TURN_SHARED_SECRET: 'alpha-turn-shared-secret-at-least-32-characters',
+    MIGRATION_ALLOW_FORWARD_COMPATIBLE_SUFFIX: 'true',
     MATCHMAKING_TURN_CREDENTIAL_TTL_SECONDS: '600',
     STEAM_APP_ID: '123456',
     STEAM_WEB_API_KEY: 'publisher-api-key-not-a-placeholder',
@@ -201,6 +202,26 @@ test('requires a distinct auth throttle secret and explicit hosted proxy boundar
   assert.deepEqual(
     report.checks.filter((check) => check.status === 'fail').map((check) => check.id),
     ['auth_rate_limit_secret', 'auth_source_identity'],
+  );
+});
+
+test('requires purpose-distinct operations credentials', () => {
+  const env = createValidEnvironment();
+  env.ENFORCEMENT_ADMIN_KEY = env.SLO_ADMIN_KEY;
+  assert.deepEqual(
+    auditAlphaProviderConfig(env).checks
+      .filter((check) => check.status === 'fail')
+      .map((check) => check.id),
+    ['operations_keys'],
+  );
+
+  env.ENFORCEMENT_ADMIN_KEY = 'enforcement-admin-key-at-least-24-characters';
+  env.SLO_ADMIN_KEY = env.AUTH_SESSION_SECRET;
+  assert.deepEqual(
+    auditAlphaProviderConfig(env).checks
+      .filter((check) => check.status === 'fail')
+      .map((check) => check.id),
+    ['operations_keys'],
   );
 });
 

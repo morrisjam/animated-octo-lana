@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "gw.blender-stage-source-metrics.v1",
+  "assetId": "wormhole_arena_rift_v4",
+  "blenderVersion": "5.2.0 LTS",
+  "sourceScript": "art/source/blender/wormhole_arena_rift_v4.py",
+  "sourceBlend": "art/source/blender/wormhole_arena_rift_v4.blend",
+  "runtimeGlb": "apps/game-web/public/assets/stages/wormhole/wormhole-arena-rift-v4.glb",
+  "reviewPreview": "art/review/wormhole_arena_rift_v4.png",
+  "coordinateContract": {
+    "blenderPlane": "XZ",
+    "blenderDepth": "+Y",
+    "runtimePlane": "XY",
+    "runtimeDepth": "-Z",
+    "arenaRadius": 72
+  },
+  "metrics": {
+    "objects": 5,
+    "materials": 5,
+    "sourceVertices": 1284,
+    "sourceTriangles": 1160,
+    "vertices": 1284,
+    "triangles": 1160,
+    "glbBytes": 43628,
+    "glbSha256": "1d5fe0aa68ef7b0aec78d43e5f48a11912c787050d8f9c06a1941cc2fed035f3"
+  },
+  "budgets": {
+    "vertices": 14000,
+    "triangles": 12000,
+    "glbBytes": 393216
+  }
+}

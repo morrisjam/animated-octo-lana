@@ -3,6 +3,7 @@ import {
   createInitialState,
   step,
   type SimulationActionStart,
+  type SimulationControlReturnReset,
   type SimulationLaunchClash,
 } from './sim';
 import {
@@ -12,7 +13,10 @@ import {
   createMatchTelemetryTracker,
 } from './matchTelemetry';
 import { createCharacterBalanceConfig } from './characterBalance';
-import { COMBAT_EVENT_SCHEMA_VERSION } from './combatEventTelemetry';
+import {
+  COMBAT_EVENT_SCHEMA_VERSION,
+  type CombatControlReturnWindowEvidence,
+} from './combatEventTelemetry';
 import type { FrameInput } from './types';
 
 function neutralInput(): FrameInput {
@@ -57,6 +61,31 @@ function recordContactEpisode(
     state.players.P1.pos = { x: -3, y: 0 };
     state.players.P2.pos = { x: 3, y: 0 };
     tracker.recordFrame(neutralInput(), state, 0.1);
+  }
+}
+
+function expectValidControlReturnWindow(window: CombatControlReturnWindowEvidence): void {
+  expect(window.maximumDistance).toBeGreaterThanOrEqual(window.controlGrantedDistance);
+  expect(window.outsidePressureSeconds).toBeGreaterThanOrEqual(0);
+  expect(window.outsidePressureSeconds).toBeLessThanOrEqual(window.durationSeconds);
+  expect(window.outcomeFrame).toBeGreaterThanOrEqual(window.returnFrame);
+  expect(window.outcomeSeconds).toBeGreaterThanOrEqual(window.returnSeconds);
+  for (const playerId of ['P1', 'P2'] as const) {
+    const participant = window.players[playerId];
+    expect(participant.observedFrames).toBe(window.observedFrames);
+    expect(participant.controllableFrames + participant.uncontrollableFrames)
+      .toBe(participant.observedFrames);
+    expect(Object.values(participant.movementIntentFrames).reduce((sum, count) => sum + count, 0))
+      .toBe(participant.observedFrames);
+    expect(Object.values(participant.activeActionFrames).reduce((sum, count) => sum + count, 0))
+      .toBe(participant.observedFrames);
+    expect(participant.netClosingDistance)
+      .toBeCloseTo(participant.closingDistance - participant.openingDistance, 2);
+    if (participant.firstAcceptedAction) {
+      expect(participant.firstAcceptedAction.frame).toBeGreaterThanOrEqual(window.returnFrame);
+      expect(participant.firstAcceptedAction.timeSeconds).toBeGreaterThanOrEqual(window.returnSeconds);
+      expect(participant.firstAcceptedAction.delaySeconds).toBeGreaterThanOrEqual(0);
+    }
   }
 }
 
@@ -114,6 +143,116 @@ describe('match telemetry tracker', () => {
       action: 'parry',
       movementIntent: 'approach',
     }));
+  });
+
+  test('records an authoritative ordinary Boost counterplay window and next-frame response', () => {
+    const state = createInitialState({ seed: 101 });
+    state.players.P1.pos = { x: -12, y: 0 };
+    state.players.P2.pos = { x: 12, y: 0 };
+    const tracker = createMatchTelemetryTracker(state);
+    const boostInput = neutralInput();
+    boostInput.p1.boost = true;
+    state.players.P1.boostActive = true;
+    state.players.P1.boostDir = { x: 1, y: 0 };
+    state.players.P1.vel = { x: 60, y: 0 };
+    tracker.recordFrame(boostInput, state, 1 / 60, [{ playerId: 'P1', action: 'boost' }]);
+
+    const responseInput = neutralInput();
+    responseInput.p2.moveY = 1;
+    responseInput.p2.superBoost = true;
+    state.players.P1.pos.x += 1;
+    state.players.P2.superBoost = 0.1;
+    tracker.recordFrame(
+      responseInput,
+      state,
+      1 / 60,
+      [{ playerId: 'P2', action: 'super_boost' }],
+    );
+
+    const evidence = tracker.toSummary().combat.ordinaryBoostCounterplay?.[0];
+    expect(evidence).toMatchObject({
+      boosterId: 'P1',
+      targetId: 'P2',
+      startAttribution: 'simulation',
+      observedFrames: 1,
+      outcome: 'sample_end',
+      targetFirstAcceptedAction: {
+        action: 'super_boost',
+        movementIntent: 'orbit',
+      },
+      targetSuperBoostResponse: {
+        action: 'super_boost',
+      },
+    });
+    expect(evidence?.availableReactionSeconds).toBeGreaterThan(0);
+    expect(evidence?.availableReactionSeconds).toBeLessThanOrEqual(0.75);
+    expect(evidence?.targetFirstAcceptedAction?.frame).toBeGreaterThan(evidence?.startFrame ?? 0);
+  });
+
+  test('does not count a same-frame action as an ordinary Boost reaction', () => {
+    const state = createInitialState({ seed: 102 });
+    state.players.P1.pos = { x: -12, y: 0 };
+    state.players.P2.pos = { x: 12, y: 0 };
+    const tracker = createMatchTelemetryTracker(state);
+    const input = neutralInput();
+    input.p1.boost = true;
+    input.p2.superBoost = true;
+    state.players.P1.boostActive = true;
+    state.players.P1.boostDir = { x: 1, y: 0 };
+    state.players.P1.vel = { x: 60, y: 0 };
+    state.players.P2.superBoost = 0.1;
+    tracker.recordFrame(input, state, 1 / 60, [
+      { playerId: 'P1', action: 'boost' },
+      { playerId: 'P2', action: 'super_boost' },
+    ]);
+
+    expect(tracker.toSummary().combat.ordinaryBoostCounterplay?.[0]).toMatchObject({
+      targetFirstAcceptedAction: null,
+      targetSuperBoostResponse: null,
+    });
+  });
+
+  test('requires defender agency and gives combat conversion precedence over contact', () => {
+    const unavailable = createInitialState({ seed: 103 });
+    unavailable.players.P1.pos = { x: -12, y: 0 };
+    unavailable.players.P2.pos = { x: 12, y: 0 };
+    unavailable.players.P2.endLag = 1;
+    const unavailableTracker = createMatchTelemetryTracker(unavailable);
+    unavailable.players.P1.boostActive = true;
+    unavailable.players.P1.boostDir = { x: 1, y: 0 };
+    unavailable.players.P1.vel = { x: 60, y: 0 };
+    unavailableTracker.recordFrame(
+      neutralInput(),
+      unavailable,
+      1 / 60,
+      [{ playerId: 'P1', action: 'boost' }],
+    );
+    expect(unavailableTracker.toSummary().combat.ordinaryBoostCounterplay).toEqual([]);
+
+    const state = createInitialState({ seed: 104 });
+    state.players.P1.pos = { x: -12, y: 0 };
+    state.players.P2.pos = { x: 12, y: 0 };
+    const tracker = createMatchTelemetryTracker(state);
+    state.players.P1.boostActive = true;
+    state.players.P1.boostDir = { x: 1, y: 0 };
+    state.players.P1.vel = { x: 60, y: 0 };
+    tracker.recordFrame(
+      neutralInput(),
+      state,
+      1 / 60,
+      [{ playerId: 'P1', action: 'boost' }],
+    );
+    state.players.P1.pos = { x: -2, y: 0 };
+    state.players.P2.pos = { x: 2, y: 0 };
+    state.players.P1.chain = 1;
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    tracker.recordFrame(neutralInput(), state, 1 / 60, []);
+
+    expect(tracker.toSummary().combat.ordinaryBoostCounterplay?.[0]).toMatchObject({
+      outcome: 'combat_conversion',
+      minimumDistance: 4,
+    });
   });
 
   test('tracks both player inputs and combat outcomes for live analysis', () => {
@@ -177,8 +316,8 @@ describe('match telemetry tracker', () => {
     expect(summary.framesSimulated).toBe(4);
     expect(summary.schemaVersion).toBe(MATCH_TELEMETRY_SCHEMA_VERSION);
     expect(summary.characterRegistryFingerprint).toMatch(/^gw\.character-registry\.v1:[0-9a-f]{8}$/);
-    expect(summary.characters.P1).toEqual({ characterId: 'vanguard', packageVersion: '0.3.3' });
-    expect(summary.characters.P2).toEqual({ characterId: 'duelist', packageVersion: '0.3.2' });
+    expect(summary.characters.P1).toEqual({ characterId: 'vanguard', packageVersion: '0.3.5' });
+    expect(summary.characters.P2).toEqual({ characterId: 'duelist', packageVersion: '0.3.4' });
     expect(summary.players.P1.launchPresses).toBe(1);
     expect(summary.players.P1.specialPresses).toBe(1);
     expect(summary.players.P1.dunkPresses).toBe(1);
@@ -550,6 +689,268 @@ describe('match telemetry tracker', () => {
     expect(summary.combat.eventCounts.launch_break).toBe(1);
   });
 
+  test('attributes both fighters movement and first actions after control returns', () => {
+    const state = createInitialState({ seed: 28 });
+    state.players.P1.pos = { x: -4, y: 0 };
+    state.players.P2.pos = { x: 4, y: 0 };
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P1.pos = { x: -10, y: 0 };
+    state.players.P2.pos = { x: 10, y: 0 };
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+
+    state.players.P1.vel = { x: 4, y: 0 };
+    state.players.P2.vel = { x: -2, y: 0 };
+    state.players.P1.pos = { x: -9.6, y: 0 };
+    state.players.P2.pos = { x: 9.8, y: 0 };
+    const actionFrame = neutralInput();
+    actionFrame.p1.moveX = 1;
+    actionFrame.p2.moveX = -1;
+    tracker.recordFrame(actionFrame, state, 0.1, [
+      { playerId: 'P1', action: 'boost' },
+      { playerId: 'P2', action: 'super_boost' },
+    ]);
+
+    state.players.P1.vel = { x: 0, y: 0 };
+    state.players.P2.vel = { x: 0, y: 0 };
+    state.players.P1.chain += 1;
+    state.players.P2.helpless = 1;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+
+    const evidence = tracker.toSummary().combat.controlReturnWindows?.[0];
+    expect(evidence).toMatchObject({
+      returnedPlayerId: 'P2',
+      returnKind: 'natural',
+      preResetDistance: 8,
+      controlGrantedDistance: 20,
+      maximumDistance: 20,
+      finalDistance: 19.4,
+      observedFrames: 2,
+      durationSeconds: 0.2,
+      outcome: 'relaunched_in_pressure',
+      players: {
+        P1: {
+          closingDistance: 0.4,
+          dominantMovementIntent: 'approach',
+          firstAcceptedAction: {
+            action: 'boost',
+            delaySeconds: 0.1,
+            movementIntent: 'approach',
+          },
+        },
+        P2: {
+          closingDistance: 0.2,
+          dominantMovementIntent: 'approach',
+          firstAcceptedAction: {
+            action: 'super_boost',
+            delaySeconds: 0.1,
+            movementIntent: 'approach',
+          },
+        },
+      },
+    });
+    expect(evidence?.players.P1.observedFrames).toBe(
+      evidence?.players.P1.controllableFrames + evidence?.players.P1.uncontrollableFrames,
+    );
+    expect(evidence?.players.P2.observedFrames).toBe(
+      evidence?.players.P2.controllableFrames + evidence?.players.P2.uncontrollableFrames,
+    );
+    expectValidControlReturnWindow(evidence as CombatControlReturnWindowEvidence);
+  });
+
+  test('classifies a durable pressure exit from the control-granted moment', () => {
+    const state = createInitialState({ seed: 29 });
+    state.players.P1.pos = { x: -5, y: 0 };
+    state.players.P2.pos = { x: 5, y: 0 };
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+    state.players.P1.pos = { x: -15, y: 0 };
+    state.players.P2.pos = { x: 15, y: 0 };
+    tracker.recordFrame(neutralInput(), state, 0.4);
+    tracker.recordFrame(neutralInput(), state, 0.4);
+
+    expect(tracker.toSummary().combat.controlReturnWindows?.[0]).toMatchObject({
+      returnedPlayerId: 'P2',
+      controlGrantedDistance: 10,
+      maximumDistance: 30,
+      durationSeconds: 0.8,
+      outcome: 'sustained_exit',
+    });
+  });
+
+  test('lets a same-frame launch override passive control-window completion', () => {
+    const state = createInitialState({ seed: 30 });
+    state.players.P1.pos = { x: -5, y: 0 };
+    state.players.P2.pos = { x: 5, y: 0 };
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+    state.players.P1.pos = { x: -15, y: 0 };
+    state.players.P2.pos = { x: 15, y: 0 };
+    tracker.recordFrame(neutralInput(), state, 0.4);
+
+    state.players.P1.chain += 1;
+    state.players.P2.helpless = 1;
+    tracker.recordFrame(neutralInput(), state, 0.35, [
+      { playerId: 'P1', action: 'launch' },
+    ]);
+
+    expect(tracker.toSummary().combat.controlReturnWindows?.[0]).toMatchObject({
+      outcome: 'relaunched_after_exit',
+      durationSeconds: 0.75,
+      players: {
+        P1: {
+          firstAcceptedAction: { action: 'launch', delaySeconds: 0.75 },
+        },
+      },
+    });
+  });
+
+  test('ends a return window when non-launch forced recovery removes control', () => {
+    const state = createInitialState({ seed: 31 });
+    state.players.P1.pos = { x: -5, y: 0 };
+    state.players.P2.pos = { x: 5, y: 0 };
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+    state.players.P1.pos = { x: -15, y: 0 };
+    state.players.P2.pos = { x: 15, y: 0 };
+    state.players.P2.recovering = 1;
+    tracker.recordFrame(neutralInput(), state, 0.8);
+
+    expect(tracker.toSummary().combat.controlReturnWindows?.[0]).toMatchObject({
+      outcome: 'control_interrupted',
+      durationSeconds: 0.8,
+    });
+  });
+
+  test('classifies a brief pressure exit followed by re-entry', () => {
+    const state = createInitialState({ seed: 33 });
+    state.players.P1.pos = { x: -5, y: 0 };
+    state.players.P2.pos = { x: 5, y: 0 };
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+    state.players.P1.pos = { x: -15, y: 0 };
+    state.players.P2.pos = { x: 15, y: 0 };
+    tracker.recordFrame(neutralInput(), state, 0.2);
+    state.players.P1.pos = { x: -10, y: 0 };
+    state.players.P2.pos = { x: 10, y: 0 };
+    tracker.recordFrame(neutralInput(), state, 0.2);
+
+    const evidence = tracker.toSummary().combat.controlReturnWindows?.[0];
+    expect(evidence).toMatchObject({
+      outcome: 'brief_reentry',
+      outsidePressureSeconds: 0.2,
+      durationSeconds: 0.4,
+    });
+    expectValidControlReturnWindow(evidence as CombatControlReturnWindowEvidence);
+  });
+
+  test('classifies pressure that continues through the full observation window', () => {
+    const state = createInitialState({ seed: 34 });
+    state.players.P1.pos = { x: -5, y: 0 };
+    state.players.P2.pos = { x: 5, y: 0 };
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+    for (let frame = 0; frame < 4; frame += 1) {
+      tracker.recordFrame(neutralInput(), state, 0.5);
+    }
+
+    const evidence = tracker.toSummary().combat.controlReturnWindows?.[0];
+    expect(evidence).toMatchObject({
+      outcome: 'pressure_continued',
+      durationSeconds: 2,
+      outsidePressureSeconds: 0,
+    });
+    expectValidControlReturnWindow(evidence as CombatControlReturnWindowEvidence);
+  });
+
+  test('lets round end terminate an active control-return window', () => {
+    const state = createInitialState({ seed: 35 });
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+    state.winner = 'P1';
+    tracker.recordFrame(neutralInput(), state, 0.1);
+
+    const evidence = tracker.toSummary().combat.controlReturnWindows?.[0];
+    expect(evidence).toMatchObject({ outcome: 'round_end', durationSeconds: 0.1 });
+    expectValidControlReturnWindow(evidence as CombatControlReturnWindowEvidence);
+  });
+
+  test('marks an active window as sample-end evidence without inventing observations', () => {
+    const state = createInitialState({ seed: 36 });
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P2.helpless = 0;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+
+    const evidence = tracker.toSummary().combat.controlReturnWindows?.[0];
+    expect(evidence).toMatchObject({
+      outcome: 'sample_end',
+      observedFrames: 0,
+      durationSeconds: 0,
+      players: {
+        P1: {
+          dominantMovementIntent: null,
+          dominantActiveAction: null,
+          firstAcceptedAction: null,
+        },
+        P2: {
+          dominantMovementIntent: null,
+          dominantActiveAction: null,
+          firstAcceptedAction: null,
+        },
+      },
+    });
+    expectValidControlReturnWindow(evidence as CombatControlReturnWindowEvidence);
+  });
+
+  test('discards a pending return when forced recovery begins before control grant', () => {
+    const state = createInitialState({ seed: 32 });
+    state.players.P2.helpless = 1;
+    state.players.P2.lastLaunchedBy = 'P1';
+    const tracker = createMatchTelemetryTracker(state);
+
+    state.players.P2.helpless = 0;
+    state.players.P2.stunned = 0.2;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+    state.players.P2.stunned = 0;
+    state.players.P2.recovering = 0.5;
+    tracker.recordFrame(neutralInput(), state, 0.1);
+    state.players.P2.recovering = 0;
+    tracker.recordFrame(neutralInput(), state, 0.5);
+
+    expect(tracker.toSummary().combat.eventCounts.control_return).toBe(0);
+    expect(tracker.toSummary().combat.controlReturnWindows).toEqual([]);
+  });
+
   test('classifies a control return from its pre-reset distance', () => {
     const state = createInitialState({ seed: 27 });
     state.players.P1.pos = { x: -4, y: 0 };
@@ -561,16 +962,23 @@ describe('match telemetry tracker', () => {
     state.tuning.naturalRecoveryResetMultiplier = 1;
     const tracker = createMatchTelemetryTracker(state);
 
-    step(state, neutralInput(), 1 / 60);
-    tracker.recordFrame(neutralInput(), state, 1 / 60);
+    state.players.P2.pos = { x: 5, y: 0 };
+    const controlReturnResets: SimulationControlReturnReset[] = [];
+    step(state, neutralInput(), 1 / 60, {
+      onActionStart: () => undefined,
+      onControlReturnReset: (event) => controlReturnResets.push(event),
+    });
+    tracker.recordFrame(neutralInput(), state, 1 / 60, [], [], controlReturnResets);
 
     const controlReturn = tracker.toSummary().combat.events.find((event) => (
       event.type === 'control_return'
     ));
+    expect(controlReturnResets).toHaveLength(1);
+    expect(controlReturnResets[0]?.preResetDistance).toBeGreaterThan(8);
     expect(controlReturn).toMatchObject({
       actorId: 'P2',
       distance: 26,
-      controlReturnStartDistance: 8,
+      controlReturnStartDistance: Number(controlReturnResets[0]?.preResetDistance.toFixed(2)),
     });
   });
 
@@ -619,6 +1027,59 @@ describe('match telemetry tracker', () => {
     const projectileSummary = projectileTracker.toSummary();
     expect(projectileSummary.players.P1.specialResolves).toBe(1);
     expect(projectileSummary.players.P1.projectilesSpawned).toBe(1);
+  });
+
+  test('aggregates ordinary Boost counterplay by defender from exact evidence', () => {
+    const run = (seed: number) => {
+      const state = createInitialState({ seed });
+      state.players.P1.pos = { x: -12, y: 0 };
+      state.players.P2.pos = { x: 12, y: 0 };
+      const tracker = createMatchTelemetryTracker(state);
+      state.players.P1.boostActive = true;
+      state.players.P1.boostDir = { x: 1, y: 0 };
+      state.players.P1.vel = { x: 60, y: 0 };
+      tracker.recordFrame(
+        neutralInput(),
+        state,
+        1 / 60,
+        [{ playerId: 'P1', action: 'boost' }],
+      );
+      state.players.P1.pos.x += 1;
+      state.players.P2.superBoost = 0.1;
+      tracker.recordFrame(
+        neutralInput(),
+        state,
+        1 / 60,
+        [{ playerId: 'P2', action: 'super_boost' }],
+      );
+      return tracker.toSummary();
+    };
+
+    const first = run(105);
+    const second = run(106);
+    expect(first.combat.ordinaryBoostCounterplay).toEqual(second.combat.ordinaryBoostCounterplay);
+    const aggregate = aggregateMatchTelemetrySummaries([first, second]);
+    expect(aggregate.ordinaryBoostCounterplay.P1).toMatchObject({
+      opportunities: 0,
+      responseCoverageRatio: 0,
+    });
+    expect(aggregate.ordinaryBoostCounterplay.P2).toMatchObject({
+      opportunities: 2,
+      completedOpportunities: 0,
+      firstResponses: 2,
+      targetSuperBoostResponses: 2,
+      responseCoverageRatio: 1,
+      superBoostResponseRatio: 1,
+      firstResponseActions: {
+        super_boost: 2,
+        none: 0,
+      },
+      outcomes: {
+        sample_end: 2,
+      },
+    });
+    expect(aggregate.ordinaryBoostCounterplay.P2.averageFirstResponseSeconds)
+      .toBeCloseTo(1 / 60, 2);
   });
 
   test('aggregates compatible rounds and rejects mixed registries', () => {
@@ -674,7 +1135,7 @@ describe('match telemetry tracker', () => {
     expect(custom.characterRegistryFingerprint).toMatch(
       /^gw\.character-registry\.v1:[0-9a-f]{8}\+local:[0-9a-f]{8}$/,
     );
-    expect(custom.characters.P1.packageVersion).toMatch(/^0\.3\.3\+local\.[0-9a-f]{8}$/);
+    expect(custom.characters.P1.packageVersion).toMatch(/^0\.3\.5\+local\.[0-9a-f]{8}$/);
     expect(() => aggregateMatchTelemetrySummaries([first, custom])).toThrow(
       'different character registries',
     );

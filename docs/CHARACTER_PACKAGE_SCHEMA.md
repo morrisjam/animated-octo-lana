@@ -46,7 +46,7 @@ This runs:
 - per-package asset budget checks
 - required-file alpha-readiness and runtime-profile checks
 
-Vanguard and Duelist are loaded through explicit JSON imports as well as Vite discovery. Browser, Vitest, and Node/`tsx` balance tools therefore use the same definitions and stable roster order. Runtime telemetry includes a hash of the effective stats and move rules so reports from incompatible packages cannot be combined.
+Vanguard and Duelist are loaded through explicit JSON imports as well as Vite discovery. Browser, Vitest, and Node/`tsx` balance tools therefore use the same definitions and stable roster order. Runtime telemetry includes a hash of the effective stats, AI pacing, and move rules so reports from incompatible packages cannot be combined.
 
 ## Required top-level fields
 - `schemaVersion`
@@ -60,6 +60,16 @@ Vanguard and Duelist are loaded through explicit JSON imports as well as Vite di
 - `audio`
 - `moves`
 - `specials`
+
+`ai` is an optional backward-compatible v1 block. Omitted packages load the neutral values below. The scaffolder and shipping packages write it explicitly.
+
+## AI neutral-pacing contract
+
+- `ai.neutralApproachMultiplier`: `0-2`, multiplied into the local AI controller's neutral inward drive. `1` is neutral.
+- `ai.neutralBoostDistanceOffset`: `0-60`, added only to the distance at which local AI may use free ordinary auto-lock Boost. `0` is neutral.
+- `ai.postControlSpacingFrames`: integer `0-120`, gives only this local AI character an outward/orbit read after regaining control inside pressure. The read preserves emergency defense and reactive counters while withholding proactive Launch and package-declared movement dash. `0` is neutral.
+
+These values affect AI-controlled evaluation only. They do not change player movement speed, move data, collision, rollback, Arcade, Online, or Ranked rules. They are editable per character in the local Balance Lab, sanitized into deterministic drafts and replays, and included in effective character fingerprints and one-variable batch comparisons.
 
 ## Visual and audio reference contract
 

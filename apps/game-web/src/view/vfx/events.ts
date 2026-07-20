@@ -2,8 +2,6 @@ import type { PlayerId, RenderSnapshot, Vec2 } from '../../sim/types';
 import type { CombatVfxEvent } from './types';
 
 const EPSILON = 1e-6;
-const BOOST_FUEL_DELTA_THRESHOLD = 0.01;
-const BOOST_SPEED_THRESHOLD = 80;
 
 function subtractVec2(a: Vec2, b: Vec2): Vec2 {
   return {
@@ -46,7 +44,6 @@ function addPlayerEvent(
 }
 
 function collectPlayerEvents(previous: RenderSnapshot, current: RenderSnapshot, events: CombatVfxEvent[]): void {
-  const dt = Math.max(1 / 120, current.gameTime - previous.gameTime);
   const playerIds: PlayerId[] = ['P1', 'P2'];
   for (const playerId of playerIds) {
     const opponentId: PlayerId = playerId === 'P1' ? 'P2' : 'P1';
@@ -93,14 +90,20 @@ function collectPlayerEvents(previous: RenderSnapshot, current: RenderSnapshot, 
     if (breakTriggered) {
       addPlayerEvent(events, 'break', playerId, current, direction);
     }
-    const fuelSpent = previousPlayer.fuel - currentPlayer.fuel;
-    const frameSpeed = Math.hypot(moveDelta.x, moveDelta.y) / dt;
     const combatActionResolved = launchTriggered || clashTriggered || parryTriggered || dunkTriggered || specialTriggered || breakTriggered;
     const inBoostEligibleState = currentPlayer.helpless <= 0 && currentPlayer.recovering <= 0 && currentPlayer.parry <= 0;
+    const superBoostTriggered = !combatActionResolved
+      && inBoostEligibleState
+      && previousPlayer.superBoost <= EPSILON
+      && currentPlayer.superBoost > EPSILON;
+    if (superBoostTriggered) {
+      addPlayerEvent(events, 'super_boost', playerId, current, direction);
+    }
     const boostTriggered = !combatActionResolved
       && inBoostEligibleState
-      && fuelSpent >= BOOST_FUEL_DELTA_THRESHOLD
-      && frameSpeed >= BOOST_SPEED_THRESHOLD;
+      && !previousPlayer.boostActive
+      && currentPlayer.boostActive
+      && currentPlayer.superBoost <= EPSILON;
     if (boostTriggered) {
       addPlayerEvent(events, 'boost', playerId, current, direction);
     }

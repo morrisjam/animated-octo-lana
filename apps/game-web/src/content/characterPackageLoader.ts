@@ -205,6 +205,7 @@ function toCharacterDefinition(path: string, payload: unknown): CharacterDefinit
       blurb: parsed.blurb,
       mechanicsTag: parsed.mechanicsTag,
       stats: parsed.stats,
+      ai: parsed.ai,
       visuals: parsed.visuals,
       audio: parsed.audio,
       moves: parsed.moves,

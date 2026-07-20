@@ -97,6 +97,8 @@ const PLAYER_INPUT_KEYS = [
 const ZERO_DEFAULT_TUNING_KEYS = [
   'postControlCounterLaunchClashGraceSeconds',
   'combatBoostReacquireDelaySeconds',
+  'committedLocomotionInputAuthority',
+  'ordinaryBoostAccelerationSeconds',
 ] as const;
 
 const GAME_TUNING_KEYS = [
@@ -104,10 +106,12 @@ const GAME_TUNING_KEYS = [
   'playerMoveAccel',
   'playerVelocityDamping',
   'actionRecoveryControlMultiplier',
+  'committedLocomotionInputAuthority',
   'combatBoostReacquireDelaySeconds',
   'helplessVelocityDamping',
   'helplessReleaseSpeedRatio',
   'boostHoldSpeed',
+  'ordinaryBoostAccelerationSeconds',
   'superBoostHoldSpeed',
   'superBoostSteerLerp',
   'superBoostVelocityBlend',

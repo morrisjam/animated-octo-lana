@@ -157,7 +157,7 @@ Use Blender for:
 
 Prefer a checked-in headless export script over a manual-only sequence. Pin the Blender version, scene units, camera, frame list, colour management, transparent background, output dimensions, and naming convention; run exports with `blender --background --python <script>`. Treat generated files as candidates until the presentation-manifest MIME, decoded-dimension, frame-bound, anchor, readiness, and memory-budget checks pass. Blender access improves repeatability and visual control, but it never becomes a simulation or rollback dependency.
 
-The first implemented Blender lane is `art/source/blender/wormhole_arena_lip_v1.py`. It deterministically writes a review `.blend`, PNG, metrics JSON, and embedded runtime GLB. The game uses a constrained static GLB parser rather than shipping Blender or a general-purpose model loader; `stage:model-validate` verifies the runtime file against its generated metrics and manifest ceilings before every production build.
+The first implemented Blender lane is `art/source/blender/wormhole_arena_lip_v1.py`; `art/source/blender/wormhole_arena_depth_v2.py` extends its pinned helpers with broken depth bands and helical shaft rails while preserving the V1 output as a rollback asset. `art/source/blender/wormhole_arena_funnel_v3.py` is a separate Blender `5.2.0 LTS` experiment that replaces flat concentric props with an open, fragmented funnel. `art/source/blender/wormhole_arena_rift_v4.py` preserves that candidate and replaces authored circular depth cues with converging longitudinal ribs and an asymmetric combat shelf. Each source writes a review `.blend`, PNG, metrics JSON, and embedded runtime GLB. Repeated V2 and V4 runs produce byte-identical release GLB and metrics files plus identical decoded PNG pixels; Blender may still rewrite non-release `.blend` and PNG container metadata. The game uses a constrained static GLB parser rather than shipping Blender or a general-purpose model loader; `stage:model-validate` runs that exact production parser for every authored stage model and verifies each runtime file against its generated metrics, SHA-256, and manifest ceilings before every production build.
 
 ### Aseprite or equivalent
 
@@ -248,6 +248,8 @@ Acceptance criteria:
 ## Lane B: 2D fighter sprite pipeline
 
 Use this when the final in-game fighter is sprite-based or hybrid.
+
+After regenerating an authored character atlas, run `npm run character:sprite-source-validate` from the repository root. This local check does not invoke Blender. It verifies the checked-in source hashes, concept reference, review frames, PNG dimensions, runtime hashes, presentation links, and asset budgets; production and Steam builds run the same check automatically.
 
 ### Option 1: Controlled production from a master design
 
@@ -549,8 +551,8 @@ You: merge them into one repo-local asset plan and call out risks.
 
 ## Immediate next actions for Gravity Well
 
-1. Replace the temporary Vanguard and Duelist SVG atlases with reviewed transparent production atlases.
-2. Add one reproducible source workflow under `art/workflows/comfyui` or the selected generation tool.
+1. Review the active Vanguard and Duelist transparent proxy atlases in motion and decide where a hand-cleaned production pass is required.
+2. Reuse the reproducible concept-to-Blender source lane for future fighters; keep ComfyUI or direct generation focused on reference exploration rather than independent final frames.
 3. Produce one reviewed VFX flipbook and wire it through the existing VFX preset runtime.
 4. Profile the shader-driven wormhole at alpha target resolution and hardware.
 5. Capture gameplay-scale visual review images for both fighters and every required clip.

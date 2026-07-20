@@ -1,5 +1,8 @@
 import type { MatchSessionView } from '../matchmaking/queueService';
-import type { EnqueueRankedTerminalDecisionInput } from './terminalDecisionStore';
+import {
+  RANKED_SESSION_TRANSACTION_LOCK_SQL,
+  type EnqueueRankedTerminalDecisionInput,
+} from './terminalDecisionStore';
 import {
   settleRankedMatch,
   type RankedSettlementConfig,
@@ -149,7 +152,7 @@ export async function processRankedAuthoritativeResolution(
   const client = await database.connect();
   try {
     await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [candidate.sessionId]);
+    await client.query(RANKED_SESSION_TRANSACTION_LOCK_SQL, [candidate.sessionId]);
     const resolutionResult = await client.query(
       `
       INSERT INTO ranked_authoritative_resolutions(

@@ -146,6 +146,42 @@ export const COMBAT_VFX_PRESET_LIBRARY: CombatVfxPresetMap = {
       gain: 0.03,
     },
   },
+  super_boost_core: {
+    particles: {
+      color: '#6d8cff',
+      lifetimeSeconds: 0.3,
+      startScale: 1.8,
+      endScale: 5.2,
+      startOpacity: 0.86,
+      endOpacity: 0.06,
+      driftAlongDirection: 16,
+      driftVertical: 1,
+    },
+    trail: {
+      color: '#6d8cff',
+      width: 0.82,
+      length: 9.5,
+      lifetimeSeconds: 0.24,
+      startOpacity: 0.76,
+      endOpacity: 0.04,
+    },
+    flash: {
+      color: '#9aaaff',
+      radius: 2.7,
+      thickness: 0.22,
+      lifetimeSeconds: 0.24,
+      startScale: 0.9,
+      endScale: 2.5,
+      startOpacity: 0.82,
+      endOpacity: 0.05,
+    },
+    sound: {
+      waveform: 'sawtooth',
+      frequencyHz: 190,
+      durationSeconds: 0.14,
+      gain: 0.026,
+    },
+  },
   parry_guard: {
     particles: {
       color: '#b7fff5',
@@ -394,6 +430,7 @@ export const COMBAT_VFX_PRESET_LIBRARY: CombatVfxPresetMap = {
 
 export const COMBAT_VFX_EVENT_BINDINGS: Record<CombatVfxEventType, string> = {
   boost: 'boost_core',
+  super_boost: 'super_boost_core',
   launch: 'launch_strike',
   clash: 'clash_burst',
   parry: 'parry_guard',

@@ -22,6 +22,19 @@ import type { GameTuning } from './types';
 
 export const AI_BATCH_RULE_SNAPSHOT_SCHEMA_VERSION = 'gw.ai-batch-rule-snapshot.v1' as const;
 
+const MIGRATABLE_AI_BEHAVIOR_TUNING_SCHEMAS = new Set([
+  'gw.ai-behavior-tuning.v5',
+  'gw.ai-behavior-tuning.v6',
+  'gw.ai-behavior-tuning.v7',
+  'gw.ai-behavior-tuning.v8',
+  'gw.ai-behavior-tuning.v9',
+  'gw.ai-behavior-tuning.v10',
+  'gw.ai-behavior-tuning.v11',
+  'gw.ai-behavior-tuning.v12',
+  'gw.ai-behavior-tuning.v13',
+  'gw.ai-behavior-tuning.v14',
+]);
+
 export interface AiBatchRuleSnapshot {
   schemaVersion: typeof AI_BATCH_RULE_SNAPSHOT_SCHEMA_VERSION;
   fingerprint: string;
@@ -44,6 +57,21 @@ function fingerprintSnapshotRules(
     schemaVersion: AI_BATCH_RULE_SNAPSHOT_SCHEMA_VERSION,
     tuning: createGameTuningFingerprintInput(tuning),
     characterBalanceOverrides,
+    aiBehaviorTuning,
+  });
+}
+
+function fingerprintStoredSnapshotRules(
+  tuning: GameTuning,
+  characterBalanceOverrides: CharacterBalanceOverrides,
+  aiBehaviorTuning: Record<string, unknown>,
+): string {
+  return fingerprintDeterministicValue({
+    schemaVersion: AI_BATCH_RULE_SNAPSHOT_SCHEMA_VERSION,
+    tuning: createGameTuningFingerprintInput(sanitiseTuning(tuning)),
+    characterBalanceOverrides: sanitiseCharacterBalanceOverrides(
+      characterBalanceOverrides,
+    ),
     aiBehaviorTuning,
   });
 }
@@ -97,7 +125,20 @@ export function parseAiBatchRuleSnapshot(value: unknown): AiBatchRuleSnapshot | 
     record.characterBalanceOverrides as CharacterBalanceOverrides,
     record.aiBehaviorTuning as AiBehaviorTuning,
   );
-  return snapshot.fingerprint === record.fingerprint ? snapshot : null;
+  if (snapshot.fingerprint === record.fingerprint) {
+    return snapshot;
+  }
+
+  const storedAiBehavior = record.aiBehaviorTuning as Record<string, unknown>;
+  const storedAiBehaviorSchema = storedAiBehavior.schemaVersion;
+  const historicalFingerprintMatches = typeof storedAiBehaviorSchema === 'string'
+    && MIGRATABLE_AI_BEHAVIOR_TUNING_SCHEMAS.has(storedAiBehaviorSchema)
+    && fingerprintStoredSnapshotRules(
+      record.tuning as GameTuning,
+      record.characterBalanceOverrides as CharacterBalanceOverrides,
+      storedAiBehavior,
+    ) === record.fingerprint;
+  return historicalFingerprintMatches ? snapshot : null;
 }
 
 export function compareAiBatchRuleSnapshots(

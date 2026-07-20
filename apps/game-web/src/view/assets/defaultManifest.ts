@@ -16,6 +16,39 @@ export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
       },
     },
     {
+      id: 'wormhole_arena_depth_v2',
+      src: '/assets/stages/wormhole/wormhole-arena-depth-v2.glb',
+      contentTypes: ['model/gltf-binary'],
+      readiness: 'prototype',
+      budget: {
+        estimatedBytes: 132 * 1024,
+        estimatedTriangles: 6_500,
+        estimatedVertices: 3_600,
+      },
+    },
+    {
+      id: 'wormhole_arena_funnel_v3',
+      src: '/assets/stages/wormhole/wormhole-arena-funnel-v3.glb',
+      contentTypes: ['model/gltf-binary'],
+      readiness: 'prototype',
+      budget: {
+        estimatedBytes: 64 * 1024,
+        estimatedTriangles: 1_500,
+        estimatedVertices: 1_800,
+      },
+    },
+    {
+      id: 'wormhole_arena_rift_v4',
+      src: '/assets/stages/wormhole/wormhole-arena-rift-v4.glb',
+      contentTypes: ['model/gltf-binary'],
+      readiness: 'prototype',
+      budget: {
+        estimatedBytes: 64 * 1024,
+        estimatedTriangles: 1_500,
+        estimatedVertices: 1_800,
+      },
+    },
+    {
       id: 'fighter_placeholder_model',
       src: 'data:application/octet-stream;base64,AA==',
       budget: {

@@ -50,7 +50,12 @@ import {
   type AiFlowDesignerBriefComparison,
 } from '../src/sim/aiFlowDesignerBrief';
 import {
+  MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION,
+  MATCH_TELEMETRY_SCHEMA_VERSION,
+  PREVIOUS_MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION,
+  PREVIOUS_MATCH_TELEMETRY_SCHEMA_VERSION,
   aggregateMatchTelemetrySummaries,
+  type MatchTelemetryAggregateOrdinaryBoostCounterplaySummary,
   type MatchTelemetryAggregateSummary,
   type MatchTelemetrySummary,
 } from '../src/sim/matchTelemetry';
@@ -71,6 +76,8 @@ import {
   selectMostConstrainedBalanceLabControlReturn,
   type BalanceLabActionAcceptance,
   type BalanceLabCarriedReentryCause,
+  type BalanceLabControlReturnCausalFlow,
+  type BalanceLabControlReturnCausalRoleFlow,
   type BalanceLabDraft,
   type BalanceLabExchangeStatus,
   type BalanceLabInputAction,
@@ -81,7 +88,15 @@ import {
   type BalanceLabPostControlMovementIntent,
   type BalanceLabRuleChange,
 } from '../src/sim/balanceLab';
-import type { CombatAction, CombatDistanceTransitionContext } from '../src/sim/combatEventTelemetry';
+import {
+  COMBAT_CONTROL_RETURN_ACTIVE_ACTIONS,
+  COMBAT_CONTROL_RETURN_MOVEMENT_INTENTS,
+  COMBAT_CONTROL_RETURN_OUTCOMES,
+  COMBAT_ORDINARY_BOOST_OUTCOMES,
+  type CombatAction,
+  type CombatControlReturnOutcome,
+  type CombatDistanceTransitionContext,
+} from '../src/sim/combatEventTelemetry';
 import {
   fingerprintCharacterBalanceOverrides,
   resolveCharacterRulesFingerprint,
@@ -93,7 +108,7 @@ import {
   type AiRoundDecisionFlowSummary,
 } from '../src/sim/aiRoundSimulation';
 import { findFirstChecksumMismatch, runReplay } from '../src/sim/replay';
-import type { GameTuning } from '../src/sim/types';
+import type { GameTuning, PlayersById } from '../src/sim/types';
 
 interface CliOptions {
   gamesPerPairing: number;
@@ -203,6 +218,24 @@ interface AiMatchupFlowPlayerSummary {
   postControlCounterstepWindows: number;
   postControlCounterstepWindowsPerRound: number;
   postControlCounterstepSecondsPerRound: number;
+  postControlChaseLockWindows: number;
+  postControlChaseLockWindowsPerRound: number;
+  postControlChaseLockFrames: number;
+  postControlChaseLockSecondsPerRound: number;
+  postControlBoostSuppressionFrames: number;
+  postControlBoostSuppressionSecondsPerRound: number;
+  postControlDashSuppressionFrames: number;
+  postControlDashSuppressionSecondsPerRound: number;
+  postControlChaseLockConsumptions: number;
+  postControlChaseLockConsumptionsPerRound: number;
+  postControlRepeatDashWindows: number;
+  postControlRepeatDashWindowsPerRound: number;
+  postControlRepeatDashWeightFrames: number;
+  postControlRepeatDashWeightSecondsPerRound: number;
+  postControlRepeatDashConsumptions: number;
+  postControlRepeatDashConsumptionsPerRound: number;
+  postControlRepeatDashSelections: number;
+  postControlRepeatDashSelectionsPerRound: number;
   combatBoostLockFrames: number;
   combatBoostLockSecondsPerRound: number;
   combatBoostDelayFrames: number;
@@ -234,6 +267,7 @@ interface AiMatchupFlowPlayerSummary {
     sustainedResets: number;
     movementIntents: Record<BalanceLabPostControlMovementIntent, number>;
   }>;
+  controlReturnCausal: BalanceLabControlReturnCausalFlow | null;
   clashFirstActions: number;
   clashFirstActionsInPressure: number;
   clashFirstActionsWithinOneSecond: number;
@@ -357,6 +391,11 @@ interface AiMatchupNeutralExitFollowUpSummary {
   firstAcceptedActions: Record<CombatAction, number>;
 }
 
+interface AiMatchupOrdinaryBoostCounterplayPlayerSummary
+  extends MatchTelemetryAggregateOrdinaryBoostCounterplaySummary {
+  opportunitiesPerRound: number;
+}
+
 interface AiMatchupLoopStageEvidence {
   stageId: BalanceLabLoopStageId;
   label: string;
@@ -412,6 +451,7 @@ interface AiMatchupFlowSummary {
   };
   exchanges: AiMatchupExchangeSummary;
   neutralExitFollowUp: AiMatchupNeutralExitFollowUpSummary;
+  ordinaryBoostCounterplay: PlayersById<AiMatchupOrdinaryBoostCounterplayPlayerSummary>;
   roundsWithNoDunkStart: number;
   roundsWithLaunchHitsButNoDunkStart: number;
   players: {
@@ -446,6 +486,24 @@ interface BatchComparisonDelta {
   p2TacticalRepositionSelectionsPerRound: number | null;
   p1TacticalRepositionSecondsPerRound: number | null;
   p2TacticalRepositionSecondsPerRound: number | null;
+  p1PostControlChaseLockWindowsPerRound: number | null;
+  p2PostControlChaseLockWindowsPerRound: number | null;
+  p1PostControlChaseLockSecondsPerRound: number | null;
+  p2PostControlChaseLockSecondsPerRound: number | null;
+  p1PostControlBoostSuppressionSecondsPerRound: number | null;
+  p2PostControlBoostSuppressionSecondsPerRound: number | null;
+  p1PostControlDashSuppressionSecondsPerRound: number | null;
+  p2PostControlDashSuppressionSecondsPerRound: number | null;
+  p1PostControlChaseLockConsumptionsPerRound: number | null;
+  p2PostControlChaseLockConsumptionsPerRound: number | null;
+  p1PostControlRepeatDashWindowsPerRound: number | null;
+  p2PostControlRepeatDashWindowsPerRound: number | null;
+  p1PostControlRepeatDashWeightSecondsPerRound: number | null;
+  p2PostControlRepeatDashWeightSecondsPerRound: number | null;
+  p1PostControlRepeatDashConsumptionsPerRound: number | null;
+  p2PostControlRepeatDashConsumptionsPerRound: number | null;
+  p1PostControlRepeatDashSelectionsPerRound: number | null;
+  p2PostControlRepeatDashSelectionsPerRound: number | null;
   p1CombatBoostLockSecondsPerRound: number | null;
   p2CombatBoostLockSecondsPerRound: number | null;
   p1CombatBoostDelaySecondsPerRound: number | null;
@@ -489,6 +547,16 @@ interface BatchComparisonDelta {
   p2PostReturnResetRatioPoints: number | null;
   p1ControlReturnResetRatioPoints: number | null;
   p2ControlReturnResetRatioPoints: number | null;
+  p1ReturnerClosingSharePoints: number | null;
+  p2ReturnerClosingSharePoints: number | null;
+  p1OpponentClosedMoreRatioPoints: number | null;
+  p2OpponentClosedMoreRatioPoints: number | null;
+  p1SustainedExitRatioPoints: number | null;
+  p2SustainedExitRatioPoints: number | null;
+  p1ControlGrantedDistance: number | null;
+  p2ControlGrantedDistance: number | null;
+  p1MaximumControlReturnDistance: number | null;
+  p2MaximumControlReturnDistance: number | null;
   p1FirstActionDelaySeconds: number | null;
   p2FirstActionDelaySeconds: number | null;
   repeatClashRatioPoints: number | null;
@@ -511,7 +579,7 @@ interface BatchComparison {
 }
 
 interface BatchReport {
-  schemaVersion: 'gw.ai-matchup-batch.v18';
+  schemaVersion: 'gw.ai-matchup-batch.v24';
   generatedAt: string;
   characterRegistry: {
     schemaVersion: string;
@@ -539,6 +607,7 @@ interface BatchReport {
     fixedDt: number;
     roundsToWin: number;
     maximumRoundsPerSet: number;
+    roundSampling: 'fixed_rounds_v1';
     rules: { allowDunkWin: boolean };
   };
   balanceProfile: {
@@ -595,7 +664,7 @@ const DEFAULT_MAX_ROUND_SECONDS = 90;
 const DEFAULT_BASE_SEED = 0x10293847;
 const DEFAULT_PROFILE_ID = 'default';
 const ROUNDS_TO_WIN = 2;
-const MAX_ROUNDS_PER_SET = 5;
+const MAX_ROUNDS_PER_SET = 3;
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) {
@@ -766,8 +835,111 @@ function selectExchangeSequence(
   return [...sequences].sort(compare)[0] ?? null;
 }
 
+function aggregateControlReturnCausalFlows(
+  flows: readonly (BalanceLabControlReturnCausalFlow | null)[],
+): BalanceLabControlReturnCausalFlow | null {
+  if (flows.some((flow) => flow === null)) {
+    return null;
+  }
+  const available = flows as readonly BalanceLabControlReturnCausalFlow[];
+  const outcomes = Object.fromEntries(
+    COMBAT_CONTROL_RETURN_OUTCOMES.map((outcome) => [outcome, 0]),
+  ) as Record<CombatControlReturnOutcome, number>;
+  let windows = 0;
+  let controlGrantedInPressure = 0;
+  let safeAtGrant = 0;
+  let controlGrantedDistanceTotal = 0;
+  let maximumDistanceTotal = 0;
+  let returnedPlayerClosingDistance = 0;
+  let opponentClosingDistance = 0;
+  let returnedPlayerClosedMore = 0;
+  let opponentClosedMore = 0;
+  let balancedClosure = 0;
+  let returnedPlayerFirstActions = 0;
+  let opponentFirstActions = 0;
+  let returnedPlayerDominantApproachWindows = 0;
+  let opponentDominantApproachWindows = 0;
+  const createRole = (): BalanceLabControlReturnCausalRoleFlow => ({
+    dominantMovementIntents: Object.fromEntries([
+      ...COMBAT_CONTROL_RETURN_MOVEMENT_INTENTS,
+      'unobserved',
+    ].map((intent) => [intent, 0])) as BalanceLabControlReturnCausalRoleFlow['dominantMovementIntents'],
+    dominantActiveActions: Object.fromEntries([
+      ...COMBAT_CONTROL_RETURN_ACTIVE_ACTIONS,
+      'unobserved',
+    ].map((action) => [action, 0])) as BalanceLabControlReturnCausalRoleFlow['dominantActiveActions'],
+    firstAcceptedActions: Object.fromEntries([
+      ...BALANCE_LAB_CONTROL_RETURN_ACTIONS,
+      'none',
+    ].map((action) => [action, 0])) as BalanceLabControlReturnCausalRoleFlow['firstAcceptedActions'],
+  });
+  const roles = { returner: createRole(), opponent: createRole() };
+  for (const flow of available) {
+    windows += flow.windows;
+    controlGrantedInPressure += flow.controlGrantedInPressure;
+    safeAtGrant += flow.safeAtGrant;
+    controlGrantedDistanceTotal += flow.controlGrantedDistanceTotal;
+    maximumDistanceTotal += flow.maximumDistanceTotal;
+    returnedPlayerClosingDistance += flow.returnedPlayerClosingDistance;
+    opponentClosingDistance += flow.opponentClosingDistance;
+    returnedPlayerClosedMore += flow.returnedPlayerClosedMore;
+    opponentClosedMore += flow.opponentClosedMore;
+    balancedClosure += flow.balancedClosure;
+    returnedPlayerFirstActions += flow.returnedPlayerFirstActions;
+    opponentFirstActions += flow.opponentFirstActions;
+    returnedPlayerDominantApproachWindows += flow.returnedPlayerDominantApproachWindows;
+    opponentDominantApproachWindows += flow.opponentDominantApproachWindows;
+    for (const outcome of COMBAT_CONTROL_RETURN_OUTCOMES) {
+      outcomes[outcome] += flow.outcomes[outcome];
+    }
+    for (const roleId of ['returner', 'opponent'] as const) {
+      for (const intent of [...COMBAT_CONTROL_RETURN_MOVEMENT_INTENTS, 'unobserved'] as const) {
+        roles[roleId].dominantMovementIntents[intent]
+          += flow.roles[roleId].dominantMovementIntents[intent];
+      }
+      for (const action of [...COMBAT_CONTROL_RETURN_ACTIVE_ACTIONS, 'unobserved'] as const) {
+        roles[roleId].dominantActiveActions[action]
+          += flow.roles[roleId].dominantActiveActions[action];
+      }
+      for (const action of [...BALANCE_LAB_CONTROL_RETURN_ACTIONS, 'none'] as const) {
+        roles[roleId].firstAcceptedActions[action]
+          += flow.roles[roleId].firstAcceptedActions[action];
+      }
+    }
+  }
+  const totalClosingDistance = returnedPlayerClosingDistance + opponentClosingDistance;
+  return {
+    windows,
+    outcomes,
+    controlGrantedInPressure,
+    safeAtGrant,
+    controlGrantedDistanceTotal: roundMetric(controlGrantedDistanceTotal, 2),
+    maximumDistanceTotal: roundMetric(maximumDistanceTotal, 2),
+    averageControlGrantedDistance: windows > 0
+      ? roundMetric(controlGrantedDistanceTotal / windows, 2)
+      : null,
+    averageMaximumDistance: windows > 0
+      ? roundMetric(maximumDistanceTotal / windows, 2)
+      : null,
+    returnedPlayerClosingDistance: roundMetric(returnedPlayerClosingDistance, 2),
+    opponentClosingDistance: roundMetric(opponentClosingDistance, 2),
+    returnedPlayerClosingShare: totalClosingDistance > 0
+      ? roundMetric(returnedPlayerClosingDistance / totalClosingDistance, 3)
+      : null,
+    returnedPlayerClosedMore,
+    opponentClosedMore,
+    balancedClosure,
+    returnedPlayerFirstActions,
+    opponentFirstActions,
+    returnedPlayerDominantApproachWindows,
+    opponentDominantApproachWindows,
+    roles,
+  };
+}
+
 function buildAiMatchupFlowSummary(
   roundEvidence: AiMatchupRoundEvidence[],
+  ordinaryBoostCounterplay: PlayersById<MatchTelemetryAggregateOrdinaryBoostCounterplaySummary>,
 ): AiMatchupFlowSummary {
   const summaries = roundEvidence.map((round) => round.telemetry);
   const flowModels = summaries.map(buildBalanceLabFlowModel);
@@ -844,6 +1016,9 @@ function buildAiMatchupFlowSummary(
       (sum, flow) => sum + flow.players[playerId].controlReturn.controlReturns,
       0,
     );
+    const controlReturnCausal = aggregateControlReturnCausalFlows(
+      flowModels.map((flow) => flow.players[playerId].controlReturn.causal),
+    );
     const tacticalRepositionOpportunityFrames = decisionTotal(
       (player) => player.tacticalRepositionOpportunityFrames,
     );
@@ -861,6 +1036,33 @@ function buildAiMatchupFlowSummary(
     );
     const postControlCounterstepFrames = decisionTotal(
       (player) => player.postControlCounterstepFrames ?? 0,
+    );
+    const postControlChaseLockWindows = decisionTotal(
+      (player) => player.postControlChaseLockWindows ?? 0,
+    );
+    const postControlChaseLockFrames = decisionTotal(
+      (player) => player.postControlChaseLockFrames ?? 0,
+    );
+    const postControlBoostSuppressionFrames = decisionTotal(
+      (player) => player.postControlBoostSuppressionFrames ?? 0,
+    );
+    const postControlDashSuppressionFrames = decisionTotal(
+      (player) => player.postControlDashSuppressionFrames ?? 0,
+    );
+    const postControlChaseLockConsumptions = decisionTotal(
+      (player) => player.postControlChaseLockConsumptions ?? 0,
+    );
+    const postControlRepeatDashWindows = decisionTotal(
+      (player) => player.postControlRepeatDashWindows ?? 0,
+    );
+    const postControlRepeatDashWeightFrames = decisionTotal(
+      (player) => player.postControlRepeatDashWeightFrames ?? 0,
+    );
+    const postControlRepeatDashConsumptions = decisionTotal(
+      (player) => player.postControlRepeatDashConsumptions ?? 0,
+    );
+    const postControlRepeatDashSelections = decisionTotal(
+      (player) => player.postControlRepeatDashSelections ?? 0,
     );
     const combatBoostLockFrames = decisionTotal(
       (player) => player.combatBoostLockFrames ?? 0,
@@ -1165,6 +1367,51 @@ function buildAiMatchupFlowSummary(
         postControlCounterstepFrames * FIXED_DT / Math.max(1, summaries.length),
         2,
       ),
+      postControlChaseLockWindows,
+      postControlChaseLockWindowsPerRound: roundMetric(
+        postControlChaseLockWindows / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlChaseLockFrames,
+      postControlChaseLockSecondsPerRound: roundMetric(
+        postControlChaseLockFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlBoostSuppressionFrames,
+      postControlBoostSuppressionSecondsPerRound: roundMetric(
+        postControlBoostSuppressionFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlDashSuppressionFrames,
+      postControlDashSuppressionSecondsPerRound: roundMetric(
+        postControlDashSuppressionFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlChaseLockConsumptions,
+      postControlChaseLockConsumptionsPerRound: roundMetric(
+        postControlChaseLockConsumptions / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlRepeatDashWindows,
+      postControlRepeatDashWindowsPerRound: roundMetric(
+        postControlRepeatDashWindows / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlRepeatDashWeightFrames,
+      postControlRepeatDashWeightSecondsPerRound: roundMetric(
+        postControlRepeatDashWeightFrames * FIXED_DT / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlRepeatDashConsumptions,
+      postControlRepeatDashConsumptionsPerRound: roundMetric(
+        postControlRepeatDashConsumptions / Math.max(1, summaries.length),
+        2,
+      ),
+      postControlRepeatDashSelections,
+      postControlRepeatDashSelectionsPerRound: roundMetric(
+        postControlRepeatDashSelections / Math.max(1, summaries.length),
+        2,
+      ),
       combatBoostLockFrames,
       combatBoostLockSecondsPerRound: roundMetric(
         combatBoostLockFrames * FIXED_DT / Math.max(1, summaries.length),
@@ -1215,6 +1462,7 @@ function buildAiMatchupFlowSummary(
         3,
       ),
       firstAcceptedActions,
+      controlReturnCausal,
       clashFirstActions,
       clashFirstActionsInPressure,
       clashFirstActionsWithinOneSecond,
@@ -1598,6 +1846,22 @@ function buildAiMatchupFlowSummary(
         ),
       },
       firstAcceptedActions: neutralExitFirstAcceptedActions,
+    },
+    ordinaryBoostCounterplay: {
+      P1: {
+        ...ordinaryBoostCounterplay.P1,
+        opportunitiesPerRound: roundMetric(
+          ordinaryBoostCounterplay.P1.opportunities / Math.max(1, summaries.length),
+          2,
+        ),
+      },
+      P2: {
+        ...ordinaryBoostCounterplay.P2,
+        opportunitiesPerRound: roundMetric(
+          ordinaryBoostCounterplay.P2.opportunities / Math.max(1, summaries.length),
+          2,
+        ),
+      },
     },
     roundsWithNoDunkStart: summaries.filter((summary) => (
       summary.players.P1.dunkStarts + summary.players.P2.dunkStarts === 0
@@ -2005,20 +2269,14 @@ function simulateSet(
       p2RoundWins += 1;
     }
 
-    if (p1RoundWins >= ROUNDS_TO_WIN || p2RoundWins >= ROUNDS_TO_WIN) {
-      return {
-        winner: p1RoundWins > p2RoundWins ? 'P1' : 'P2',
-        roundsPlayed: round + 1,
-        totalFrames,
-        timeoutRounds,
-        telemetrySummaries,
-        flowEvidence,
-      };
-    }
   }
 
   return {
-    winner: null,
+    winner: p1RoundWins >= ROUNDS_TO_WIN && p1RoundWins > p2RoundWins
+      ? 'P1'
+      : p2RoundWins >= ROUNDS_TO_WIN && p2RoundWins > p1RoundWins
+        ? 'P2'
+        : null,
     roundsPlayed: telemetrySummaries.length,
     totalFrames,
     timeoutRounds,
@@ -2116,8 +2374,83 @@ function isFiniteMetric(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function isNonNegativeIntegerMetric(value: unknown): value is number {
+  return isFiniteMetric(value) && Number.isInteger(value) && value >= 0;
+}
+
+function isRoundedPerRoundMetric(
+  value: unknown,
+  rawValue: number,
+  rounds: number,
+  scale = 1,
+): value is number {
+  return isFiniteMetric(value)
+    && value >= 0
+    && value === roundMetric(rawValue * scale / rounds, 2);
+}
+
 function isNullableFiniteMetric(value: unknown): value is number | null {
   return value === null || isFiniteMetric(value);
+}
+
+function hasExactCountHistogram(
+  value: unknown,
+  keys: readonly string[],
+  expectedTotal: number,
+): value is Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const actualKeys = Object.keys(record).sort();
+  const expectedKeys = [...keys].sort();
+  if (
+    actualKeys.length !== expectedKeys.length
+    || actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    return false;
+  }
+  let total = 0;
+  for (const key of keys) {
+    const count = record[key];
+    if (!isNonNegativeIntegerMetric(count)) {
+      return false;
+    }
+    total += count;
+  }
+  return total === expectedTotal;
+}
+
+function hasControlReturnCausalRoleFlow(
+  value: unknown,
+  windows: number,
+  firstActions: number,
+  dominantApproachWindows: number,
+): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const role = value as Partial<BalanceLabControlReturnCausalRoleFlow>;
+  const movementIntents = role.dominantMovementIntents;
+  const activeActions = role.dominantActiveActions;
+  const firstAcceptedActions = role.firstAcceptedActions;
+  return hasExactCountHistogram(
+    movementIntents,
+    [...COMBAT_CONTROL_RETURN_MOVEMENT_INTENTS, 'unobserved'],
+    windows,
+  )
+    && hasExactCountHistogram(
+      activeActions,
+      [...COMBAT_CONTROL_RETURN_ACTIVE_ACTIONS, 'unobserved'],
+      windows,
+    )
+    && hasExactCountHistogram(
+      firstAcceptedActions,
+      [...BALANCE_LAB_CONTROL_RETURN_ACTIONS, 'none'],
+      windows,
+    )
+    && movementIntents.approach === dominantApproachWindows
+    && firstAcceptedActions.none === windows - firstActions;
 }
 
 function isComparableMatchSummary(value: unknown): value is MatchSummary {
@@ -2170,6 +2503,330 @@ function hasSharedAgencyTelemetry(summary: MatchSummary): boolean {
     && isFiniteMetric(agency?.maximumContactEpisodeSeconds);
 }
 
+function hasPostControlChaseLockTelemetry(summary: MatchSummary): boolean {
+  const rounds = summary.flow?.rounds;
+  if (!isNonNegativeIntegerMetric(rounds) || rounds <= 0) {
+    return false;
+  }
+  return (['P1', 'P2'] as const).every((playerId) => {
+    const player = summary.flow?.players?.[playerId] as Partial<AiMatchupFlowPlayerSummary>
+      | undefined;
+    if (!player) {
+      return false;
+    }
+    const windows = player.postControlChaseLockWindows;
+    const frames = player.postControlChaseLockFrames;
+    const boostFrames = player.postControlBoostSuppressionFrames;
+    const dashFrames = player.postControlDashSuppressionFrames;
+    const consumptions = player.postControlChaseLockConsumptions;
+    return isNonNegativeIntegerMetric(windows)
+      && isNonNegativeIntegerMetric(frames)
+      && isNonNegativeIntegerMetric(boostFrames)
+      && isNonNegativeIntegerMetric(dashFrames)
+      && isNonNegativeIntegerMetric(consumptions)
+      && windows <= frames
+      && boostFrames <= frames
+      && dashFrames <= frames
+      && consumptions <= windows
+      && isRoundedPerRoundMetric(
+        player.postControlChaseLockWindowsPerRound,
+        windows,
+        rounds,
+      )
+      && isRoundedPerRoundMetric(
+        player.postControlChaseLockSecondsPerRound,
+        frames,
+        rounds,
+        FIXED_DT,
+      )
+      && isRoundedPerRoundMetric(
+        player.postControlBoostSuppressionSecondsPerRound,
+        boostFrames,
+        rounds,
+        FIXED_DT,
+      )
+      && isRoundedPerRoundMetric(
+        player.postControlDashSuppressionSecondsPerRound,
+        dashFrames,
+        rounds,
+        FIXED_DT,
+      )
+      && isRoundedPerRoundMetric(
+        player.postControlChaseLockConsumptionsPerRound,
+        consumptions,
+        rounds,
+      );
+  });
+}
+
+function hasPostControlRepeatDashTelemetry(summary: MatchSummary): boolean {
+  const rounds = summary.flow?.rounds;
+  const framesSimulated = summary.telemetry?.framesSimulated;
+  if (
+    !isNonNegativeIntegerMetric(rounds)
+    || rounds <= 0
+    || !isNonNegativeIntegerMetric(framesSimulated)
+  ) {
+    return false;
+  }
+  return (['P1', 'P2'] as const).every((playerId) => {
+    const player = summary.flow?.players?.[playerId] as Partial<AiMatchupFlowPlayerSummary>
+      | undefined;
+    if (!player) {
+      return false;
+    }
+    const windows = player.postControlRepeatDashWindows;
+    const weightFrames = player.postControlRepeatDashWeightFrames;
+    const consumptions = player.postControlRepeatDashConsumptions;
+    const selections = player.postControlRepeatDashSelections;
+    return isNonNegativeIntegerMetric(windows)
+      && isNonNegativeIntegerMetric(weightFrames)
+      && isNonNegativeIntegerMetric(consumptions)
+      && isNonNegativeIntegerMetric(selections)
+      && windows <= framesSimulated
+      && weightFrames <= framesSimulated
+      && consumptions <= windows
+      && selections <= consumptions
+      && selections <= weightFrames
+      && (windows > 0 || weightFrames === 0)
+      && isRoundedPerRoundMetric(
+        player.postControlRepeatDashWindowsPerRound,
+        windows,
+        rounds,
+      )
+      && isRoundedPerRoundMetric(
+        player.postControlRepeatDashWeightSecondsPerRound,
+        weightFrames,
+        rounds,
+        FIXED_DT,
+      )
+      && isRoundedPerRoundMetric(
+        player.postControlRepeatDashConsumptionsPerRound,
+        consumptions,
+        rounds,
+      )
+      && isRoundedPerRoundMetric(
+        player.postControlRepeatDashSelectionsPerRound,
+        selections,
+        rounds,
+      );
+  });
+}
+
+function hasControlReturnCausalTelemetry(
+  summary: MatchSummary,
+  provenance: 'current' | 'previous',
+): boolean {
+  const expectedAggregateSchema = provenance === 'current'
+    ? MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION
+    : PREVIOUS_MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION;
+  const expectedMatchSchema = provenance === 'current'
+    ? MATCH_TELEMETRY_SCHEMA_VERSION
+    : PREVIOUS_MATCH_TELEMETRY_SCHEMA_VERSION;
+  if (
+    summary.telemetry.schemaVersion !== expectedAggregateSchema
+    || summary.telemetry.matchTelemetrySchemaVersion !== expectedMatchSchema
+  ) {
+    return false;
+  }
+  return (['P1', 'P2'] as const).every((playerId) => {
+    const player = summary.flow?.players?.[playerId] as Partial<AiMatchupFlowPlayerSummary>
+      | undefined;
+    const causal = player?.controlReturnCausal;
+    if (!player || !causal || !isNonNegativeIntegerMetric(causal.windows)) {
+      return false;
+    }
+    const outcomeTotal = COMBAT_CONTROL_RETURN_OUTCOMES.reduce((sum, outcome) => {
+      const value = causal.outcomes?.[outcome];
+      return isNonNegativeIntegerMetric(value) ? sum + value : Number.NaN;
+    }, 0);
+    const totalClosingDistance = causal.returnedPlayerClosingDistance
+      + causal.opponentClosingDistance;
+    return player.controlReturns === causal.windows
+      && outcomeTotal === causal.windows
+      && isNonNegativeIntegerMetric(causal.controlGrantedInPressure)
+      && isNonNegativeIntegerMetric(causal.safeAtGrant)
+      && causal.controlGrantedInPressure + causal.safeAtGrant === causal.windows
+      && isFiniteMetric(causal.controlGrantedDistanceTotal)
+      && causal.controlGrantedDistanceTotal >= 0
+      && isFiniteMetric(causal.maximumDistanceTotal)
+      && causal.maximumDistanceTotal >= causal.controlGrantedDistanceTotal
+      && isNullableFiniteMetric(causal.averageControlGrantedDistance)
+      && isNullableFiniteMetric(causal.averageMaximumDistance)
+      && (causal.windows > 0
+        ? causal.averageControlGrantedDistance !== null
+          && causal.averageControlGrantedDistance >= 0
+          && causal.averageControlGrantedDistance
+            === roundMetric(causal.controlGrantedDistanceTotal / causal.windows, 2)
+          && causal.averageMaximumDistance !== null
+          && causal.averageMaximumDistance >= causal.averageControlGrantedDistance
+          && causal.averageMaximumDistance
+            === roundMetric(causal.maximumDistanceTotal / causal.windows, 2)
+        : causal.averageControlGrantedDistance === null
+          && causal.averageMaximumDistance === null
+          && causal.controlGrantedDistanceTotal === 0
+          && causal.maximumDistanceTotal === 0)
+      && isFiniteMetric(causal.returnedPlayerClosingDistance)
+      && causal.returnedPlayerClosingDistance >= 0
+      && isFiniteMetric(causal.opponentClosingDistance)
+      && causal.opponentClosingDistance >= 0
+      && isNullableFiniteMetric(causal.returnedPlayerClosingShare)
+      && causal.returnedPlayerClosingShare === (totalClosingDistance > 0
+        ? roundMetric(causal.returnedPlayerClosingDistance / totalClosingDistance, 3)
+        : null)
+      && isNonNegativeIntegerMetric(causal.returnedPlayerClosedMore)
+      && isNonNegativeIntegerMetric(causal.opponentClosedMore)
+      && isNonNegativeIntegerMetric(causal.balancedClosure)
+      && causal.returnedPlayerClosedMore + causal.opponentClosedMore + causal.balancedClosure
+        === causal.windows
+      && isNonNegativeIntegerMetric(causal.returnedPlayerFirstActions)
+      && causal.returnedPlayerFirstActions <= causal.windows
+      && isNonNegativeIntegerMetric(causal.opponentFirstActions)
+      && causal.opponentFirstActions <= causal.windows
+      && isNonNegativeIntegerMetric(causal.returnedPlayerDominantApproachWindows)
+      && causal.returnedPlayerDominantApproachWindows <= causal.windows
+      && isNonNegativeIntegerMetric(causal.opponentDominantApproachWindows)
+      && causal.opponentDominantApproachWindows <= causal.windows
+      && hasControlReturnCausalRoleFlow(
+        causal.roles?.returner,
+        causal.windows,
+        causal.returnedPlayerFirstActions,
+        causal.returnedPlayerDominantApproachWindows,
+      )
+      && hasControlReturnCausalRoleFlow(
+        causal.roles?.opponent,
+        causal.windows,
+        causal.opponentFirstActions,
+        causal.opponentDominantApproachWindows,
+      );
+  });
+}
+
+function hasOrdinaryBoostCounterplayTelemetry(summary: MatchSummary): boolean {
+  if (
+    summary.telemetry.schemaVersion !== MATCH_TELEMETRY_AGGREGATE_SCHEMA_VERSION
+    || summary.telemetry.matchTelemetrySchemaVersion !== MATCH_TELEMETRY_SCHEMA_VERSION
+    || !summary.telemetry.ordinaryBoostCounterplay
+    || !summary.flow.ordinaryBoostCounterplay
+    || !isNonNegativeIntegerMetric(summary.flow.rounds)
+    || summary.flow.rounds <= 0
+  ) {
+    return false;
+  }
+  return (['P1', 'P2'] as const).every((playerId) => {
+    const telemetry = summary.telemetry.ordinaryBoostCounterplay[playerId];
+    const flow = summary.flow.ordinaryBoostCounterplay[playerId];
+    if (!telemetry || !flow) {
+      return false;
+    }
+    const opportunities = flow.opportunities;
+    const firstResponses = flow.firstResponses;
+    const superBoostResponses = flow.targetSuperBoostResponses;
+    const expectedResponseRatio = roundMetric(
+      firstResponses / Math.max(1, opportunities),
+      3,
+    );
+    const expectedSuperBoostRatio = roundMetric(
+      superBoostResponses / Math.max(1, opportunities),
+      3,
+    );
+    const { opportunitiesPerRound: _opportunitiesPerRound, ...flowTelemetry } = flow;
+    return isNonNegativeIntegerMetric(opportunities)
+      && isNonNegativeIntegerMetric(flow.completedOpportunities)
+      && flow.completedOpportunities <= opportunities
+      && isNonNegativeIntegerMetric(firstResponses)
+      && firstResponses <= opportunities
+      && isNonNegativeIntegerMetric(superBoostResponses)
+      && superBoostResponses <= opportunities
+      && hasExactCountHistogram(
+        flow.firstResponseActions,
+        [...BALANCE_LAB_CONTROL_RETURN_ACTIONS, 'none'],
+        opportunities,
+      )
+      && hasExactCountHistogram(
+        flow.outcomes,
+        COMBAT_ORDINARY_BOOST_OUTCOMES,
+        opportunities,
+      )
+      && flow.responseCoverageRatio === expectedResponseRatio
+      && flow.superBoostResponseRatio === expectedSuperBoostRatio
+      && isNullableFiniteMetric(flow.averageFirstResponseSeconds)
+      && isNullableFiniteMetric(flow.averageAvailableReactionSeconds)
+      && isNullableFiniteMetric(flow.averageStartDistance)
+      && (firstResponses > 0
+        ? flow.averageFirstResponseSeconds !== null
+          && flow.averageFirstResponseSeconds >= 0
+        : flow.averageFirstResponseSeconds === null)
+      && (opportunities > 0
+        ? flow.averageAvailableReactionSeconds !== null
+          && flow.averageAvailableReactionSeconds >= 0
+          && flow.averageStartDistance !== null
+          && flow.averageStartDistance >= 0
+        : flow.averageAvailableReactionSeconds === null
+          && flow.averageStartDistance === null)
+      && isRoundedPerRoundMetric(
+        flow.opportunitiesPerRound,
+        opportunities,
+        summary.flow.rounds,
+      )
+      && canonicalJson(flowTelemetry) === canonicalJson(telemetry);
+  });
+}
+
+function hasFixedRoundSampling(report: Partial<ComparableBatchReport>): boolean {
+  const gamesPerPairing = report.options?.gamesPerPairing;
+  const simulation = report.simulation;
+  if (
+    !Number.isInteger(gamesPerPairing)
+    || (gamesPerPairing ?? 0) <= 0
+    || simulation?.roundSampling !== 'fixed_rounds_v1'
+    || simulation.roundsToWin !== ROUNDS_TO_WIN
+    || simulation.maximumRoundsPerSet !== MAX_ROUNDS_PER_SET
+    || !Array.isArray(report.summaries)
+  ) {
+    return false;
+  }
+  const expectedRounds = (gamesPerPairing as number) * MAX_ROUNDS_PER_SET;
+  return report.summaries.every((summary) => (
+    summary.seeds.length === gamesPerPairing
+    && summary.averageRoundsPerSet === MAX_ROUNDS_PER_SET
+    && summary.telemetry.rounds === expectedRounds
+    && summary.flow.rounds === expectedRounds
+  ));
+}
+
+function hasLoopStageReasonBreakdown(summary: MatchSummary): boolean {
+  return BALANCE_LAB_LOOP_STAGE_IDS.every((stageId) => {
+    const stage = summary.flow.loopStages[stageId];
+    const reasons = stage.issueReasons;
+    if (!Array.isArray(reasons)) {
+      return false;
+    }
+    const seen = new Set<string>();
+    let watchRounds = 0;
+    let blockedRounds = 0;
+    for (const reason of reasons) {
+      if (
+        !reason
+        || typeof reason.reasonId !== 'string'
+        || !reason.reasonId.startsWith(`${stageId}.`)
+        || seen.has(reason.reasonId)
+        || !isNonNegativeIntegerMetric(reason.watchRounds)
+        || !isNonNegativeIntegerMetric(reason.blockedRounds)
+        || !isNonNegativeIntegerMetric(reason.rounds)
+        || reason.rounds !== reason.watchRounds + reason.blockedRounds
+        || reason.issueRatio !== roundMetric(reason.rounds / Math.max(1, stage.rounds))
+      ) {
+        return false;
+      }
+      seen.add(reason.reasonId);
+      watchRounds += reason.watchRounds;
+      blockedRounds += reason.blockedRounds;
+    }
+    return watchRounds === stage.watchRounds && blockedRounds === stage.blockedRounds;
+  });
+}
+
 function readComparableBatchReport(path: string): ComparableBatchReport {
   const absolutePath = resolve(process.cwd(), path);
   let parsed: unknown;
@@ -2188,6 +2845,12 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
     || report.schemaVersion === 'gw.ai-matchup-batch.v16'
     || report.schemaVersion === 'gw.ai-matchup-batch.v17'
     || report.schemaVersion === 'gw.ai-matchup-batch.v18'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v19'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v20'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v21'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v22'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v23'
+    || report.schemaVersion === 'gw.ai-matchup-batch.v24'
   )
     ? parseAiBatchRuleSnapshot(report.ruleSnapshot)
     : null;
@@ -2209,6 +2872,12 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
       && report.schemaVersion !== 'gw.ai-matchup-batch.v16'
       && report.schemaVersion !== 'gw.ai-matchup-batch.v17'
       && report.schemaVersion !== 'gw.ai-matchup-batch.v18'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v19'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v20'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v21'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v22'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v23'
+      && report.schemaVersion !== 'gw.ai-matchup-batch.v24'
     )
     || typeof report.generatedAt !== 'string'
     || !report.options
@@ -2224,7 +2893,13 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
         || report.schemaVersion === 'gw.ai-matchup-batch.v15'
         || report.schemaVersion === 'gw.ai-matchup-batch.v16'
         || report.schemaVersion === 'gw.ai-matchup-batch.v17'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v18')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v18'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v19'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v20'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v21'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v22'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v23'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v24')
       && typeof report.aiBaseProfilesFingerprint !== 'string'
     )
     || !Array.isArray(report.summaries)
@@ -2234,14 +2909,68 @@ function readComparableBatchReport(path: string): ComparableBatchReport {
         || report.schemaVersion === 'gw.ai-matchup-batch.v15'
         || report.schemaVersion === 'gw.ai-matchup-batch.v16'
         || report.schemaVersion === 'gw.ai-matchup-batch.v17'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v18')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v18'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v19'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v20'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v21'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v22'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v23'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v24')
       && report.summaries.some((summary) => !hasSharedAgencyTelemetry(summary))
+    )
+    || (
+      (report.schemaVersion === 'gw.ai-matchup-batch.v19'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v20'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v21'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v22'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v23'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v24')
+      && report.summaries.some((summary) => !hasPostControlChaseLockTelemetry(summary))
+    )
+    || (
+      (report.schemaVersion === 'gw.ai-matchup-batch.v20'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v21'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v22'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v23'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v24')
+      && !hasFixedRoundSampling(report)
+    )
+    || (
+      (report.schemaVersion === 'gw.ai-matchup-batch.v21'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v22')
+      && report.summaries.some((summary) => !hasControlReturnCausalTelemetry(summary, 'previous'))
+    )
+    || (
+      (report.schemaVersion === 'gw.ai-matchup-batch.v23'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v24')
+      && report.summaries.some((summary) => !hasControlReturnCausalTelemetry(summary, 'current'))
+    )
+    || (
+      (report.schemaVersion === 'gw.ai-matchup-batch.v22'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v23'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v24')
+      && report.summaries.some((summary) => !hasPostControlRepeatDashTelemetry(summary))
+    )
+    || (
+      (report.schemaVersion === 'gw.ai-matchup-batch.v23'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v24')
+      && report.summaries.some((summary) => !hasOrdinaryBoostCounterplayTelemetry(summary))
+    )
+    || (
+      report.schemaVersion === 'gw.ai-matchup-batch.v24'
+      && report.summaries.some((summary) => !hasLoopStageReasonBreakdown(summary))
     )
     || (
       (report.schemaVersion === 'gw.ai-matchup-batch.v15'
         || report.schemaVersion === 'gw.ai-matchup-batch.v16'
         || report.schemaVersion === 'gw.ai-matchup-batch.v17'
-        || report.schemaVersion === 'gw.ai-matchup-batch.v18')
+        || report.schemaVersion === 'gw.ai-matchup-batch.v18'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v19'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v20'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v21'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v22'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v23'
+        || report.schemaVersion === 'gw.ai-matchup-batch.v24')
       && !ruleSnapshot
     )
   ) {
@@ -2352,6 +3081,33 @@ function tacticalRepositionMetric(
   summary: MatchSummary,
   playerId: 'P1' | 'P2',
   key: 'tacticalRepositionSelectionsPerRound' | 'tacticalRepositionSecondsPerRound',
+): number | null {
+  const player = summary.flow.players[playerId] as Partial<AiMatchupFlowPlayerSummary>;
+  const value = player[key];
+  return isFiniteMetric(value) ? value : null;
+}
+
+function postControlChaseLockMetric(
+  summary: MatchSummary,
+  playerId: 'P1' | 'P2',
+  key: 'postControlChaseLockWindowsPerRound'
+    | 'postControlChaseLockSecondsPerRound'
+    | 'postControlBoostSuppressionSecondsPerRound'
+    | 'postControlDashSuppressionSecondsPerRound'
+    | 'postControlChaseLockConsumptionsPerRound',
+): number | null {
+  const player = summary.flow.players[playerId] as Partial<AiMatchupFlowPlayerSummary>;
+  const value = player[key];
+  return isFiniteMetric(value) ? value : null;
+}
+
+function postControlRepeatDashMetric(
+  summary: MatchSummary,
+  playerId: 'P1' | 'P2',
+  key: 'postControlRepeatDashWindowsPerRound'
+    | 'postControlRepeatDashWeightSecondsPerRound'
+    | 'postControlRepeatDashConsumptionsPerRound'
+    | 'postControlRepeatDashSelectionsPerRound',
 ): number | null {
   const player = summary.flow.players[playerId] as Partial<AiMatchupFlowPlayerSummary>;
   const value = player[key];
@@ -2518,6 +3274,30 @@ function averageFirstActionDelaySeconds(
   return isNullableFiniteMetric(value) ? value : null;
 }
 
+function controlReturnCausalMetric(
+  summary: MatchSummary,
+  playerId: 'P1' | 'P2',
+  metric: 'returnedPlayerClosingShare' | 'averageControlGrantedDistance' | 'averageMaximumDistance',
+): number | null {
+  const value = summary.flow.players[playerId].controlReturnCausal?.[metric];
+  return isNullableFiniteMetric(value) ? value : null;
+}
+
+function controlReturnCausalRatio(
+  summary: MatchSummary,
+  playerId: 'P1' | 'P2',
+  metric: 'opponent_closed_more' | 'sustained_exit',
+): number | null {
+  const causal = summary.flow.players[playerId].controlReturnCausal;
+  if (!causal || causal.windows <= 0) {
+    return null;
+  }
+  const count = metric === 'opponent_closed_more'
+    ? causal.opponentClosedMore
+    : causal.outcomes.sustained_exit;
+  return roundMetric(count / causal.windows, 3);
+}
+
 function repeatClashRatio(summary: MatchSummary): number | null {
   const value = summary.flow.repeatClashRatio;
   return isNullableFiniteMetric(value) ? value : null;
@@ -2658,7 +3438,17 @@ function buildBatchComparison(
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v15'
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v16'
     || baseline.schemaVersion === 'gw.ai-matchup-batch.v17'
-    || baseline.schemaVersion === 'gw.ai-matchup-batch.v18';
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v18'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v19'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v20'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v21'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v22'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v23'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v24';
+  const baselineHasControlReturnCausality = baseline.schemaVersion === 'gw.ai-matchup-batch.v21'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v22'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v23'
+    || baseline.schemaVersion === 'gw.ai-matchup-batch.v24';
   const candidateScenarioFingerprint = controlledScenarioFingerprint(candidate);
   const baselineScenarioFingerprint = controlledScenarioFingerprint(baseline);
   if (candidateScenarioFingerprint !== baselineScenarioFingerprint) {
@@ -2768,6 +3558,78 @@ function buildBatchComparison(
       p2TacticalRepositionSecondsPerRound: optionalMetricDelta(
         tacticalRepositionMetric(summary, 'P2', 'tacticalRepositionSecondsPerRound'),
         tacticalRepositionMetric(previous, 'P2', 'tacticalRepositionSecondsPerRound'),
+      ),
+      p1PostControlChaseLockWindowsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P1', 'postControlChaseLockWindowsPerRound'),
+        postControlChaseLockMetric(previous, 'P1', 'postControlChaseLockWindowsPerRound'),
+      ),
+      p2PostControlChaseLockWindowsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P2', 'postControlChaseLockWindowsPerRound'),
+        postControlChaseLockMetric(previous, 'P2', 'postControlChaseLockWindowsPerRound'),
+      ),
+      p1PostControlChaseLockSecondsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P1', 'postControlChaseLockSecondsPerRound'),
+        postControlChaseLockMetric(previous, 'P1', 'postControlChaseLockSecondsPerRound'),
+      ),
+      p2PostControlChaseLockSecondsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P2', 'postControlChaseLockSecondsPerRound'),
+        postControlChaseLockMetric(previous, 'P2', 'postControlChaseLockSecondsPerRound'),
+      ),
+      p1PostControlBoostSuppressionSecondsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P1', 'postControlBoostSuppressionSecondsPerRound'),
+        postControlChaseLockMetric(previous, 'P1', 'postControlBoostSuppressionSecondsPerRound'),
+      ),
+      p2PostControlBoostSuppressionSecondsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P2', 'postControlBoostSuppressionSecondsPerRound'),
+        postControlChaseLockMetric(previous, 'P2', 'postControlBoostSuppressionSecondsPerRound'),
+      ),
+      p1PostControlDashSuppressionSecondsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P1', 'postControlDashSuppressionSecondsPerRound'),
+        postControlChaseLockMetric(previous, 'P1', 'postControlDashSuppressionSecondsPerRound'),
+      ),
+      p2PostControlDashSuppressionSecondsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P2', 'postControlDashSuppressionSecondsPerRound'),
+        postControlChaseLockMetric(previous, 'P2', 'postControlDashSuppressionSecondsPerRound'),
+      ),
+      p1PostControlChaseLockConsumptionsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P1', 'postControlChaseLockConsumptionsPerRound'),
+        postControlChaseLockMetric(previous, 'P1', 'postControlChaseLockConsumptionsPerRound'),
+      ),
+      p2PostControlChaseLockConsumptionsPerRound: optionalMetricDelta(
+        postControlChaseLockMetric(summary, 'P2', 'postControlChaseLockConsumptionsPerRound'),
+        postControlChaseLockMetric(previous, 'P2', 'postControlChaseLockConsumptionsPerRound'),
+      ),
+      p1PostControlRepeatDashWindowsPerRound: optionalMetricDelta(
+        postControlRepeatDashMetric(summary, 'P1', 'postControlRepeatDashWindowsPerRound'),
+        postControlRepeatDashMetric(previous, 'P1', 'postControlRepeatDashWindowsPerRound'),
+      ),
+      p2PostControlRepeatDashWindowsPerRound: optionalMetricDelta(
+        postControlRepeatDashMetric(summary, 'P2', 'postControlRepeatDashWindowsPerRound'),
+        postControlRepeatDashMetric(previous, 'P2', 'postControlRepeatDashWindowsPerRound'),
+      ),
+      p1PostControlRepeatDashWeightSecondsPerRound: optionalMetricDelta(
+        postControlRepeatDashMetric(summary, 'P1', 'postControlRepeatDashWeightSecondsPerRound'),
+        postControlRepeatDashMetric(previous, 'P1', 'postControlRepeatDashWeightSecondsPerRound'),
+      ),
+      p2PostControlRepeatDashWeightSecondsPerRound: optionalMetricDelta(
+        postControlRepeatDashMetric(summary, 'P2', 'postControlRepeatDashWeightSecondsPerRound'),
+        postControlRepeatDashMetric(previous, 'P2', 'postControlRepeatDashWeightSecondsPerRound'),
+      ),
+      p1PostControlRepeatDashConsumptionsPerRound: optionalMetricDelta(
+        postControlRepeatDashMetric(summary, 'P1', 'postControlRepeatDashConsumptionsPerRound'),
+        postControlRepeatDashMetric(previous, 'P1', 'postControlRepeatDashConsumptionsPerRound'),
+      ),
+      p2PostControlRepeatDashConsumptionsPerRound: optionalMetricDelta(
+        postControlRepeatDashMetric(summary, 'P2', 'postControlRepeatDashConsumptionsPerRound'),
+        postControlRepeatDashMetric(previous, 'P2', 'postControlRepeatDashConsumptionsPerRound'),
+      ),
+      p1PostControlRepeatDashSelectionsPerRound: optionalMetricDelta(
+        postControlRepeatDashMetric(summary, 'P1', 'postControlRepeatDashSelectionsPerRound'),
+        postControlRepeatDashMetric(previous, 'P1', 'postControlRepeatDashSelectionsPerRound'),
+      ),
+      p2PostControlRepeatDashSelectionsPerRound: optionalMetricDelta(
+        postControlRepeatDashMetric(summary, 'P2', 'postControlRepeatDashSelectionsPerRound'),
+        postControlRepeatDashMetric(previous, 'P2', 'postControlRepeatDashSelectionsPerRound'),
       ),
       p1CombatBoostLockSecondsPerRound: optionalMetricDelta(
         combatBoostCommitmentMetric(summary, 'P1', 'combatBoostLockSecondsPerRound'),
@@ -2937,14 +3799,54 @@ function buildBatchComparison(
         postReturnResetRatio(summary, 'P2'),
         postReturnResetRatio(previous, 'P2'),
       ),
-      p1ControlReturnResetRatioPoints: ratioPointDelta(
+      p1ControlReturnResetRatioPoints: baselineHasControlReturnCausality ? ratioPointDelta(
         controlReturnResetRatio(summary, 'P1'),
         controlReturnResetRatio(previous, 'P1'),
-      ),
-      p2ControlReturnResetRatioPoints: ratioPointDelta(
+      ) : null,
+      p2ControlReturnResetRatioPoints: baselineHasControlReturnCausality ? ratioPointDelta(
         controlReturnResetRatio(summary, 'P2'),
         controlReturnResetRatio(previous, 'P2'),
-      ),
+      ) : null,
+      p1ReturnerClosingSharePoints: baselineHasControlReturnCausality ? ratioPointDelta(
+        controlReturnCausalMetric(summary, 'P1', 'returnedPlayerClosingShare'),
+        controlReturnCausalMetric(previous, 'P1', 'returnedPlayerClosingShare'),
+      ) : null,
+      p2ReturnerClosingSharePoints: baselineHasControlReturnCausality ? ratioPointDelta(
+        controlReturnCausalMetric(summary, 'P2', 'returnedPlayerClosingShare'),
+        controlReturnCausalMetric(previous, 'P2', 'returnedPlayerClosingShare'),
+      ) : null,
+      p1OpponentClosedMoreRatioPoints: baselineHasControlReturnCausality ? ratioPointDelta(
+        controlReturnCausalRatio(summary, 'P1', 'opponent_closed_more'),
+        controlReturnCausalRatio(previous, 'P1', 'opponent_closed_more'),
+      ) : null,
+      p2OpponentClosedMoreRatioPoints: baselineHasControlReturnCausality ? ratioPointDelta(
+        controlReturnCausalRatio(summary, 'P2', 'opponent_closed_more'),
+        controlReturnCausalRatio(previous, 'P2', 'opponent_closed_more'),
+      ) : null,
+      p1SustainedExitRatioPoints: baselineHasControlReturnCausality ? ratioPointDelta(
+        controlReturnCausalRatio(summary, 'P1', 'sustained_exit'),
+        controlReturnCausalRatio(previous, 'P1', 'sustained_exit'),
+      ) : null,
+      p2SustainedExitRatioPoints: baselineHasControlReturnCausality ? ratioPointDelta(
+        controlReturnCausalRatio(summary, 'P2', 'sustained_exit'),
+        controlReturnCausalRatio(previous, 'P2', 'sustained_exit'),
+      ) : null,
+      p1ControlGrantedDistance: baselineHasControlReturnCausality ? optionalMetricDelta(
+        controlReturnCausalMetric(summary, 'P1', 'averageControlGrantedDistance'),
+        controlReturnCausalMetric(previous, 'P1', 'averageControlGrantedDistance'),
+      ) : null,
+      p2ControlGrantedDistance: baselineHasControlReturnCausality ? optionalMetricDelta(
+        controlReturnCausalMetric(summary, 'P2', 'averageControlGrantedDistance'),
+        controlReturnCausalMetric(previous, 'P2', 'averageControlGrantedDistance'),
+      ) : null,
+      p1MaximumControlReturnDistance: baselineHasControlReturnCausality ? optionalMetricDelta(
+        controlReturnCausalMetric(summary, 'P1', 'averageMaximumDistance'),
+        controlReturnCausalMetric(previous, 'P1', 'averageMaximumDistance'),
+      ) : null,
+      p2MaximumControlReturnDistance: baselineHasControlReturnCausality ? optionalMetricDelta(
+        controlReturnCausalMetric(summary, 'P2', 'averageMaximumDistance'),
+        controlReturnCausalMetric(previous, 'P2', 'averageMaximumDistance'),
+      ) : null,
       p1FirstActionDelaySeconds: optionalMetricDelta(
         averageFirstActionDelaySeconds(summary, 'P1'),
         averageFirstActionDelaySeconds(previous, 'P1'),
@@ -3424,6 +4326,10 @@ function formatSummaryMarkdown(report: BatchReport): string {
   const formatLoopStage = (stage: BalanceLabLoopStageAggregate): string => (
     `${stage.blockedRounds} blocked / ${stage.watchRounds} watch / ${stage.observedRounds} observed / ${stage.waitingRounds} waiting (${(stage.issueRatio * 100).toFixed(1)}% flagged)`
   );
+  const formatLoopReason = (reasonId: string): string => {
+    const reason = reasonId.split('.').slice(1).join('.') || reasonId;
+    return reason.replace(/[._-]+/g, ' ');
+  };
 
   lines.push(
     '',
@@ -3443,6 +4349,25 @@ function formatSummaryMarkdown(report: BatchReport): string {
       lines.push(
         `| ${priority.rank} | **${priority.label}** | ${priority.blockedRounds} / ${priority.watchRounds} / ${priority.reachedRounds} (${(priority.issueRatio * 100).toFixed(1)}% flagged) | ${priority.flaggedPairings.length}/${report.designerBrief.pairingCount} | ${formatDesignerLevers(priority)} |`,
       );
+    }
+    const issueReasonRows = report.designerBrief.priorities.flatMap((priority) => (
+      (priority.issueReasons ?? []).map((reason) => ({ priority, reason }))
+    ));
+    if (issueReasonRows.length > 0) {
+      lines.push(
+        '',
+        '### Flag Reasons',
+        '',
+        'Stable reason IDs show why rounds were flagged. Counts come from every deterministic round, not only the representative replay.',
+        '',
+        '| Stage | Reason | Blocked / watch / flagged rounds | Share of reached rounds |',
+        '| --- | --- | ---: | ---: |',
+      );
+      for (const { priority, reason } of issueReasonRows) {
+        lines.push(
+          `| **${priority.label}** | <code>${reason.reasonId}</code> (${formatLoopReason(reason.reasonId)}) | ${reason.blockedRounds} / ${reason.watchRounds} / ${reason.rounds} | ${(reason.issueRatio * 100).toFixed(1)}% |`,
+        );
+      }
     }
     lines.push(
       '',
@@ -3494,6 +4419,43 @@ function formatSummaryMarkdown(report: BatchReport): string {
     const stages = summary.flow.loopStages;
     lines.push(
       `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${formatLoopStage(stages.neutral)} | ${formatLoopStage(stages.commitment)} | ${formatLoopStage(stages.exchange)} | ${formatLoopStage(stages.separation)} | ${formatLoopStage(stages.chase)} | ${formatLoopStage(stages.finish)} |`,
+    );
+  }
+
+  lines.push(
+    '',
+    '### Control-Return Causality',
+    '',
+    'Each two-second window starts when control is actually granted, not when helpless movement first ends. Closing distance is attributed separately to the returning fighter and opponent from their actual radial movement. This shows whether the returner rushed back in, the opponent erased the gap, both did, or neither did.',
+    '',
+    '| P1 | P2 | Difficulty | P1 granted / max | P1 closure returner / opponent | P1 closed more R / O / even | P1 role evidence R / O | P1 outcomes exit / brief / pressure relaunch / held / interrupted | P2 granted / max | P2 closure returner / opponent | P2 closed more R / O / even | P2 role evidence R / O | P2 outcomes exit / brief / pressure relaunch / held / interrupted |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const summary of report.summaries) {
+    const formatRole = (role: BalanceLabControlReturnCausalRoleFlow): string => {
+      const dominant = (values: Record<string, number>): string => {
+        const [entry] = Object.entries(values)
+          .filter(([, count]) => count > 0)
+          .sort((first, second) => second[1] - first[1] || first[0].localeCompare(second[0]));
+        return entry ? `${entry[0].replace(/_/g, ' ')} ${entry[1]}` : 'none';
+      };
+      return `move ${dominant(role.dominantMovementIntents)}; active ${dominant(role.dominantActiveActions)}; first ${dominant(role.firstAcceptedActions)}`;
+    };
+    const formatCausal = (player: AiMatchupFlowPlayerSummary): string[] => {
+      const causal = player.controlReturnCausal;
+      if (!causal || causal.windows === 0) {
+        return ['N/A', 'N/A', 'N/A', 'N/A', 'N/A'];
+      }
+      return [
+        `${causal.averageControlGrantedDistance?.toFixed(1) ?? 'N/A'} / ${causal.averageMaximumDistance?.toFixed(1) ?? 'N/A'} (${causal.controlGrantedInPressure} pressured / ${causal.safeAtGrant} safe)`,
+        `${causal.returnedPlayerClosingDistance.toFixed(1)} / ${causal.opponentClosingDistance.toFixed(1)} (${causal.returnedPlayerClosingShare === null ? 'N/A' : `${(causal.returnedPlayerClosingShare * 100).toFixed(1)}% R`})`,
+        `${causal.returnedPlayerClosedMore} / ${causal.opponentClosedMore} / ${causal.balancedClosure}`,
+        `R ${causal.returnedPlayerFirstActions} [${formatRole(causal.roles.returner)}] / O ${causal.opponentFirstActions} [${formatRole(causal.roles.opponent)}]`,
+        `${causal.outcomes.sustained_exit} / ${causal.outcomes.brief_reentry} / ${causal.outcomes.relaunched_in_pressure} / ${causal.outcomes.pressure_continued} / ${causal.outcomes.control_interrupted}`,
+      ];
+    };
+    lines.push(
+      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${[...formatCausal(summary.flow.players.P1), ...formatCausal(summary.flow.players.P2)].join(' | ')} |`,
     );
   }
 
@@ -3684,6 +4646,28 @@ function formatSummaryMarkdown(report: BatchReport): string {
 
   lines.push(
     '',
+    '### Ordinary Boost Counterplay',
+    '',
+    'A read opens only when an accepted ordinary Boost is close, closing, aimed through the defender, and the defender had agency on the preceding frame. Counts are grouped by defender and describe interaction shape, not matchup strength or win rate.',
+    '',
+    '| P1 | P2 | Difficulty | Defender | Reads / round | Answered | Paid Super Boost | Contact / conversion / clean pass | First response avg | Available reaction avg | Start distance avg | First-response mix |',
+    '| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
+  );
+  for (const summary of report.summaries) {
+    for (const playerId of ['P1', 'P2'] as const) {
+      const counterplay = summary.flow.ordinaryBoostCounterplay[playerId];
+      const actionMix = Object.entries(counterplay.firstResponseActions)
+        .filter(([, count]) => count > 0)
+        .map(([action, count]) => `${action.replace(/_/g, ' ')} ${count}`)
+        .join(', ') || 'N/A';
+      lines.push(
+        `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${playerId} (\`${playerId === 'P1' ? summary.p1 : summary.p2}\`) | ${counterplay.opportunities} / ${counterplay.opportunitiesPerRound.toFixed(2)} | ${formatRatio(counterplay.firstResponses, counterplay.opportunities, counterplay.responseCoverageRatio, 'no reads')} | ${formatRatio(counterplay.targetSuperBoostResponses, counterplay.opportunities, counterplay.superBoostResponseRatio, 'no reads')} | ${counterplay.outcomes.contact} / ${counterplay.outcomes.combat_conversion} / ${counterplay.outcomes.clean_pass} | ${formatSeconds(counterplay.averageFirstResponseSeconds, 'no accepted response')} | ${formatSeconds(counterplay.averageAvailableReactionSeconds, 'no reads')} | ${counterplay.averageStartDistance === null ? 'N/A' : counterplay.averageStartDistance.toFixed(2)} | ${actionMix} |`,
+      );
+    }
+  }
+
+  lines.push(
+    '',
     '### Pressure And Resolution',
     '',
     '| P1 | P2 | Difficulty | Contact | Point blank | Pressure | Pressure avg / longest p90 | Neutral window avg / longest avg | Exchange outcomes | Exchange resets | Exchange sec avg / p90 | Unresolved sec avg / max | Brief / live | All resets | Parry resets | Break resets | Launch pressure P1 / P2 | Return -> re-launch P1 / P2 | Helpless P1 / P2 | Zero fuel P1 / P2 |',
@@ -3739,6 +4723,40 @@ function formatSummaryMarkdown(report: BatchReport): string {
     );
     lines.push(
       `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${formatSelection(p1)} | ${p1.tacticalRepositionOpportunityFrames} | ${p1.tacticalRepositionSelectionsPerRound.toFixed(2)} | ${p1.tacticalRepositionSecondsPerRound.toFixed(2)}s | ${p1.postControlCounterstepWindowsPerRound.toFixed(2)} | ${p1.postControlCounterstepSecondsPerRound.toFixed(2)}s | ${p1.sustainedResetsAfterControlReturn}/${p1.controlReturnsInPressure} | ${formatSelection(p2)} | ${p2.tacticalRepositionOpportunityFrames} | ${p2.tacticalRepositionSelectionsPerRound.toFixed(2)} | ${p2.tacticalRepositionSecondsPerRound.toFixed(2)}s | ${p2.postControlCounterstepWindowsPerRound.toFixed(2)} | ${p2.postControlCounterstepSecondsPerRound.toFixed(2)}s | ${p2.sustainedResetsAfterControlReturn}/${p2.controlReturnsInPressure} |`,
+    );
+  }
+
+  lines.push(
+    '',
+    '### Post-Control Chase Lock',
+    '',
+    'These counters prove whether the zero-default chase-lock probe was exposed after natural or launch-break control returns. Once both fighters are action-ready, it suppresses inward ordinary Boost pressure and package-declared movement-dash specials while preserving steering, outward escape, tactical actions, Guard, projectiles, and paid Super Boost. Dash time records frames where a movement dash was otherwise ready; consumption records a tactical action or Super Boost ending the window. These are mechanism diagnostics, not a quality score.',
+    '',
+    '| P1 | P2 | Difficulty | P1 windows / round | P1 active sec / round | P1 boost-suppressed sec / round | P1 ready-dash sec / round | P1 consumptions / round | P2 windows / round | P2 active sec / round | P2 boost-suppressed sec / round | P2 ready-dash sec / round | P2 consumptions / round |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const summary of report.summaries) {
+    const p1 = summary.flow.players.P1;
+    const p2 = summary.flow.players.P2;
+    lines.push(
+      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${p1.postControlChaseLockWindowsPerRound.toFixed(2)} | ${p1.postControlChaseLockSecondsPerRound.toFixed(2)}s | ${p1.postControlBoostSuppressionSecondsPerRound.toFixed(2)}s | ${p1.postControlDashSuppressionSecondsPerRound.toFixed(2)}s | ${p1.postControlChaseLockConsumptionsPerRound.toFixed(2)} | ${p2.postControlChaseLockWindowsPerRound.toFixed(2)} | ${p2.postControlChaseLockSecondsPerRound.toFixed(2)}s | ${p2.postControlBoostSuppressionSecondsPerRound.toFixed(2)}s | ${p2.postControlDashSuppressionSecondsPerRound.toFixed(2)}s | ${p2.postControlChaseLockConsumptionsPerRound.toFixed(2)} |`,
+    );
+  }
+
+  lines.push(
+    '',
+    '### Post-Control Repeat Dash',
+    '',
+    'Pending windows count each newly armed repeat-dash opportunity after control returns. Weight time counts decision frames where the repeat-dash weight was actually applied; consumptions count resolved windows, and selections count resolutions that chose the weighted dash. These are deterministic mechanism diagnostics, not a quality score.',
+    '',
+    '| P1 | P2 | Difficulty | P1 windows / round | P1 weighted sec / round | P1 consumptions / round | P1 selections / round | P2 windows / round | P2 weighted sec / round | P2 consumptions / round | P2 selections / round |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const summary of report.summaries) {
+    const p1 = summary.flow.players.P1;
+    const p2 = summary.flow.players.P2;
+    lines.push(
+      `| \`${summary.p1}\` | \`${summary.p2}\` | \`${summary.difficulty}\` | ${p1.postControlRepeatDashWindowsPerRound.toFixed(2)} | ${p1.postControlRepeatDashWeightSecondsPerRound.toFixed(2)}s | ${p1.postControlRepeatDashConsumptionsPerRound.toFixed(2)} | ${p1.postControlRepeatDashSelectionsPerRound.toFixed(2)} | ${p2.postControlRepeatDashWindowsPerRound.toFixed(2)} | ${p2.postControlRepeatDashWeightSecondsPerRound.toFixed(2)}s | ${p2.postControlRepeatDashConsumptionsPerRound.toFixed(2)} | ${p2.postControlRepeatDashSelectionsPerRound.toFixed(2)} |`,
     );
   }
 
@@ -3943,6 +4961,21 @@ function formatSummaryMarkdown(report: BatchReport): string {
     lines.push('');
 
     lines.push(
+      '### Control-Return Causal Deltas',
+      '',
+      'Each value is candidate minus baseline from identical return windows. Returner closure share distinguishes the recovering fighter rushing back in from the opponent erasing the gap. Opponent-closed-more and sustained-exit values are percentage-point changes, not automatic quality scores. N/A means either report predates v21 evidence or had no applicable return window.',
+      '',
+      '| P1 | P2 | Difficulty | Returner closure share P1 / P2 pp | Opponent closed more P1 / P2 pp | Sustained exit P1 / P2 pp | Granted distance P1 / P2 | Maximum distance P1 / P2 |',
+      '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |',
+    );
+    for (const delta of report.comparison.deltas) {
+      lines.push(
+        `| \`${delta.pairing.p1}\` | \`${delta.pairing.p2}\` | \`${delta.pairing.difficulty}\` | ${formatSignedOptional(delta.p1ReturnerClosingSharePoints, 'pp')} / ${formatSignedOptional(delta.p2ReturnerClosingSharePoints, 'pp')} | ${formatSignedOptional(delta.p1OpponentClosedMoreRatioPoints, 'pp')} / ${formatSignedOptional(delta.p2OpponentClosedMoreRatioPoints, 'pp')} | ${formatSignedOptional(delta.p1SustainedExitRatioPoints, 'pp')} / ${formatSignedOptional(delta.p2SustainedExitRatioPoints, 'pp')} | ${formatSignedOptional(delta.p1ControlGrantedDistance)} / ${formatSignedOptional(delta.p2ControlGrantedDistance)} | ${formatSignedOptional(delta.p1MaximumControlReturnDistance)} / ${formatSignedOptional(delta.p2MaximumControlReturnDistance)} |`,
+      );
+    }
+    lines.push('');
+
+    lines.push(
       '### Tactical Reposition Deltas',
       '',
       'Each value is candidate minus baseline. It describes how much the candidate mechanism was actually selected and how long it occupied the controller; neither sign is an acceptance score. N/A means the baseline predates deterministic reposition counters.',
@@ -3953,6 +4986,36 @@ function formatSummaryMarkdown(report: BatchReport): string {
     for (const delta of report.comparison.deltas) {
       lines.push(
         `| \`${delta.pairing.p1}\` | \`${delta.pairing.p2}\` | \`${delta.pairing.difficulty}\` | ${formatSignedOptional(delta.p1TacticalRepositionSelectionsPerRound)} | ${formatSignedOptional(delta.p2TacticalRepositionSelectionsPerRound)} | ${formatSignedOptional(delta.p1TacticalRepositionSecondsPerRound, 's')} | ${formatSignedOptional(delta.p2TacticalRepositionSecondsPerRound, 's')} |`,
+      );
+    }
+    lines.push('');
+
+    lines.push(
+      '### Post-Control Chase Lock Deltas',
+      '',
+      'Each value is candidate minus baseline. It proves exposure to the zero-default chase-lock mechanism and distinguishes ordinary-Boost suppression from package-declared movement-dash availability; neither sign is an acceptance score. N/A means the baseline predates decision-flow v4 counters.',
+      '',
+      '| P1 | P2 | Difficulty | P1 windows / round | P2 windows / round | P1 active sec / round | P2 active sec / round | P1 boost-suppressed sec / round | P2 boost-suppressed sec / round | P1 ready-dash sec / round | P2 ready-dash sec / round | P1 consumptions / round | P2 consumptions / round |',
+      '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    );
+    for (const delta of report.comparison.deltas) {
+      lines.push(
+        `| \`${delta.pairing.p1}\` | \`${delta.pairing.p2}\` | \`${delta.pairing.difficulty}\` | ${formatSignedOptional(delta.p1PostControlChaseLockWindowsPerRound)} | ${formatSignedOptional(delta.p2PostControlChaseLockWindowsPerRound)} | ${formatSignedOptional(delta.p1PostControlChaseLockSecondsPerRound, 's')} | ${formatSignedOptional(delta.p2PostControlChaseLockSecondsPerRound, 's')} | ${formatSignedOptional(delta.p1PostControlBoostSuppressionSecondsPerRound, 's')} | ${formatSignedOptional(delta.p2PostControlBoostSuppressionSecondsPerRound, 's')} | ${formatSignedOptional(delta.p1PostControlDashSuppressionSecondsPerRound, 's')} | ${formatSignedOptional(delta.p2PostControlDashSuppressionSecondsPerRound, 's')} | ${formatSignedOptional(delta.p1PostControlChaseLockConsumptionsPerRound)} | ${formatSignedOptional(delta.p2PostControlChaseLockConsumptionsPerRound)} |`,
+      );
+    }
+    lines.push('');
+
+    lines.push(
+      '### Post-Control Repeat Dash Deltas',
+      '',
+      'Each value is candidate minus baseline. The columns separate opportunity creation, applied weighting, resolved windows, and actual repeat-dash selections. N/A means the baseline predates decision-flow v5 counters.',
+      '',
+      '| P1 | P2 | Difficulty | P1 windows / round | P2 windows / round | P1 weighted sec / round | P2 weighted sec / round | P1 consumptions / round | P2 consumptions / round | P1 selections / round | P2 selections / round |',
+      '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    );
+    for (const delta of report.comparison.deltas) {
+      lines.push(
+        `| \`${delta.pairing.p1}\` | \`${delta.pairing.p2}\` | \`${delta.pairing.difficulty}\` | ${formatSignedOptional(delta.p1PostControlRepeatDashWindowsPerRound)} | ${formatSignedOptional(delta.p2PostControlRepeatDashWindowsPerRound)} | ${formatSignedOptional(delta.p1PostControlRepeatDashWeightSecondsPerRound, 's')} | ${formatSignedOptional(delta.p2PostControlRepeatDashWeightSecondsPerRound, 's')} | ${formatSignedOptional(delta.p1PostControlRepeatDashConsumptionsPerRound)} | ${formatSignedOptional(delta.p2PostControlRepeatDashConsumptionsPerRound)} | ${formatSignedOptional(delta.p1PostControlRepeatDashSelectionsPerRound)} | ${formatSignedOptional(delta.p2PostControlRepeatDashSelectionsPerRound)} |`,
       );
     }
     lines.push('');
@@ -4093,7 +5156,11 @@ function run(): void {
         }
       }
 
-      const flow = buildAiMatchupFlowSummary(flowEvidence);
+      const telemetry = aggregateMatchTelemetrySummaries(telemetrySummaries);
+      const flow = buildAiMatchupFlowSummary(
+        flowEvidence,
+        telemetry.ordinaryBoostCounterplay,
+      );
       if (flow.timeoutRounds !== totalRoundTimeouts) {
         throw new Error(
           `Flow timeout count mismatch for ${pairing.p1} vs ${pairing.p2}: simulation=${totalRoundTimeouts}, telemetry=${flow.timeoutRounds}.`,
@@ -4112,7 +5179,7 @@ function run(): void {
         totalRoundTimeouts,
         averageSetSeconds: (totalFrames / cli.gamesPerPairing) * FIXED_DT,
         averageRoundsPerSet: totalRoundsPlayed / cli.gamesPerPairing,
-        telemetry: aggregateMatchTelemetrySummaries(telemetrySummaries),
+        telemetry,
         flow,
       });
     }
@@ -4132,7 +5199,7 @@ function run(): void {
   })));
 
   const report: BatchReport = {
-    schemaVersion: 'gw.ai-matchup-batch.v18',
+    schemaVersion: 'gw.ai-matchup-batch.v24',
     generatedAt: new Date().toISOString(),
     characterRegistry: {
       schemaVersion: CHARACTER_REGISTRY_SCHEMA_VERSION,
@@ -4160,6 +5227,7 @@ function run(): void {
       fixedDt: FIXED_DT,
       roundsToWin: ROUNDS_TO_WIN,
       maximumRoundsPerSet: MAX_ROUNDS_PER_SET,
+      roundSampling: 'fixed_rounds_v1',
       rules: { allowDunkWin: true },
     },
     balanceProfile: {

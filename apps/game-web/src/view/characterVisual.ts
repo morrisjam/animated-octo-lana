@@ -10,8 +10,9 @@ import {
   getSpriteAnimationSets,
   resolveSpriteAnimationSet,
   resolveSpriteClip,
-  resolveSpriteFrame,
+  resolveSpriteFrameSelection,
   type SpriteAnimationSet,
+  type SpriteAtlasSheet,
   type SpriteClipId,
 } from './sprites/atlasDefinitions';
 
@@ -54,8 +55,10 @@ interface SpriteVisualRuntime {
   contactShadow: THREE.Mesh;
   groundGlow: THREE.Mesh;
   clipId: SpriteClipId;
+  sheetId: string;
   clipStartedAt: number;
   phase: number;
+  sheetTextures: Map<string, { body: THREE.Texture; rim: THREE.Texture }>;
 }
 
 export type RequiredPackagedAtlasRuntimeState = 'loading' | 'ready' | 'failed';
@@ -70,7 +73,7 @@ export interface RequiredPackagedAtlasRuntimeSnapshot {
 }
 
 interface SpriteAtlasRuntimeRecord {
-  animationSet: SpriteAnimationSet;
+  sheet: SpriteAtlasSheet;
   state: RequiredPackagedAtlasRuntimeState;
   image: HTMLImageElement | null;
   error: Error | null;
@@ -80,10 +83,11 @@ interface SpriteAtlasRuntimeRecord {
 
 const SPRITE_TEXTURE_CACHE = new Map<string, THREE.Texture>();
 const SPRITE_ATLAS_IMAGE_CACHE = new Map<string, Promise<HTMLImageElement>>();
-const REQUIRED_PACKAGED_SPRITE_ANIMATION_SETS = getSpriteAnimationSets()
+const REQUIRED_PACKAGED_SPRITE_SHEETS = getSpriteAnimationSets()
+  .flatMap((animationSet) => Object.values(animationSet.sheets))
   .sort((left, right) => left.id.localeCompare(right.id));
-const REQUIRED_PACKAGED_SPRITE_ANIMATION_SET_IDS = REQUIRED_PACKAGED_SPRITE_ANIMATION_SETS
-  .map((animationSet) => animationSet.id);
+const REQUIRED_PACKAGED_SPRITE_SHEET_IDS = REQUIRED_PACKAGED_SPRITE_SHEETS
+  .map((sheet) => sheet.id);
 const SPRITE_ATLAS_RUNTIME_BY_ID = new Map<string, SpriteAtlasRuntimeRecord>();
 let requiredPackagedAtlasRuntimeReady: Promise<RequiredPackagedAtlasRuntimeSnapshot> | null = null;
 
@@ -285,26 +289,26 @@ function configureAtlasTexture(texture: THREE.Texture): THREE.Texture {
   return texture;
 }
 
-function createFallbackAtlasTexture(animationSet: SpriteAnimationSet): THREE.Texture {
+function createFallbackAtlasTexture(sheet: SpriteAtlasSheet): THREE.Texture {
   if (typeof document !== 'undefined') {
     const canvas = document.createElement('canvas');
-    canvas.width = animationSet.atlasWidthPixels;
-    canvas.height = animationSet.atlasHeightPixels;
+    canvas.width = sheet.atlasWidthPixels;
+    canvas.height = sheet.atlasHeightPixels;
     const context = canvas.getContext('2d');
     if (context) {
       context.fillStyle = '#ffffff';
-      for (let row = 0; row < animationSet.rows; row += 1) {
-        for (let column = 0; column < animationSet.columns; column += 1) {
-          const frameX = animationSet.marginPixels
-            + column * (animationSet.frameWidthPixels + animationSet.spacingPixels);
-          const frameY = animationSet.marginPixels
-            + row * (animationSet.frameHeightPixels + animationSet.spacingPixels);
+      for (let row = 0; row < sheet.rows; row += 1) {
+        for (let column = 0; column < sheet.columns; column += 1) {
+          const frameX = sheet.marginPixels
+            + column * (sheet.frameWidthPixels + sheet.spacingPixels);
+          const frameY = sheet.marginPixels
+            + row * (sheet.frameHeightPixels + sheet.spacingPixels);
           context.beginPath();
           context.ellipse(
-            frameX + animationSet.frameWidthPixels * 0.5,
-            frameY + animationSet.frameHeightPixels * 0.52,
-            animationSet.frameWidthPixels * 0.3,
-            animationSet.frameHeightPixels * 0.42,
+            frameX + sheet.frameWidthPixels * 0.5,
+            frameY + sheet.frameHeightPixels * 0.52,
+            sheet.frameWidthPixels * 0.3,
+            sheet.frameHeightPixels * 0.42,
             0,
             0,
             Math.PI * 2,
@@ -316,12 +320,12 @@ function createFallbackAtlasTexture(animationSet: SpriteAnimationSet): THREE.Tex
     return configureAtlasTexture(new THREE.CanvasTexture(canvas));
   }
 
-  const data = new Uint8Array(animationSet.columns * animationSet.rows * 4);
+  const data = new Uint8Array(sheet.columns * sheet.rows * 4);
   data.fill(255);
   const texture = new THREE.DataTexture(
     data,
-    animationSet.columns,
-    animationSet.rows,
+    sheet.columns,
+    sheet.rows,
     THREE.RGBAFormat,
   );
   texture.needsUpdate = true;
@@ -362,27 +366,27 @@ export function getRequiredPackagedAtlasRuntimeSnapshot(): RequiredPackagedAtlas
   const failedIds: string[] = [];
   const fallbackIds: string[] = [];
 
-  for (const animationSet of REQUIRED_PACKAGED_SPRITE_ANIMATION_SETS) {
-    const runtime = SPRITE_ATLAS_RUNTIME_BY_ID.get(animationSet.id);
+  for (const sheet of REQUIRED_PACKAGED_SPRITE_SHEETS) {
+    const runtime = SPRITE_ATLAS_RUNTIME_BY_ID.get(sheet.id);
     if (!runtime || runtime.state === 'loading') {
-      loadingIds.push(animationSet.id);
+      loadingIds.push(sheet.id);
     } else if (runtime.state === 'ready') {
-      readyIds.push(animationSet.id);
+      readyIds.push(sheet.id);
     } else {
-      failedIds.push(animationSet.id);
+      failedIds.push(sheet.id);
     }
     if (!runtime || runtime.fallbackTextures.size > 0) {
-      fallbackIds.push(animationSet.id);
+      fallbackIds.push(sheet.id);
     }
   }
 
   return {
     state: failedIds.length > 0
       ? 'failed'
-      : readyIds.length === REQUIRED_PACKAGED_SPRITE_ANIMATION_SET_IDS.length && fallbackIds.length === 0
+      : readyIds.length === REQUIRED_PACKAGED_SPRITE_SHEET_IDS.length && fallbackIds.length === 0
         ? 'ready'
         : 'loading',
-    requiredIds: [...REQUIRED_PACKAGED_SPRITE_ANIMATION_SET_IDS],
+    requiredIds: [...REQUIRED_PACKAGED_SPRITE_SHEET_IDS],
     loadingIds,
     readyIds,
     failedIds,
@@ -404,31 +408,31 @@ function publishRequiredPackagedAtlasRuntimeSnapshot(): void {
   dataset.characterAssetFallbackIds = snapshot.fallbackIds.join(',');
 }
 
-function ensureSpriteAtlasRuntime(animationSet: SpriteAnimationSet): SpriteAtlasRuntimeRecord {
-  const existing = SPRITE_ATLAS_RUNTIME_BY_ID.get(animationSet.id);
+function ensureSpriteAtlasRuntime(sheet: SpriteAtlasSheet): SpriteAtlasRuntimeRecord {
+  const existing = SPRITE_ATLAS_RUNTIME_BY_ID.get(sheet.id);
   if (existing) {
     return existing;
   }
 
   const runtime: SpriteAtlasRuntimeRecord = {
-    animationSet,
+    sheet,
     state: 'loading',
     image: null,
     error: null,
     fallbackTextures: new Set(),
     ready: Promise.resolve(),
   };
-  SPRITE_ATLAS_RUNTIME_BY_ID.set(animationSet.id, runtime);
+  SPRITE_ATLAS_RUNTIME_BY_ID.set(sheet.id, runtime);
   publishRequiredPackagedAtlasRuntimeSnapshot();
 
-  runtime.ready = loadAtlasImage(animationSet.textureUrl).then((image) => {
+  runtime.ready = loadAtlasImage(sheet.textureUrl).then((image) => {
     if (
-      image.naturalWidth !== animationSet.atlasWidthPixels
-      || image.naturalHeight !== animationSet.atlasHeightPixels
+      image.naturalWidth !== sheet.atlasWidthPixels
+      || image.naturalHeight !== sheet.atlasHeightPixels
     ) {
       throw new Error(
-        `Decoded sprite atlas ${animationSet.id} is ${image.naturalWidth}x${image.naturalHeight}; `
-          + `expected ${animationSet.atlasWidthPixels}x${animationSet.atlasHeightPixels}.`,
+        `Decoded sprite atlas ${sheet.id} is ${image.naturalWidth}x${image.naturalHeight}; `
+          + `expected ${sheet.atlasWidthPixels}x${sheet.atlasHeightPixels}.`,
       );
     }
 
@@ -437,7 +441,7 @@ function ensureSpriteAtlasRuntime(animationSet: SpriteAnimationSet): SpriteAtlas
       texture.needsUpdate = true;
     }
     if ([...runtime.fallbackTextures].some((texture) => texture.image !== image)) {
-      throw new Error(`Unable to replace every fallback texture for sprite atlas ${animationSet.id}.`);
+      throw new Error(`Unable to replace every fallback texture for sprite atlas ${sheet.id}.`);
     }
     runtime.fallbackTextures.clear();
     runtime.image = image;
@@ -451,7 +455,7 @@ function ensureSpriteAtlasRuntime(animationSet: SpriteAnimationSet): SpriteAtlas
   });
   void runtime.ready.catch((error) => {
     console.error(
-      `[character-assets] required atlas ${animationSet.id} failed; gameplay remains gated`,
+      `[character-assets] required atlas ${sheet.id} failed; gameplay remains gated`,
       error,
     );
   });
@@ -460,7 +464,7 @@ function ensureSpriteAtlasRuntime(animationSet: SpriteAnimationSet): SpriteAtlas
 
 export function getRequiredPackagedAtlasRuntimeReadyPromise(): Promise<RequiredPackagedAtlasRuntimeSnapshot> {
   if (!requiredPackagedAtlasRuntimeReady) {
-    const runtimes = REQUIRED_PACKAGED_SPRITE_ANIMATION_SETS.map(ensureSpriteAtlasRuntime);
+    const runtimes = REQUIRED_PACKAGED_SPRITE_SHEETS.map(ensureSpriteAtlasRuntime);
     requiredPackagedAtlasRuntimeReady = Promise.all(runtimes.map((runtime) => runtime.ready)).then(() => {
       const snapshot = getRequiredPackagedAtlasRuntimeSnapshot();
       if (snapshot.state !== 'ready') {
@@ -480,39 +484,39 @@ function createDecodedAtlasTexture(image: HTMLImageElement): THREE.Texture {
   return texture;
 }
 
-function loadAtlasTexture(animationSet: SpriteAnimationSet): THREE.Texture {
+function loadAtlasTexture(sheet: SpriteAtlasSheet): THREE.Texture {
   if (typeof Image === 'undefined') {
-    return createFallbackAtlasTexture(animationSet);
+    return createFallbackAtlasTexture(sheet);
   }
 
-  const runtime = ensureSpriteAtlasRuntime(animationSet);
+  const runtime = ensureSpriteAtlasRuntime(sheet);
   if (runtime.state === 'ready') {
     if (!runtime.image) {
-      throw new Error(`Sprite atlas ${animationSet.id} reached ready without a decoded image.`);
+      throw new Error(`Sprite atlas ${sheet.id} reached ready without a decoded image.`);
     }
     return createDecodedAtlasTexture(runtime.image);
   }
 
-  const texture = createFallbackAtlasTexture(animationSet);
+  const texture = createFallbackAtlasTexture(sheet);
   runtime.fallbackTextures.add(texture);
   publishRequiredPackagedAtlasRuntimeSnapshot();
   return texture;
 }
 
-function applyAtlasFrame(texture: THREE.Texture, animationSet: SpriteAnimationSet, frame: number): void {
-  const column = frame % animationSet.columns;
-  const row = Math.floor(frame / animationSet.columns);
-  const frameX = animationSet.marginPixels
-    + column * (animationSet.frameWidthPixels + animationSet.spacingPixels);
-  const frameY = animationSet.marginPixels
-    + row * (animationSet.frameHeightPixels + animationSet.spacingPixels);
+function applyAtlasFrame(texture: THREE.Texture, sheet: SpriteAtlasSheet, frame: number): void {
+  const column = frame % sheet.columns;
+  const row = Math.floor(frame / sheet.columns);
+  const frameX = sheet.marginPixels
+    + column * (sheet.frameWidthPixels + sheet.spacingPixels);
+  const frameY = sheet.marginPixels
+    + row * (sheet.frameHeightPixels + sheet.spacingPixels);
   texture.repeat.set(
-    animationSet.frameWidthPixels / animationSet.atlasWidthPixels,
-    animationSet.frameHeightPixels / animationSet.atlasHeightPixels,
+    sheet.frameWidthPixels / sheet.atlasWidthPixels,
+    sheet.frameHeightPixels / sheet.atlasHeightPixels,
   );
   texture.offset.set(
-    frameX / animationSet.atlasWidthPixels,
-    1 - (frameY + animationSet.frameHeightPixels) / animationSet.atlasHeightPixels,
+    frameX / sheet.atlasWidthPixels,
+    1 - (frameY + sheet.frameHeightPixels) / sheet.atlasHeightPixels,
   );
 }
 
@@ -529,6 +533,14 @@ function createSpriteNode(
   if (!animationSet) {
     throw new Error(`Missing sprite animation set "${profile.animationSetId}" for ${characterId}.`);
   }
+  const initialClipId = animationSet.stateClips['idle.none'] ?? 'idle';
+  const initialClip = animationSet.clips[initialClipId];
+  const initialSheet = initialClip
+    ? animationSet.sheets[initialClip.sheetId]
+    : animationSet.sheets[animationSet.defaultSheetId];
+  if (!initialSheet) {
+    throw new Error(`Missing default sprite sheet for animation set "${profile.animationSetId}".`);
+  }
   const group = new THREE.Group();
   group.name = `${profile.animationSetId}:sprite`;
 
@@ -543,7 +555,7 @@ function createSpriteNode(
   );
   contactShadow.name = 'sprite-contact-shadow';
   contactShadow.position.z = 0.08;
-  contactShadow.scale.set(animationSet.worldWidth * 0.38, animationSet.worldWidth * 0.12, 1);
+  contactShadow.scale.set(initialSheet.worldWidth * 0.38, initialSheet.worldWidth * 0.12, 1);
   group.add(contactShadow);
 
   const groundGlow = new THREE.Mesh(
@@ -558,11 +570,12 @@ function createSpriteNode(
   );
   groundGlow.name = 'sprite-ground-glow';
   groundGlow.position.z = 0.1;
-  groundGlow.scale.set(animationSet.worldWidth * 0.44, animationSet.worldWidth * 0.15, 1);
+  groundGlow.scale.set(initialSheet.worldWidth * 0.44, initialSheet.worldWidth * 0.15, 1);
   group.add(groundGlow);
 
-  const rimTexture = loadAtlasTexture(animationSet);
-  applyAtlasFrame(rimTexture, animationSet, 0);
+  const initialFrame = initialClip?.frames[0] ?? 0;
+  const rimTexture = loadAtlasTexture(initialSheet);
+  applyAtlasFrame(rimTexture, initialSheet, initialFrame);
   const rim = new THREE.Sprite(new THREE.SpriteMaterial({
     map: rimTexture,
     color: palette.accent,
@@ -573,13 +586,13 @@ function createSpriteNode(
     depthWrite: false,
   }));
   rim.name = 'sprite-rim';
-  rim.center.set(animationSet.anchorX, animationSet.anchorY);
+  rim.center.set(initialSheet.anchorX, initialSheet.anchorY);
   rim.position.z = 0.3;
-  rim.scale.set(animationSet.worldWidth * 1.12, animationSet.worldHeight * 1.12, 1);
+  rim.scale.set(initialSheet.worldWidth * 1.12, initialSheet.worldHeight * 1.12, 1);
   group.add(rim);
 
-  const bodyTexture = loadAtlasTexture(animationSet);
-  applyAtlasFrame(bodyTexture, animationSet, 0);
+  const bodyTexture = loadAtlasTexture(initialSheet);
+  applyAtlasFrame(bodyTexture, initialSheet, initialFrame);
   const body = new THREE.Sprite(new THREE.SpriteMaterial({
     map: bodyTexture,
     color: palette.body,
@@ -589,9 +602,9 @@ function createSpriteNode(
     depthWrite: false,
   }));
   body.name = 'sprite-body';
-  body.center.set(animationSet.anchorX, animationSet.anchorY);
+  body.center.set(initialSheet.anchorX, initialSheet.anchorY);
   body.position.z = 0.36;
-  body.scale.set(animationSet.worldWidth, animationSet.worldHeight, 1);
+  body.scale.set(initialSheet.worldWidth, initialSheet.worldHeight, 1);
   group.add(body);
 
   const runtime: SpriteVisualRuntime = {
@@ -600,9 +613,11 @@ function createSpriteNode(
     rim,
     contactShadow,
     groundGlow,
-    clipId: animationSet.stateClips['idle.none'] ?? 'idle',
+    clipId: initialClipId,
+    sheetId: initialSheet.id,
     clipStartedAt: 0,
     phase: playerId === 'P1' ? 0 : 0.13,
+    sheetTextures: new Map([[initialSheet.id, { body: bodyTexture, rim: rimTexture }]]),
   };
   group.userData.spriteRuntime = runtime;
   return group;
@@ -694,19 +709,42 @@ const spriteAdapter: CharacterVisualAdapter = {
       runtime.clipId = clipId;
       runtime.clipStartedAt = context.gameTime;
     }
-    const frame = resolveSpriteFrame(
+    const selection = resolveSpriteFrameSelection(
       runtime.animationSet,
       runtime.clipId,
       context.gameTime - runtime.clipStartedAt,
       runtime.phase,
     );
-    const bodyMap = (runtime.body.material as THREE.SpriteMaterial).map;
-    const rimMap = (runtime.rim.material as THREE.SpriteMaterial).map;
+    if (!selection) {
+      return;
+    }
+    const { sheet } = selection;
+    const bodyMaterial = runtime.body.material as THREE.SpriteMaterial;
+    const rimMaterial = runtime.rim.material as THREE.SpriteMaterial;
+    if (runtime.sheetId !== selection.sheetId) {
+      let textures = runtime.sheetTextures.get(selection.sheetId);
+      if (!textures) {
+        textures = {
+          body: loadAtlasTexture(sheet),
+          rim: loadAtlasTexture(sheet),
+        };
+        runtime.sheetTextures.set(selection.sheetId, textures);
+      }
+      bodyMaterial.map = textures.body;
+      rimMaterial.map = textures.rim;
+      bodyMaterial.needsUpdate = true;
+      rimMaterial.needsUpdate = true;
+      runtime.body.center.set(sheet.anchorX, sheet.anchorY);
+      runtime.rim.center.set(sheet.anchorX, sheet.anchorY);
+      runtime.sheetId = selection.sheetId;
+    }
+    const bodyMap = bodyMaterial.map;
+    const rimMap = rimMaterial.map;
     if (bodyMap) {
-      applyAtlasFrame(bodyMap, runtime.animationSet, frame);
+      applyAtlasFrame(bodyMap, sheet, selection.frame);
     }
     if (rimMap) {
-      applyAtlasFrame(rimMap, runtime.animationSet, frame);
+      applyAtlasFrame(rimMap, sheet, selection.frame);
     }
 
     const directionalLean = THREE.MathUtils.clamp(context.opponent.pos.x - context.own.pos.x, -1, 1) * 0.08;
@@ -727,30 +765,29 @@ const spriteAdapter: CharacterVisualAdapter = {
     const idlePulse = Math.abs(Math.sin(context.gameTime * 4.2 + runtime.phase * 10)) * 0.025;
     const pulse = 1 + idlePulse + actionPulse * 0.16;
     runtime.body.scale.set(
-      runtime.animationSet.worldWidth * pulse * facing,
-      runtime.animationSet.worldHeight * pulse,
+      sheet.worldWidth * pulse * facing,
+      sheet.worldHeight * pulse,
       1,
     );
-    (runtime.body.material as THREE.SpriteMaterial).rotation = directionalLean;
+    bodyMaterial.rotation = directionalLean;
     runtime.rim.scale.set(
-      runtime.animationSet.worldWidth * (1.1 + actionPulse * 0.24) * facing,
-      runtime.animationSet.worldHeight * (1.1 + actionPulse * 0.24),
+      sheet.worldWidth * (1.1 + actionPulse * 0.24) * facing,
+      sheet.worldHeight * (1.1 + actionPulse * 0.24),
       1,
     );
-    const rimMaterial = runtime.rim.material as THREE.SpriteMaterial;
     rimMaterial.rotation = directionalLean;
     rimMaterial.opacity = THREE.MathUtils.clamp(0.2 + actionPulse * 0.7, 0.18, 0.82);
     runtime.contactShadow.scale.set(
-      runtime.animationSet.worldWidth * (0.38 + context.own.recovering * 0.02),
-      runtime.animationSet.worldWidth * 0.12,
+      sheet.worldWidth * (0.38 + context.own.recovering * 0.02),
+      sheet.worldWidth * 0.12,
       1,
     );
     (runtime.contactShadow.material as THREE.MeshBasicMaterial).opacity = context.own.recovering > 0
       ? 0.06
       : 0.34 + actionPulse * 0.1;
     runtime.groundGlow.scale.set(
-      runtime.animationSet.worldWidth * (0.44 + actionPulse * 0.08),
-      runtime.animationSet.worldWidth * (0.15 + actionPulse * 0.025),
+      sheet.worldWidth * (0.44 + actionPulse * 0.08),
+      sheet.worldWidth * (0.15 + actionPulse * 0.025),
       1,
     );
     (runtime.groundGlow.material as THREE.MeshBasicMaterial).opacity = context.own.recovering > 0
@@ -812,6 +849,15 @@ export function updateCharacterVisualHandle(
 
 export function disposeCharacterVisualNode(node: THREE.Object3D): void {
   const disposedTextures = new Set<THREE.Texture>();
+  const spriteRuntime = node.userData.spriteRuntime as SpriteVisualRuntime | undefined;
+  for (const textures of spriteRuntime?.sheetTextures.values() ?? []) {
+    for (const texture of [textures.body, textures.rim]) {
+      if (!disposedTextures.has(texture)) {
+        disposedTextures.add(texture);
+        texture.dispose();
+      }
+    }
+  }
   node.traverse((child) => {
     const mesh = child as THREE.Mesh;
     if (mesh.geometry) {

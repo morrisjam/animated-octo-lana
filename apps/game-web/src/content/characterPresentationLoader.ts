@@ -222,7 +222,10 @@ export function loadCharacterPresentationsFromModules(
         `duplicate animation set id "${parsed.animationSet.id}" in "${previousAnimation}" and "${source}".`,
       );
     }
-    for (const assetId of [parsed.animationSet.atlas.id, parsed.portrait.id]) {
+    for (const assetId of [
+      ...Object.values(parsed.animationSet.sheets).map((sheet) => sheet.id),
+      parsed.portrait.id,
+    ]) {
       const previousAsset = sourceByAssetId.get(assetId);
       if (previousAsset) {
         throw new CharacterPresentationDiscoveryError(
@@ -305,18 +308,20 @@ export function buildCharacterPresentationAssetEntries(
   presentations: CharacterPresentationDefinition[],
 ): CharacterPresentationAssetEntries {
   return {
-    sprites: presentations.map(({ animationSet }) => ({
-      id: animationSet.atlas.id,
-      src: animationSet.atlas.src,
-      preload: true,
-      readiness: animationSet.atlas.readiness,
-      contentTypes: [animationSet.atlas.contentType],
-      image: {
-        width: animationSet.atlas.widthPixels,
-        height: animationSet.atlas.heightPixels,
-      },
-      budget: { ...animationSet.atlas.budget },
-    })),
+    sprites: presentations.flatMap(({ animationSet }) => (
+      Object.values(animationSet.sheets).map((sheet) => ({
+        id: sheet.id,
+        src: sheet.src,
+        preload: true,
+        readiness: sheet.readiness,
+        contentTypes: [sheet.contentType],
+        image: {
+          width: sheet.widthPixels,
+          height: sheet.heightPixels,
+        },
+        budget: { ...sheet.budget },
+      }))
+    )),
     textures: presentations.map(({ portrait }) => ({
       id: portrait.id,
       src: portrait.src,

@@ -4,7 +4,9 @@ import {
   getSpriteAnimationSets,
   resolveSpriteAnimationSet,
   resolveSpriteClip,
+  resolveSpriteClipSheet,
   resolveSpriteFrame,
+  resolveSpriteFrameSelection,
   validateSpriteAnimationSet,
 } from './atlasDefinitions';
 
@@ -42,7 +44,10 @@ describe('sprite animation sets', () => {
     ]);
     for (const set of sets) {
       expect(validateSpriteAnimationSet(set)).toEqual([]);
-      expect(set.textureUrl).toMatch(/^\/assets\/characters\/[^?#]+\?v=\d+$/);
+      expect(Object.values(set.sheets).every(
+        (sheet) => /^\/assets\/characters\/[^?#]+\?v=\d+$/.test(sheet.textureUrl),
+      )).toBe(true);
+      expect(Object.values(set.clips).every((clip) => Boolean(set.sheets[clip.sheetId]))).toBe(true);
     }
   });
 
@@ -57,5 +62,41 @@ describe('sprite animation sets', () => {
     expect(resolveSpriteFrame(set!, 'idle', 0)).toBe(0);
     expect(resolveSpriteFrame(set!, 'idle', 0.34)).toBe(1);
     expect(resolveSpriteFrame(set!, 'idle', 0.67)).toBe(0);
+  });
+
+  test('resolves frames and layout from the sheet selected by each clip', () => {
+    const source = resolveSpriteAnimationSet('character_vanguard_animset');
+    expect(source).not.toBeNull();
+    const set = structuredClone(source!);
+    const primary = set.sheets[set.defaultSheetId];
+    set.sheets.combat_sheet = {
+      ...primary,
+      id: 'combat_sheet',
+      textureUrl: '/assets/characters/vanguard/combat-sheet.png?v=1',
+      columns: 1,
+      rows: 2,
+      atlasWidthPixels: primary.frameWidthPixels,
+      atlasHeightPixels: primary.frameHeightPixels * 2,
+      worldWidth: 8,
+      anchorY: 0.2,
+    };
+    set.clips.launch_active = {
+      frames: [0, 1],
+      fps: 8,
+      loop: false,
+      sheetId: 'combat_sheet',
+    };
+
+    expect(validateSpriteAnimationSet(set)).toEqual([]);
+    expect(resolveSpriteClipSheet(set, 'launch_active')).toMatchObject({
+      id: 'combat_sheet',
+      worldWidth: 8,
+      anchorY: 0.2,
+    });
+    expect(resolveSpriteFrameSelection(set, 'launch_active', 0.13)).toMatchObject({
+      sheetId: 'combat_sheet',
+      frameIndex: 1,
+      frame: 1,
+    });
   });
 });

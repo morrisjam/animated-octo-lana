@@ -28,6 +28,7 @@ export interface SpriteAnimationClip {
   frames: number[];
   fps: number;
   loop: boolean;
+  sheetId: string;
 }
 
 export interface CharacterPresentationImageAsset {
@@ -56,6 +57,7 @@ export interface CharacterPresentationAtlas extends CharacterPresentationImageAs
 export interface CharacterPresentationAnimationSet {
   id: string;
   atlas: CharacterPresentationAtlas;
+  sheets: Record<string, CharacterPresentationAtlas>;
   clips: Record<string, SpriteAnimationClip>;
   stateClips: Record<RequiredCharacterPresentationStateKey, string>;
 }
@@ -218,46 +220,47 @@ function parseImageAsset(
 
 function parseAtlas(
   value: unknown,
+  path: string,
   issues: CharacterPresentationValidationIssue[],
 ): CharacterPresentationAtlas | null {
-  const asset = parseImageAsset(value, 'animationSet.atlas', issues);
+  const asset = parseImageAsset(value, path, issues);
   if (!isRecord(value)) {
     return null;
   }
-  const columns = readNumber(value, 'columns', 'animationSet.atlas.columns', issues, { integer: true, min: 1 });
-  const rows = readNumber(value, 'rows', 'animationSet.atlas.rows', issues, { integer: true, min: 1 });
+  const columns = readNumber(value, 'columns', `${path}.columns`, issues, { integer: true, min: 1 });
+  const rows = readNumber(value, 'rows', `${path}.rows`, issues, { integer: true, min: 1 });
   const frameWidthPixels = readNumber(
     value,
     'frameWidthPixels',
-    'animationSet.atlas.frameWidthPixels',
+    `${path}.frameWidthPixels`,
     issues,
     { integer: true, min: 1 },
   );
   const frameHeightPixels = readNumber(
     value,
     'frameHeightPixels',
-    'animationSet.atlas.frameHeightPixels',
+    `${path}.frameHeightPixels`,
     issues,
     { integer: true, min: 1 },
   );
   const marginPixels = readNumber(
     value,
     'marginPixels',
-    'animationSet.atlas.marginPixels',
+    `${path}.marginPixels`,
     issues,
     { integer: true, min: 0 },
   );
   const spacingPixels = readNumber(
     value,
     'spacingPixels',
-    'animationSet.atlas.spacingPixels',
+    `${path}.spacingPixels`,
     issues,
     { integer: true, min: 0 },
   );
-  const worldWidth = readNumber(value, 'worldWidth', 'animationSet.atlas.worldWidth', issues, { min: 0.1 });
-  const worldHeight = readNumber(value, 'worldHeight', 'animationSet.atlas.worldHeight', issues, { min: 0.1 });
-  const anchorX = readNumber(value, 'anchorX', 'animationSet.atlas.anchorX', issues, { min: 0, max: 1 });
-  const anchorY = readNumber(value, 'anchorY', 'animationSet.atlas.anchorY', issues, { min: 0, max: 1 });
+  const worldWidth = readNumber(value, 'worldWidth', `${path}.worldWidth`, issues, { min: 0.1 });
+  const worldHeight = readNumber(value, 'worldHeight', `${path}.worldHeight`, issues, { min: 0.1 });
+  const anchorX = readNumber(value, 'anchorX', `${path}.anchorX`, issues, { min: 0, max: 1 });
+  const anchorY = readNumber(value, 'anchorY', `${path}.anchorY`, issues, { min: 0, max: 1 });
   if (
     !asset
     || columns === null
@@ -276,10 +279,10 @@ function parseAtlas(
   const requiredWidth = marginPixels * 2 + columns * frameWidthPixels + (columns - 1) * spacingPixels;
   const requiredHeight = marginPixels * 2 + rows * frameHeightPixels + (rows - 1) * spacingPixels;
   if (requiredWidth > asset.widthPixels) {
-    issue(issues, 'animationSet.atlas', `declared frame layout requires ${requiredWidth}px width but asset width is ${asset.widthPixels}px.`);
+    issue(issues, path, `declared frame layout requires ${requiredWidth}px width but asset width is ${asset.widthPixels}px.`);
   }
   if (requiredHeight > asset.heightPixels) {
-    issue(issues, 'animationSet.atlas', `declared frame layout requires ${requiredHeight}px height but asset height is ${asset.heightPixels}px.`);
+    issue(issues, path, `declared frame layout requires ${requiredHeight}px height but asset height is ${asset.heightPixels}px.`);
   }
   return {
     ...asset,
@@ -296,9 +299,42 @@ function parseAtlas(
   };
 }
 
+function parseSheets(
+  primaryAtlas: CharacterPresentationAtlas | null,
+  value: unknown,
+  issues: CharacterPresentationValidationIssue[],
+): Record<string, CharacterPresentationAtlas> | null {
+  if (!primaryAtlas) {
+    return null;
+  }
+  const sheets = Object.create(null) as Record<string, CharacterPresentationAtlas>;
+  sheets[primaryAtlas.id] = primaryAtlas;
+  if (value === undefined) {
+    return sheets;
+  }
+  if (!Array.isArray(value)) {
+    issue(issues, 'animationSet.additionalSheets', 'must be an array when provided.');
+    return null;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const path = `animationSet.additionalSheets[${index}]`;
+    const sheet = parseAtlas(value[index], path, issues);
+    if (!sheet) {
+      continue;
+    }
+    if (sheets[sheet.id]) {
+      issue(issues, `${path}.id`, `duplicates sprite sheet id "${sheet.id}".`);
+      continue;
+    }
+    sheets[sheet.id] = sheet;
+  }
+  return sheets;
+}
+
 function parseClips(
   value: unknown,
-  frameCount: number,
+  sheets: Record<string, CharacterPresentationAtlas>,
+  defaultSheetId: string,
   issues: CharacterPresentationValidationIssue[],
 ): Record<string, SpriteAnimationClip> | null {
   if (!isRecord(value)) {
@@ -316,6 +352,15 @@ function parseClips(
       issue(issues, `animationSet.clips.${clipId}`, 'must be an object.');
       continue;
     }
+    const sheetIdValue = clipValue.sheetId;
+    const sheetId = sheetIdValue === undefined
+      ? defaultSheetId
+      : readString(clipValue, 'sheetId', `animationSet.clips.${clipId}.sheetId`, issues, ID_PATTERN);
+    const sheet = sheetId ? sheets[sheetId] : null;
+    if (sheetId && !sheet) {
+      issue(issues, `animationSet.clips.${clipId}.sheetId`, 'must reference a declared sprite sheet id.');
+    }
+    const frameCount = sheet ? sheet.columns * sheet.rows : 0;
     const framesValue = clipValue.frames;
     const frames: number[] = [];
     if (!Array.isArray(framesValue) || framesValue.length === 0) {
@@ -338,8 +383,8 @@ function parseClips(
     if (typeof clipValue.loop !== 'boolean') {
       issue(issues, `animationSet.clips.${clipId}.loop`, 'must be a boolean.');
     }
-    if (frames.length > 0 && fps !== null && typeof clipValue.loop === 'boolean') {
-      clips[clipId] = { frames, fps, loop: clipValue.loop };
+    if (sheet && sheetId && frames.length > 0 && fps !== null && typeof clipValue.loop === 'boolean') {
+      clips[clipId] = { frames, fps, loop: clipValue.loop, sheetId };
     }
   }
   if (Object.keys(clips).length === 0) {
@@ -396,14 +441,16 @@ export function parseCharacterPresentationManifest(input: unknown): CharacterPre
     issue(issues, 'animationSet', 'must be an object.');
   } else {
     const id = readString(animationSetValue, 'id', 'animationSet.id', issues, ID_PATTERN);
-    const atlas = parseAtlas(animationSetValue.atlas, issues);
-    const frameCount = atlas ? atlas.columns * atlas.rows : 0;
-    const clips = parseClips(animationSetValue.clips, frameCount, issues);
+    const atlas = parseAtlas(animationSetValue.atlas, 'animationSet.atlas', issues);
+    const sheets = parseSheets(atlas, animationSetValue.additionalSheets, issues);
+    const clips = atlas && sheets
+      ? parseClips(animationSetValue.clips, sheets, atlas.id, issues)
+      : null;
     const stateClips = clips
       ? parseStateClips(animationSetValue.stateClips, clips, issues)
       : null;
-    if (id && atlas && clips && stateClips) {
-      animationSet = { id, atlas, clips, stateClips };
+    if (id && atlas && sheets && clips && stateClips) {
+      animationSet = { id, atlas, sheets, clips, stateClips };
     }
   }
   const portrait = parseImageAsset(input.portrait, 'portrait', issues);

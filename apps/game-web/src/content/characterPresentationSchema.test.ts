@@ -75,6 +75,52 @@ describe('character presentation schema', () => {
     expect(Object.keys(parsed.animationSet.stateClips).sort())
       .toEqual([...REQUIRED_CHARACTER_PRESENTATION_STATES].sort());
     expect(parsed.animationSet.atlas).toMatchObject({ columns: 2, rows: 2 });
+    expect(Object.keys(parsed.animationSet.sheets)).toEqual(['test_animation_atlas']);
+    expect(parsed.animationSet.clips.idle.sheetId).toBe('test_animation_atlas');
+  });
+
+  test('adds named sprite sheets and binds each clip to its authored sheet', () => {
+    const payload = makeValidPresentation();
+    const animationSet = payload.animationSet as Record<string, unknown>;
+    const additionalSheet = structuredClone(animationSet.atlas) as Record<string, unknown>;
+    additionalSheet.id = 'test_combat_sheet';
+    additionalSheet.src = '/assets/characters/test_character/test-combat-sheet.png';
+    animationSet.additionalSheets = [additionalSheet];
+    const clips = animationSet.clips as Record<string, Record<string, unknown>>;
+    clips.idle.sheetId = 'test_combat_sheet';
+    clips.idle.frames = [3];
+
+    const parsed = parseCharacterPresentationManifest(payload);
+
+    expect(Object.keys(parsed.animationSet.sheets).sort()).toEqual([
+      'test_animation_atlas',
+      'test_combat_sheet',
+    ]);
+    expect(parsed.animationSet.clips.idle).toMatchObject({
+      sheetId: 'test_combat_sheet',
+      frames: [3],
+    });
+  });
+
+  test('rejects unknown and duplicate sprite sheet ids', () => {
+    const unknownPayload = makeValidPresentation();
+    const unknownAnimationSet = unknownPayload.animationSet as Record<string, unknown>;
+    const unknownClips = unknownAnimationSet.clips as Record<string, Record<string, unknown>>;
+    unknownClips.idle.sheetId = 'missing_sheet';
+
+    expect(getValidationError(unknownPayload).issues).toContainEqual({
+      path: 'animationSet.clips.idle.sheetId',
+      message: 'must reference a declared sprite sheet id.',
+    });
+
+    const duplicatePayload = makeValidPresentation();
+    const duplicateAnimationSet = duplicatePayload.animationSet as Record<string, unknown>;
+    duplicateAnimationSet.additionalSheets = [structuredClone(duplicateAnimationSet.atlas)];
+
+    expect(getValidationError(duplicatePayload).issues).toContainEqual({
+      path: 'animationSet.additionalSheets[0].id',
+      message: 'duplicates sprite sheet id "test_animation_atlas".',
+    });
   });
 
   test('requires every presentation state', () => {
@@ -118,6 +164,27 @@ describe('character presentation schema', () => {
     expect(error.issues).toContainEqual({
       path: 'animationSet.clips.idle.frames[0]',
       message: 'must be an integer inside atlas frame bounds 0-3.',
+    });
+  });
+
+  test('validates frame bounds against the clip selected sheet', () => {
+    const payload = makeValidPresentation();
+    const animationSet = payload.animationSet as Record<string, unknown>;
+    const additionalSheet = structuredClone(animationSet.atlas) as Record<string, unknown>;
+    additionalSheet.id = 'single_frame_sheet';
+    additionalSheet.src = '/assets/characters/test_character/single-frame-sheet.webp';
+    additionalSheet.columns = 1;
+    additionalSheet.rows = 1;
+    animationSet.additionalSheets = [additionalSheet];
+    const clips = animationSet.clips as Record<string, Record<string, unknown>>;
+    clips.idle.sheetId = 'single_frame_sheet';
+    clips.idle.frames = [1];
+
+    const error = getValidationError(payload);
+
+    expect(error.issues).toContainEqual({
+      path: 'animationSet.clips.idle.frames[0]',
+      message: 'must be an integer inside atlas frame bounds 0-0.',
     });
   });
 });

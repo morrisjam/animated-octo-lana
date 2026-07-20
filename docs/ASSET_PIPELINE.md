@@ -288,6 +288,15 @@ This is the recommended shipping path.
 
 6. Export sheet and metadata
 - deliver final approved sprite sheets for integration
+- use separate movement, combat, and outcome sheets when one atlas would exceed practical texture dimensions
+- bind each clip to its source sheet in the presentation manifest; omitted bindings continue to use the primary sheet
+
+7. Review locally
+- run the game-web development server
+- open `/asset-workshop.html`
+- inspect every clip at authored FPS
+- step through frames to verify cell order, transparency, scale, and anchor consistency
+- finish with an in-game readability pass because the Workshop intentionally excludes gameplay VFX and stage lighting
 
 Why this path is preferred:
 

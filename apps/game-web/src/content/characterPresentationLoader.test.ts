@@ -122,23 +122,26 @@ describe('character presentation discovery', () => {
   test('generates preload entries with presentation MIME and image metadata', () => {
     const presentations = readPresentations();
     const entries = buildCharacterPresentationAssetEntries(presentations);
+    const sheets = presentations.flatMap((presentation) => Object.values(presentation.animationSet.sheets));
 
-    expect(entries.sprites).toHaveLength(presentations.length);
+    expect(entries.sprites).toHaveLength(sheets.length);
     expect(entries.textures).toHaveLength(presentations.length);
 
     for (const presentation of presentations) {
-      expect(entries.sprites.find((entry) => entry.id === presentation.animationSet.atlas.id)).toEqual({
-        id: presentation.animationSet.atlas.id,
-        src: presentation.animationSet.atlas.src,
-        preload: true,
-        readiness: presentation.animationSet.atlas.readiness,
-        contentTypes: [presentation.animationSet.atlas.contentType],
-        image: {
-          width: presentation.animationSet.atlas.widthPixels,
-          height: presentation.animationSet.atlas.heightPixels,
-        },
-        budget: { ...presentation.animationSet.atlas.budget },
-      });
+      for (const sheet of Object.values(presentation.animationSet.sheets)) {
+        expect(entries.sprites.find((entry) => entry.id === sheet.id)).toEqual({
+          id: sheet.id,
+          src: sheet.src,
+          preload: true,
+          readiness: sheet.readiness,
+          contentTypes: [sheet.contentType],
+          image: {
+            width: sheet.widthPixels,
+            height: sheet.heightPixels,
+          },
+          budget: { ...sheet.budget },
+        });
+      }
       expect(entries.textures.find((entry) => entry.id === presentation.portrait.id)).toEqual({
         id: presentation.portrait.id,
         src: presentation.portrait.src,
@@ -154,9 +157,36 @@ describe('character presentation discovery', () => {
     }
   });
 
+  test('discovers and preloads supplemental atlas sheets without changing legacy manifests', () => {
+    const fixture = makeSyntheticContent();
+    const animationSet = fixture.presentationModule.animationSet as Record<string, unknown>;
+    const supplemental = structuredClone(animationSet.atlas) as Record<string, unknown>;
+    supplemental.id = 'synthetic_third_combat_sheet';
+    supplemental.src = '/assets/characters/synthetic_third/combat-sheet.webp?v=2';
+    supplemental.contentType = 'image/webp';
+    animationSet.additionalSheets = [supplemental];
+    const clips = animationSet.clips as Record<string, Record<string, unknown>>;
+    clips.special_active.sheetId = supplemental.id;
+
+    const [presentation] = loadCharacterPresentationsFromModules({
+      [fixture.source]: fixture.presentationModule,
+    });
+    const entries = buildCharacterPresentationAssetEntries([presentation]);
+
+    expect(Object.keys(presentation.animationSet.sheets).sort()).toEqual([
+      'synthetic_third_animset',
+      'synthetic_third_combat_sheet',
+    ]);
+    expect(presentation.animationSet.clips.special_active.sheetId).toBe('synthetic_third_combat_sheet');
+    expect(entries.sprites.map((entry) => entry.id).sort()).toEqual([
+      'synthetic_third_animset',
+      'synthetic_third_combat_sheet',
+    ]);
+  });
+
   test('checked-in presentation assets exist, fit their source budgets, and match declared SVG dimensions', async () => {
     for (const presentation of readPresentations()) {
-      for (const asset of [presentation.animationSet.atlas, presentation.portrait]) {
+      for (const asset of [...Object.values(presentation.animationSet.sheets), presentation.portrait]) {
         const pathname = new URL(asset.src, 'http://local.invalid').pathname;
         const fileUrl = new URL(`../../public${pathname}`, import.meta.url);
         const body = readFileSync(fileUrl);

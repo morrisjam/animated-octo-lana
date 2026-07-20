@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Gravity Well Asset Workshop</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/assetWorkshop/styles.css" />
+  </head>
+  <body>
+    <main class="workshop-shell">
+      <header class="workshop-header">
+        <div>
+          <p class="eyebrow">Gravity Well / Local Artist Tool</p>
+          <h1>Asset Workshop</h1>
+        </div>
+        <a class="return-link" href="/">Return to game</a>
+      </header>
+
+      <section class="workshop-grid" aria-label="Sprite animation workshop">
+        <aside class="clip-rail">
+          <label class="field-label" for="characterSelect">Packaged character</label>
+          <select id="characterSelect"></select>
+          <div class="rail-heading">
+            <span>Animation clips</span>
+            <span id="clipCount" class="count"></span>
+          </div>
+          <nav id="clipList" class="clip-list" aria-label="Animation clips"></nav>
+        </aside>
+
+        <section class="preview-panel">
+          <div class="preview-heading">
+            <div>
+              <p id="characterName" class="preview-character"></p>
+              <h2 id="clipName"></h2>
+            </div>
+            <span id="playbackBadge" class="playback-badge"></span>
+          </div>
+
+          <div class="canvas-stage">
+            <div class="depth-ring depth-ring-one"></div>
+            <div class="depth-ring depth-ring-two"></div>
+            <canvas id="previewCanvas" aria-label="Selected animation frame"></canvas>
+            <span class="anchor-label">Anchor</span>
+          </div>
+
+          <div class="transport" aria-label="Playback controls">
+            <button id="previousFrame" type="button">Previous frame</button>
+            <button id="playPause" class="primary-control" type="button">Pause</button>
+            <button id="nextFrame" type="button">Next frame</button>
+          </div>
+          <p id="playbackStatus" class="playback-status" aria-live="polite"></p>
+          <p class="keyboard-hint">Space: play/pause &nbsp; Left/Right: step frame</p>
+        </section>
+
+        <aside class="inspector">
+          <div class="inspector-heading">
+            <p class="eyebrow">Authored data</p>
+            <h2>Frame Inspector</h2>
+          </div>
+          <dl class="metadata-list">
+            <div><dt>Frame</dt><dd id="frameMetadata"></dd></div>
+            <div><dt>Sheet</dt><dd id="sheetMetadata"></dd></div>
+            <div><dt>Source</dt><dd id="sourceMetadata" class="path-value"></dd></div>
+            <div><dt>Grid</dt><dd id="gridMetadata"></dd></div>
+            <div><dt>Cell</dt><dd id="cellMetadata"></dd></div>
+            <div><dt>Anchor</dt><dd id="anchorMetadata"></dd></div>
+            <div><dt>World size</dt><dd id="worldMetadata"></dd></div>
+            <div><dt>Timing</dt><dd id="timingMetadata"></dd></div>
+            <div><dt>Frame sequence</dt><dd id="sequenceMetadata" class="path-value"></dd></div>
+            <div><dt>Manifest</dt><dd id="manifestMetadata" class="path-value"></dd></div>
+          </dl>
+          <p class="inspector-note">The cyan crosshair marks the authored sprite anchor. Y is measured from the bottom edge.</p>
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="/src/assetWorkshop/index.ts"></script>
+  </body>
+</html>

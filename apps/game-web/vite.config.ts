@@ -165,6 +165,7 @@ export default defineConfig(({ mode }) => {
     ? { game: gameEntry }
     : {
         game: gameEntry,
+        assetWorkshop: fileURLToPath(new URL('asset-workshop.html', import.meta.url)),
         webRtcSmoke: fileURLToPath(new URL('webrtc-smoke.html', import.meta.url)),
         webRtcPeerSmoke: fileURLToPath(new URL('webrtc-peer-smoke.html', import.meta.url)),
       };

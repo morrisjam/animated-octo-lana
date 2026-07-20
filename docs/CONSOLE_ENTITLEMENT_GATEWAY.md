@@ -1,6 +1,7 @@
 # Console Entitlement Gateway
 
-Date: 2026-02-15  
+Original date: 2026-02-15
+Updated: 2026-07-20
 Story: `S3.8` Console entitlement gateway
 
 ## Goal
@@ -46,3 +47,9 @@ Story: `S3.8` Console entitlement gateway
   - `apps/game-web/src/platform/entitlement.test.ts`
 - Web/Steam adapter behavior tests:
   - `apps/game-web/src/platform/entitlement.adapters.test.ts`
+
+## Portability Status
+- The shared entitlement service and web/Steam policy adapters are implemented and wired into current startup/session UI gating.
+- `PlatformLifecycleService` now exposes an `entitlement_change` event with account identity plus previous/current access metadata. Parent integration can use `lifecycleHooks.entitlementChanged(...)`; it is intentionally not wired by this platform-only change.
+- Console ownership-token verification is not implemented. Each console still requires an SDK-backed `PlatformEntitlementService` adapter and certification-specific offline/expired-license behavior.
+- Steam's configurable policy is not a substitute for a production ownership check until it is backed by the native Steam runtime/partner configuration.

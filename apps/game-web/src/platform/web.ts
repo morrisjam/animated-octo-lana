@@ -6,7 +6,11 @@ import type {
   WebAuthSignupRequest,
 } from './types';
 import { createConfiguredEntitlementService, parseEntitlementMode } from './entitlement';
-import { createStorageBackedPersistenceService } from './persistence';
+import { createBrowserPlatformLifecycleAdapter } from './lifecycle';
+import {
+  createStorageBackedPersistenceService,
+  PLATFORM_PERSISTENCE_KEYS,
+} from './persistence';
 
 const GUEST_ACCOUNT_KEY = 'gravity_well.guest_account_id';
 const GUEST_ACCESS_TOKEN_KEY = 'gravity_well.guest_access_token';
@@ -41,35 +45,77 @@ function createMemoryStorage(): PlatformStorageService {
     removeItem(key: string): void {
       store.delete(key);
     },
+    setItemChecked(key: string, value: string): void {
+      store.set(key, value);
+    },
+    removeItemChecked(key: string): void {
+      store.delete(key);
+    },
+    listKeys(): string[] {
+      return [...store.keys()];
+    },
   };
 }
 
 function createBrowserStorage(): PlatformStorageService {
-  if (typeof window === 'undefined' || !window.localStorage) {
+  let localStorage: Storage | null = null;
+  try {
+    localStorage = typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    localStorage = null;
+  }
+  if (!localStorage) {
     return createMemoryStorage();
   }
   return {
     getItem(key: string): string | null {
       try {
-        return window.localStorage.getItem(key);
+        return localStorage.getItem(key);
       } catch {
         return null;
       }
     },
     setItem(key: string, value: string): void {
       try {
-        window.localStorage.setItem(key, value);
+        localStorage.setItem(key, value);
       } catch {
         // Ignore storage write failures in restricted environments.
       }
     },
     removeItem(key: string): void {
       try {
-        window.localStorage.removeItem(key);
+        localStorage.removeItem(key);
       } catch {
         // Ignore storage removal failures in restricted environments.
       }
     },
+    setItemChecked(key: string, value: string): void {
+      localStorage.setItem(key, value);
+    },
+    removeItemChecked(key: string): void {
+      localStorage.removeItem(key);
+    },
+    listKeys(): string[] {
+      const keys: string[] = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key !== null) {
+          keys.push(key);
+        }
+      }
+      return keys;
+    },
+  };
+}
+
+async function estimateBrowserStorageQuota(): Promise<{ usedBytes?: number; limitBytes?: number }> {
+  if (typeof navigator === 'undefined' || !navigator.storage?.estimate) {
+    return {};
+  }
+  const estimate = await navigator.storage.estimate();
+  return {
+    usedBytes: estimate.usage,
+    limitBytes: estimate.quota,
   };
 }
 
@@ -175,6 +221,7 @@ async function parseApiError(response: Response): Promise<string> {
 
 export function createWebPlatformServices(): PlatformServices {
   const storage = createBrowserStorage();
+  const lifecycleAdapter = createBrowserPlatformLifecycleAdapter();
   const entitlementMode = parseEntitlementMode(import.meta.env.VITE_ENTITLEMENT_MODE as string | undefined, 'open');
   const entitlement = createConfiguredEntitlementService({
     mode: entitlementMode,
@@ -182,7 +229,19 @@ export function createWebPlatformServices(): PlatformServices {
     deniedMessage: String(import.meta.env.VITE_ENTITLEMENT_DENY_MESSAGE ?? '').trim() || undefined,
     unavailableMessage: 'Entitlement service is unavailable. Please retry later or contact support.',
   });
-  const persistence = createStorageBackedPersistenceService(storage, ['local']);
+  const persistence = createStorageBackedPersistenceService(storage, {
+    supportedScopes: ['local'],
+    quotaProvider: estimateBrowserStorageQuota,
+    legacySourceResolver(key, userId) {
+      if (key === PLATFORM_PERSISTENCE_KEYS.settings) {
+        return [{ key: 'gravity_well.settings.v1' }];
+      }
+      if (key === PLATFORM_PERSISTENCE_KEYS.profile) {
+        return [{ key: profileCacheKey(userId) }];
+      }
+      return [];
+    },
+  });
   let presenceStatus: string | null = null;
   let guestAccountPromise: Promise<string> | null = null;
 
@@ -346,6 +405,8 @@ export function createWebPlatformServices(): PlatformServices {
     storage,
     entitlement,
     persistence,
+    lifecycle: lifecycleAdapter.service,
+    lifecycleHooks: lifecycleAdapter.hooks,
     auth: {
       async getSession() {
         return await resolveSession();
@@ -569,6 +630,9 @@ export function createWebPlatformServices(): PlatformServices {
           return { ...localPayload, source: 'cache' as const };
         }
       },
+    },
+    dispose() {
+      lifecycleAdapter.dispose();
     },
   };
 }

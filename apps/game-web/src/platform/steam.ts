@@ -1,6 +1,10 @@
 import type { PlatformServices, PlatformStorageService } from './types';
 import { createConfiguredEntitlementService, parseEntitlementMode } from './entitlement';
-import { createStorageBackedPersistenceService } from './persistence';
+import { createBrowserPlatformLifecycleAdapter } from './lifecycle';
+import {
+  createStorageBackedPersistenceService,
+  PLATFORM_PERSISTENCE_KEYS,
+} from './persistence';
 import {
   parseSteamWebApiTicketLease,
   readSteamRuntimeBridge,
@@ -31,6 +35,15 @@ function createMemoryStorage(): PlatformStorageService {
     },
     removeItem(key: string): void {
       store.delete(key);
+    },
+    setItemChecked(key: string, value: string): void {
+      store.set(key, value);
+    },
+    removeItemChecked(key: string): void {
+      store.delete(key);
+    },
+    listKeys(): string[] {
+      return [...store.keys()];
     },
   };
 }
@@ -67,6 +80,7 @@ async function parseApiError(response: Response): Promise<string> {
 
 export function createSteamPlatformServices(options?: SteamPlatformOptions): PlatformServices {
   const storage = createMemoryStorage();
+  const lifecycleAdapter = createBrowserPlatformLifecycleAdapter();
   const bypass = (import.meta.env.VITE_STEAM_ENTITLEMENT_BYPASS as string | undefined)?.trim().toLowerCase();
   const entitlementMode = bypass === 'true'
     ? 'open'
@@ -99,7 +113,18 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
     ? readSteamRuntimeBridge()
     : options.runtimeBridge;
   const getRuntimeSteamTicket = options?.getRuntimeSteamTicket ?? (() => null);
-  const persistence = createStorageBackedPersistenceService(storage, ['local']);
+  const persistence = createStorageBackedPersistenceService(storage, {
+    supportedScopes: ['local'],
+    legacySourceResolver(key, userId) {
+      if (key === PLATFORM_PERSISTENCE_KEYS.settings) {
+        return [{ key: 'gravity_well.settings.v1' }];
+      }
+      if (key === PLATFORM_PERSISTENCE_KEYS.profile) {
+        return [{ key: `profile.${userId}` }];
+      }
+      return [];
+    },
+  });
   let presenceStatus: string | null = null;
   let cachedSession: { accountId: string; accessToken: string; accessTokenExpiresAt: string } | null = null;
   let authAttempted = false;
@@ -173,6 +198,8 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
     storage,
     entitlement,
     persistence,
+    lifecycle: lifecycleAdapter.service,
+    lifecycleHooks: lifecycleAdapter.hooks,
     auth: {
       getAccessToken,
       async getSession() {
@@ -301,6 +328,9 @@ export function createSteamPlatformServices(options?: SteamPlatformOptions): Pla
           source: 'cache',
         };
       },
+    },
+    dispose() {
+      lifecycleAdapter.dispose();
     },
   };
 }

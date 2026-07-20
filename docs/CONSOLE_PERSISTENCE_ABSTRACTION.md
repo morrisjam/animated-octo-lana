@@ -1,45 +1,72 @@
 # Console-Safe Persistence Abstraction
 
-Date: 2026-02-15  
+Original date: 2026-02-15
+Updated: 2026-07-20
 Story: `S3.7` Console-safe persistence abstraction
 
 ## Goal
-- Allow gameplay code to use one platform-agnostic persistence contract.
-- Keep persistence scope-switching in platform adapters, not gameplay logic.
-- Ensure unsupported persistence operations fail safely without crashes.
+- Give platform clients one asynchronous, user-scoped persistence contract.
+- Make quota, conflict, corruption, and storage failures explicit rather than throwing through gameplay code.
+- Express atomic replacement intent without claiming browser storage provides console-grade atomic writes.
+- Preserve current web and Steam behavior while call sites migrate away from the synchronous interface.
 
-## Interface
-- `PlatformPersistenceService` is exposed on `PlatformServices` in `apps/game-web/src/platform/types.ts`.
-- Contract methods:
-  - `isScopeSupported(scope)`
-  - `readJson(key, { scope })`
-  - `writeJson(key, value, { scope })`
-  - `remove(key, { scope })`
-- Scopes:
-  - `local` (currently supported)
-  - `cloud` (currently unsupported in web and steam adapters)
+## Current Contract
+`PlatformPersistenceService` is exposed on `PlatformServices` in `apps/game-web/src/platform/types.ts`.
 
-## Implementations
-- Shared storage-backed adapter: `apps/game-web/src/platform/persistence.ts`
-- Web adapter wiring: `apps/game-web/src/platform/web.ts`
-- Steam adapter wiring: `apps/game-web/src/platform/steam.ts`
+Primary asynchronous methods:
+- `read(key, { userId, scope, legacySources })`
+- `write(key, value, { userId, scope, expectedRevision, intent })`
+- `delete(key, { userId, scope, expectedRevision })`
+- `getQuota({ userId, scope })`
 
-## Gameplay Integration
-- `apps/game-web/src/main.ts` now uses `platform.persistence` for:
-  - local settings load/save (`gravity_well.settings.v1`)
-  - rollback diagnostics load/save (`gravity_well.rollback_diagnostics.v1`)
-- Gameplay code no longer calls `platform.storage` directly for save-like operations.
+Behavior:
+- Every primary operation requires a non-empty `userId` and stores data in a physical per-user namespace.
+- `expectedRevision` provides optimistic concurrency. A stale write/delete returns `status: "conflict"` with expected and actual revisions.
+- Results carry key, user, scope, physical key, revision, payload size, timestamp, write intent, and atomicity metadata.
+- Failures carry a stable code, operation, retryability, cause name where available, and quota/conflict details.
+- `cloud` remains unsupported by the web and Steam adapters and returns an explicit failure.
 
-## Safe Failure Behavior
-- Missing data returns `{ ok: false, status: "not_found" }`.
-- Corrupt JSON returns `{ ok: false, status: "invalid_data" }`.
-- Unsupported scope returns `{ ok: false, status: "unsupported" }`.
-- No persistence operation throws into gameplay call sites for expected unsupported/missing/corrupt cases.
+## Atomic Write Intent
+The storage-backed adapter uses a recoverable two-phase replace:
+1. Write a complete, validated intent envelope beside the target.
+2. Replace the target envelope.
+3. Remove the intent.
+
+A later read/write/delete validates and completes an interrupted intent. Web and current Steam adapters report `recoverable_replace`; this is not represented as a platform-atomic guarantee. A future console adapter may report `platform_atomic` only when its SDK save API guarantees that behavior.
+
+## Quota Behavior
+- The service reports per-user bytes when the adapter can enumerate its storage.
+- Web also uses `navigator.storage.estimate()` when available for origin-level usage and quota estimates.
+- Quota is checked against the peak space required by the temporary intent plus replacement data.
+- Browser quota exceptions are returned as `quota_exceeded` with a quota snapshot.
+- Current Steam memory storage has no authoritative limit and reports an unknown limit; a native durable Steam adapter is still required.
+
+## Compatibility Migration
+The old synchronous methods remain as deprecated shims:
+- `readJson`
+- `writeJson`
+- `remove`
+
+This keeps existing `main.ts` behavior unchanged during migration. The web and Steam async adapters automatically recognise these logical keys:
+- `settings` copies from `gravity_well.settings.v1`.
+- Web `profile` copies from `gravity_well.profile.<userId>`.
+- Steam `profile` copies from `profile.<userId>`.
+
+Legacy values are retained by default so old and new builds can coexist during rollout. Callers can explicitly request removal after a successful migration once rollback compatibility no longer requires the old key. A failed copy returns the readable legacy value with `migration.status: "deferred"` and the underlying structured error.
+
+## Integration Status
+- Web and Steam factories expose the asynchronous service now.
+- Existing synchronous gameplay settings and diagnostics calls are intentionally not rewired in this change.
+- Profile service behavior is unchanged; migration is available when the parent switches profile persistence to the new contract.
+- A native Steam/console durable-storage adapter, cloud conflict policy, save-slot UI, and certification evidence remain open.
 
 ## Verification
-- Shared test suite: `apps/game-web/src/platform/persistence.shared.test.ts`
-- Coverage in same suite for both web and steam:
-  - local JSON round-trip
-  - remove + not found behavior
-  - invalid JSON handling
-  - unsupported `cloud` scope returns safe failure
+Tests in `apps/game-web/src/platform/persistence.async.test.ts` and `persistence.shared.test.ts` cover:
+- Web and Steam legacy behavior.
+- User isolation.
+- Revision conflicts and revision-checked deletion.
+- Automatic settings/profile migration.
+- Quota rejection and metadata.
+- Interrupted-write recovery.
+- Competing create serialization.
+- Invalid JSON and unsupported scope behavior.

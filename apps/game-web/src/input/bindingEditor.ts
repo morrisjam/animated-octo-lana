@@ -1,5 +1,9 @@
 import type { PlayerId, PlayersById } from '../sim/types';
 import {
+  formatGamepadButtonLabel,
+  type GamepadGlyphFamily,
+} from './controllerGlyphs';
+import {
   GAMEPLAY_ACTIONS,
   KEYBOARD_COMMANDS,
   cloneInputBindingProfile,
@@ -185,31 +189,11 @@ export function formatKeyboardBinding(code: KeyboardBinding): string {
   return code;
 }
 
-const GAMEPAD_BUTTON_LABELS = [
-  'A / Cross',
-  'B / Circle',
-  'X / Square',
-  'Y / Triangle',
-  'LB / L1',
-  'RB / R1',
-  'LT / L2',
-  'RT / R2',
-  'View / Create',
-  'Menu / Options',
-  'Left Stick',
-  'Right Stick',
-  'D-pad Up',
-  'D-pad Down',
-  'D-pad Left',
-  'D-pad Right',
-  'Home',
-] as const;
-
-export function formatGamepadBinding(button: ButtonBinding): string {
-  if (button === null) {
-    return 'Unbound';
-  }
-  return GAMEPAD_BUTTON_LABELS[button] ?? `Button ${button}`;
+export function formatGamepadBinding(
+  button: ButtonBinding,
+  family: GamepadGlyphFamily = 'universal',
+): string {
+  return formatGamepadButtonLabel(button, family);
 }
 
 const MOUSE_BUTTON_LABELS = ['Left Click', 'Middle Click', 'Right Click', 'Mouse Back', 'Mouse Forward'];

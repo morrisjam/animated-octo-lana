@@ -12,11 +12,11 @@ export interface ProductionBundleLimits {
 }
 
 export const DEFAULT_PRODUCTION_BUNDLE_LIMITS: ProductionBundleLimits = {
-  // Alpha runtime persistence and support diagnostics add entry-point coordination,
-  // while their heavier implementations remain isolated in on-demand chunks.
+  // Alpha runtime persistence, support diagnostics, and Steam release identity add
+  // entry-point coordination while their heavier implementations remain lazy.
   maxInitialJavaScriptBytes: 1_115_000,
   maxInitialJavaScriptGzipBytes: 300_000,
-  maxEntryChunkBytes: 480_000,
+  maxEntryChunkBytes: 482_000,
   maxJavaScriptChunkBytes: 510_000,
 };
 

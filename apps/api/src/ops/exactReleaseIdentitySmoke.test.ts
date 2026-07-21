@@ -1,8 +1,23 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
-import { validateExactReleaseIdentity } from '../../scripts/exactReleaseIdentitySmoke';
+import {
+  resolveExactReleasePath,
+  validateExactReleaseIdentity,
+} from '../../scripts/exactReleaseIdentitySmoke';
 
 const RELEASE_SHA = '1234567890abcdef1234567890abcdef12345678';
+
+test('resolves documented smoke artifact paths from the repository root', () => {
+  const repositoryRoot = path.resolve('fixture-repository');
+  const absolutePath = path.resolve('fixture-release.json');
+
+  assert.equal(
+    resolveExactReleasePath('apps/game-web/dist-release/release.json', repositoryRoot),
+    path.join(repositoryRoot, 'apps/game-web/dist-release/release.json'),
+  );
+  assert.equal(resolveExactReleasePath(absolutePath, repositoryRoot), absolutePath);
+});
 
 function createValidInput() {
   return {

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   validateExactReleaseBuildAccess,
   validateWebReleaseAttestation,
@@ -9,7 +9,16 @@ import {
 import { assertSafeSmokeTarget, validateSmokeTargetUrl } from './smokeTargetGuard';
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
-const DEFAULT_REPORT_PATH = path.resolve('apps/api/build-artifacts/exact-release-identity.json');
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(currentDir, '../../..');
+
+export function resolveExactReleasePath(value: string, root = repositoryRoot): string {
+  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(root, value);
+}
+
+const DEFAULT_REPORT_PATH = resolveExactReleasePath(
+  'apps/api/build-artifacts/exact-release-identity.json',
+);
 
 function parseSourceDirty(value: string | undefined): boolean {
   const normalized = String(value ?? '').trim();
@@ -88,11 +97,11 @@ async function run(): Promise<void> {
   if (!adminKey) {
     throw new Error('API_OPS_ADMIN_KEY is required.');
   }
-  const webAttestationPath = path.resolve(String(
+  const webAttestationPath = resolveExactReleasePath(String(
     process.env.EXACT_RELEASE_WEB_ATTESTATION_PATH
       ?? 'apps/game-web/dist-release/release.json',
   ));
-  const reportPath = path.resolve(
+  const reportPath = resolveExactReleasePath(
     process.env.EXACT_RELEASE_IDENTITY_REPORT_PATH ?? DEFAULT_REPORT_PATH,
   );
   const sourceDirty = parseSourceDirty(process.env.EXACT_RELEASE_SOURCE_DIRTY);

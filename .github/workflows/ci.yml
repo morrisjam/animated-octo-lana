@@ -453,6 +453,24 @@ jobs:
     needs: verify
     env:
       STEAM_REQUIRE_CLEAN_RELEASE: "true"
+      VITE_APP_ENV: production
+      VITE_PLATFORM: steam
+      VITE_PROFILE_API_BASE: https://api.gravitywell.space
+      VITE_MATCHMAKING_API_BASE: https://api.gravitywell.space
+      VITE_RULESET_VERSION: prototype-2026.02
+      VITE_BALANCE_PROFILE_ID: default
+      VITE_STEAM_WEB_API_IDENTITY: gravity-well-api
+      VITE_STEAM_ENTITLEMENT_MODE: require_auth
+      VITE_STEAM_ENTITLEMENT_BYPASS: "false"
+      VITE_FEATURE_ONLINE: "true"
+      VITE_FEATURE_RANKED: "true"
+      VITE_FEATURE_ONLINE_MATCH_RUNTIME: "true"
+      VITE_FEATURE_DEBUG_TOOLS: "false"
+      VITE_FEATURE_ONLINE_DIAGNOSTICS: "false"
+      VITE_FEATURE_ONLINE_DEV_MENU: "false"
+      VITE_FEATURE_TRAINING_MODE: "true"
+      VITE_FEATURE_ARCADE_MODE: "true"
+      VITE_LOCAL_RANKED_ROOT_SMOKE: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

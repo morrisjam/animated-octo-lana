@@ -133,8 +133,8 @@ interface AssetPreloadReadinessSummary {
   characterAssetFailedIds: string[];
   characterAssetFallbackIds: string[];
   selectedStageId: string;
-  requestedStageModelId: string;
-  visibleStageModelId: string;
+  requestedStageModelId: string | null;
+  visibleStageModelId: string | null;
 }
 
 interface LoopbackApiStubSummary {
@@ -487,11 +487,13 @@ async function waitForAssetPreload(
   if (!Number.isSafeInteger(result.bytesLoaded) || result.bytesLoaded <= 0) {
     throw new Error(`Asset preload reported invalid byte evidence before ${context}: ${result.bytesLoaded}.`);
   }
-  if (result.stageModelState !== 'ready') {
-    throw new Error(`Stage model runtime reached ${result.stageModelState} before ${context}.`);
-  }
-  if (!result.stageModelLoadedIds.includes(EXPECTED_STAGE_MODEL_ID)) {
-    throw new Error(`Stage model runtime did not load ${EXPECTED_STAGE_MODEL_ID} before ${context}.`);
+  if (EXPECTED_STAGE_MODEL_ID) {
+    if (result.stageModelState !== 'ready') {
+      throw new Error(`Stage model runtime reached ${result.stageModelState} before ${context}.`);
+    }
+    if (!result.stageModelLoadedIds.includes(EXPECTED_STAGE_MODEL_ID)) {
+      throw new Error(`Stage model runtime did not load ${EXPECTED_STAGE_MODEL_ID} before ${context}.`);
+    }
   }
   const expectedCharacterAtlasIds = [...EXPECTED_CHARACTER_ATLAS_IDS];
   if (result.characterAssetState !== 'ready') {
@@ -525,8 +527,11 @@ async function waitForAssetPreload(
     throw new Error(`Selected stage ${result.selectedStageId} does not match ${EXPECTED_STAGE_ID} before ${context}.`);
   }
   if (
-    result.requestedStageModelId !== EXPECTED_STAGE_MODEL_ID
-    || result.visibleStageModelId !== EXPECTED_STAGE_MODEL_ID
+    EXPECTED_STAGE_MODEL_ID
+    && (
+      result.requestedStageModelId !== EXPECTED_STAGE_MODEL_ID
+      || result.visibleStageModelId !== EXPECTED_STAGE_MODEL_ID
+    )
   ) {
     throw new Error(
       `Authored stage model was not visible before ${context}: `

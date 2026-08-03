@@ -5,7 +5,7 @@ import {
 
 export interface VisualAlphaStageTarget {
   stageId: string;
-  modelId: string;
+  modelId: string | null;
   override: boolean;
 }
 
@@ -18,13 +18,11 @@ export function resolveVisualAlphaStageTarget(
   if (!preset) {
     throw new Error(`VISUAL_ALPHA_SMOKE_STAGE_ID is not registered: ${stageId}.`);
   }
-  const modelId = preset.tokens.backgroundModelId;
-  if (!modelId) {
-    throw new Error(`Visual smoke stage ${stageId} does not declare an authored background model.`);
-  }
+  // Procedural stages (e.g. the luminous vortex) declare no authored model;
+  // the visual smoke skips model-runtime assertions for them.
   return {
     stageId,
-    modelId,
+    modelId: preset.tokens.backgroundModelId,
     override: requested.length > 0,
   };
 }

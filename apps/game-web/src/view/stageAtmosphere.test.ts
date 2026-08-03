@@ -63,25 +63,19 @@ describe('stage atmosphere registry', () => {
     }
   });
 
-  test('keeps prior wormhole presets as rollback options while the alpha preset uses the authored lip', () => {
+  test('keeps prior wormhole presets as rollback options while the alpha preset is the procedural luminous vortex', () => {
     expect(resolveStageAtmosphere('wormhole_depths_v1').tokens.arenaMouthOpacity).toBe(0);
     const previousPreset = resolveStageAtmosphere('wormhole_rim_v3');
     const alphaPreset = resolveStageAtmosphere(ONLINE_ALPHA_STAGE_ATMOSPHERE_ID);
-    expect(alphaPreset.id).toBe('wormhole_authored_v5');
+    expect(alphaPreset.id).toBe('wormhole_luminous_v8_candidate');
     expect(previousPreset.tokens.backgroundModelId).toBeNull();
-    expect(alphaPreset.tokens.backgroundModelId).toBe('wormhole_arena_depth_v2');
-    expect(alphaPreset.tokens.backgroundModelOpacity).toBeGreaterThan(0);
+    expect(alphaPreset.tokens.backgroundModelId).toBeNull();
     expect(alphaPreset.tokens.arenaMouthOpacity).toBeGreaterThan(0);
-    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(previousPreset.tokens.cameraPitchDegrees);
-    expect(alphaPreset.tokens.arenaRimOpacity).toBeLessThan(previousPreset.tokens.arenaRimOpacity);
-    expect(alphaPreset.tokens.arenaMouthOpacity).toBeLessThan(previousPreset.tokens.arenaMouthOpacity);
-    expect(alphaPreset.tokens.backgroundEffectId).toBe('wormhole_v1');
-    expect(alphaPreset.tokens.backgroundEffectCoreOpacity).toBeLessThan(
-      resolveStageAtmosphere('wormhole_depths_v1').tokens.backgroundEffectCoreOpacity,
-    );
-    expect(alphaPreset.tokens.backgroundEffectFarFade).toBeGreaterThan(
-      resolveStageAtmosphere('wormhole_depths_v1').tokens.backgroundEffectFarFade,
-    );
+    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(30);
+    expect(alphaPreset.tokens.arenaRimOpacity).toBe(0);
+    expect(alphaPreset.tokens.backgroundEffectId).toBe('wormhole_luminous_v2');
+    expect(alphaPreset.tokens.backgroundEffectCoreOpacity).toBe(0.46);
+    expect(alphaPreset.tokens.backgroundEffectFarFade).toBe(0.18);
     const funnelCandidate = resolveStageAtmosphere('wormhole_funnel_v6_candidate');
     expect(funnelCandidate.tokens.backgroundModelId).toBe('wormhole_arena_funnel_v3');
     expect(funnelCandidate.tokens.backgroundEffectCoreOpacity).toBe(0);
@@ -94,7 +88,7 @@ describe('stage atmosphere registry', () => {
     expect(riftCandidate.tokens.ringOpacity).toBe(0);
     expect(riftCandidate.tokens.cameraPitchDegrees).toBe(24);
     expect(riftCandidate.tokens.cameraPitchDegrees).toBeLessThan(funnelCandidate.tokens.cameraPitchDegrees);
-    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(28);
+    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(30);
   });
 
   test('offers a luminous procedural vortex without the mechanical background model', () => {

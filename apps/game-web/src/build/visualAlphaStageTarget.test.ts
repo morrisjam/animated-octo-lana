@@ -2,10 +2,10 @@ import { describe, expect, test } from 'vitest';
 import { resolveVisualAlphaStageTarget } from './visualAlphaStageTarget';
 
 describe('visual alpha stage target', () => {
-  test('uses the online-alpha stage and its authored model by default', () => {
+  test('uses the online-alpha stage by default', () => {
     expect(resolveVisualAlphaStageTarget(undefined)).toEqual({
-      stageId: 'wormhole_authored_v5',
-      modelId: 'wormhole_arena_depth_v2',
+      stageId: 'wormhole_luminous_v8_candidate',
+      modelId: null,
       override: false,
     });
   });
@@ -23,8 +23,12 @@ describe('visual alpha stage target', () => {
     });
   });
 
-  test('rejects unknown stages and presets without an authored model', () => {
+  test('rejects unknown stages and resolves presets without an authored model', () => {
     expect(() => resolveVisualAlphaStageTarget('missing-stage')).toThrow(/not registered/);
-    expect(() => resolveVisualAlphaStageTarget('default')).toThrow(/does not declare/);
+    expect(resolveVisualAlphaStageTarget('default')).toEqual({
+      stageId: 'default',
+      modelId: null,
+      override: true,
+    });
   });
 });

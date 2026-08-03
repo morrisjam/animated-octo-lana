@@ -1,0 +1,14 @@
+[
+  {
+    "id": "landmark-triad",
+    "score": 0.8,
+    "visible": true,
+    "notes": "The crown, crossing blades, and split keystone remain readable after micro geometry is enabled."
+  },
+  {
+    "id": "energy-channel-routing",
+    "score": 0.46,
+    "visible": true,
+    "notes": "Prong channels clip toward white, outer channels are too difficult to read, and the keystone inlays appear as floating blocks instead of routed seams."
+  }
+]

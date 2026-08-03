@@ -54,19 +54,23 @@ function updateWormholeBackdrop(context: SceneContext, snapshot: RenderSnapshot)
   const effectDepthTravel = typeof backdrop.group.userData.effectDepthTravel === 'number'
     ? backdrop.group.userData.effectDepthTravel as number
     : 0;
+  const luminousWormhole = backdrop.group.userData.effectId === 'wormhole_luminous_v2';
   const launchActive = snapshot.players.P1.helpless > 0 || snapshot.players.P2.helpless > 0;
   const time = snapshot.gameTime * effectSpeed;
 
   backdrop.group.rotation.set(0, 0, 0);
   backdrop.group.position.set(0, 0, 0);
 
-  backdrop.core.rotation.z = 0;
+  backdrop.core.rotation.z = luminousWormhole ? time * 0.018 : 0;
+  backdrop.core.position.z = -185;
+  backdrop.core.visible = !luminousWormhole;
   const corePulse = 1 + Math.sin(time * 1.25) * 0.03;
   backdrop.core.scale.setScalar(corePulse);
   const coreMaterial = backdrop.core.material as THREE.MeshBasicMaterial;
   coreMaterial.opacity = resolveWormholeCoreOpacity(effectOpacity, effectCoreOpacity, time);
 
   backdrop.rings.forEach((ring, index) => {
+    ring.visible = !luminousWormhole;
     const baseScale = ring.userData.baseScale as number;
     const baseDepth = ring.userData.baseDepth as number;
     const scalePulse = 1 + Math.sin(time * (0.55 + index * 0.025) + index * 0.35) * 0.015;
@@ -84,6 +88,7 @@ function updateWormholeBackdrop(context: SceneContext, snapshot: RenderSnapshot)
   });
 
   backdrop.spiralArms.forEach((arm, index) => {
+    arm.visible = !luminousWormhole;
     const baseRotation = arm.userData.baseRotation as number;
     const rotationSpeed = arm.userData.rotationSpeed as number;
     arm.rotation.z = baseRotation + time * rotationSpeed;

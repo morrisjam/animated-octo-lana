@@ -35,6 +35,8 @@ import {
 
 const MIN_RENDER_PIXEL_RATIO = 0.25;
 const MAX_RENDER_PIXEL_RATIO = 2;
+const CLASSIC_WORMHOLE_EFFECT_ID = 'wormhole_v1';
+const LUMINOUS_WORMHOLE_EFFECT_ID = 'wormhole_luminous_v2';
 
 type PlayerIndicatorMeshes = Record<ActionReadabilityId, THREE.Group>;
 
@@ -108,15 +110,21 @@ function createGravityWellMaterial(): THREE.ShaderMaterial {
       uColorA: { value: new THREE.Color('#27388e') },
       uColorB: { value: new THREE.Color('#5b1fcf') },
       uHighlight: { value: new THREE.Color('#61d9ff') },
+      uStyle: { value: 0 },
     },
     vertexShader: `
+      uniform float uStyle;
       varying vec2 vUv;
       varying vec3 vPosition;
 
       void main() {
+        vec3 transformed = position;
+        float depth = clamp(1.0 - uv.y, 0.0, 1.0);
+        float throatCollapse = smoothstep(0.68, 1.0, depth);
+        transformed.xz *= mix(1.0, 0.06, throatCollapse * step(0.5, uStyle));
         vUv = uv;
-        vPosition = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vPosition = transformed;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
       }
     `,
     fragmentShader: `
@@ -128,6 +136,7 @@ function createGravityWellMaterial(): THREE.ShaderMaterial {
       uniform vec3 uColorA;
       uniform vec3 uColorB;
       uniform vec3 uHighlight;
+      uniform float uStyle;
       varying vec2 vUv;
       varying vec3 vPosition;
 
@@ -135,10 +144,100 @@ function createGravityWellMaterial(): THREE.ShaderMaterial {
         return pow(0.5 + 0.5 * sin(value), width);
       }
 
+      float noise2(vec2 point) {
+        vec2 cell = floor(point);
+        vec2 local = fract(point);
+        local = local * local * (3.0 - 2.0 * local);
+        float a = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+        float b = fract(sin(dot(cell + vec2(1.0, 0.0), vec2(127.1, 311.7))) * 43758.5453);
+        float c = fract(sin(dot(cell + vec2(0.0, 1.0), vec2(127.1, 311.7))) * 43758.5453);
+        float d = fract(sin(dot(cell + vec2(1.0, 1.0), vec2(127.1, 311.7))) * 43758.5453);
+        return mix(mix(a, b, local.x), mix(c, d, local.x), local.y);
+      }
+
+      float flowNoise(vec2 point) {
+        return noise2(point) * 0.58
+          + noise2(point * 2.07 + 5.3) * 0.29
+          + noise2(point * 4.13 - 3.7) * 0.13;
+      }
+
       void main() {
         float depth = clamp(1.0 - vUv.y, 0.0, 1.0);
         float circumference = vUv.x * 6.28318530718;
         float slowTime = uTime * 0.34;
+
+        if (uStyle > 0.5) {
+          float curvedDepth = pow(depth, 0.72);
+          vec2 angularNoise = vec2(cos(circumference), sin(circumference)) * 1.7;
+          float cloudNoise = flowNoise(
+            angularNoise
+              + vec2(curvedDepth * 2.8 - slowTime * 0.12, depth * 2.4 + slowTime * 0.05)
+          );
+          float flowAngle = circumference
+            + curvedDepth * 8.4
+            - slowTime * 0.32
+            + (cloudNoise - 0.5) * 1.55;
+          float warp = sin(flowAngle * 2.0 + depth * 7.0) * 0.46
+            + sin(flowAngle * 5.0 - depth * 11.0 + slowTime * 0.26) * 0.2;
+          float broadFlow = smoothstep(
+            0.08,
+            0.93,
+            0.5 + 0.5 * sin(flowAngle * 2.0 + depth * 14.0 + warp * 1.5)
+          );
+          float foldedFlow = smoothstep(
+            0.2,
+            0.92,
+            0.5 + 0.5 * sin(-flowAngle * 3.0 + depth * 22.0 - warp * 1.2)
+          );
+          float brightStreak = filament(
+            flowAngle * 6.0 - depth * 43.0 + warp * 2.4 - slowTime * 0.68,
+            11.0
+          );
+          float fineStreak = filament(
+            -flowAngle * 10.0 - depth * 67.0 + sin(flowAngle * 2.0) * 1.8,
+            18.0
+          );
+          float throatGlow = pow(smoothstep(0.42, 1.0, depth), 1.35);
+          float mouthFade = smoothstep(0.015, 0.115, depth);
+          float farRestraint = 1.0 - smoothstep(0.9, 1.0, depth) * uFarFade * 0.12;
+
+          vec3 deepColor = mix(
+            uColorA,
+            uColorB,
+            0.18 + broadFlow * 0.26 + cloudNoise * 0.14 + depth * 0.12
+          ) * (0.58 + cloudNoise * 0.24);
+          vec3 flowingColor = mix(
+            uColorB,
+            uHighlight,
+            clamp(foldedFlow * 0.34 + brightStreak * 0.52 + throatGlow * 0.28, 0.0, 1.0)
+          );
+          vec3 color = deepColor + flowingColor * (
+            0.11
+            + broadFlow * 0.32
+            + foldedFlow * 0.16
+            + brightStreak * 0.3
+          );
+          color = mix(
+            color,
+            vec3(0.94, 0.97, 1.0),
+            throatGlow * (0.12 + brightStreak * 0.34)
+          );
+          float alpha = uOpacity
+            * mouthFade
+            * farRestraint
+            * (
+              0.4
+              + cloudNoise * 0.1
+              + broadFlow * 0.22
+              + foldedFlow * 0.14
+              + brightStreak * 0.24
+              + fineStreak * 0.08
+              + throatGlow * 0.2
+            );
+          gl_FragColor = vec4(color, alpha);
+          return;
+        }
+
         float twistA = filament(circumference * 3.0 + depth * 18.0 - slowTime, 7.0);
         float twistB = filament(-circumference * 5.0 + depth * 27.0 + slowTime * 0.72, 10.0);
         float rib = filament(depth * 92.0 + sin(circumference * 4.0) * 2.4 - slowTime * 0.45, 12.0);
@@ -160,6 +259,7 @@ function createGravityWellMaterial(): THREE.ShaderMaterial {
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
+    toneMapped: false,
   });
 }
 
@@ -845,15 +945,18 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
 
   const gravityWellMaterial = context.gravityWell.material;
   if (gravityWellMaterial instanceof THREE.ShaderMaterial) {
+    const luminousWormhole = tokens.backgroundEffectId === LUMINOUS_WORMHOLE_EFFECT_ID;
     gravityWellMaterial.uniforms.uColorA.value.set(tokens.gravityWellColor);
     gravityWellMaterial.uniforms.uColorB.value.set(tokens.gravityWellEmissive);
     gravityWellMaterial.uniforms.uHighlight.value.set(tokens.backgroundEffectTint);
-    gravityWellMaterial.uniforms.uOpacity.value = clampOpacity(tokens.backgroundEffectOpacity) * 0.5;
+    gravityWellMaterial.uniforms.uOpacity.value = clampOpacity(tokens.backgroundEffectOpacity)
+      * (luminousWormhole ? 0.72 : 0.5);
     gravityWellMaterial.uniforms.uFarFade.value = THREE.MathUtils.clamp(
       tokens.backgroundEffectFarFade,
       0,
       1,
     );
+    gravityWellMaterial.uniforms.uStyle.value = luminousWormhole ? 1 : 0;
   }
 
   const ringMaterial = context.ring.material as THREE.MeshBasicMaterial;
@@ -897,7 +1000,9 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
     ? context.stageBackgroundModel.root.userData.visibleModelId
     : '';
 
-  const wormholeVisible = tokens.backgroundEffectId === 'wormhole_v1';
+  const wormholeVisible = tokens.backgroundEffectId === CLASSIC_WORMHOLE_EFFECT_ID
+    || tokens.backgroundEffectId === LUMINOUS_WORMHOLE_EFFECT_ID;
+  const luminousWormhole = tokens.backgroundEffectId === LUMINOUS_WORMHOLE_EFFECT_ID;
   context.wormholeBackdrop.group.visible = wormholeVisible;
   context.wormholeBackdrop.group.scale.setScalar(tokens.backgroundEffectScale);
   context.wormholeBackdrop.group.userData.effectId = tokens.backgroundEffectId ?? null;
@@ -917,12 +1022,14 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
     * clampOpacity(tokens.backgroundEffectCoreOpacity);
 
   context.wormholeBackdrop.rings.forEach((ring, index) => {
+    ring.visible = !luminousWormhole;
     const ringMaterial = ring.material as THREE.MeshBasicMaterial;
     ringMaterial.color.set(index % 2 === 0 ? tokens.backgroundEffectTint : tokens.backgroundEffectSecondaryTint);
     ringMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * (0.03 + index * 0.006);
   });
 
   context.wormholeBackdrop.spiralArms.forEach((arm, index) => {
+    arm.visible = !luminousWormhole;
     const armMaterial = arm.material as THREE.MeshBasicMaterial;
     armMaterial.color.set(index % 2 === 0 ? tokens.backgroundEffectSecondaryTint : tokens.backgroundEffectTint);
     armMaterial.opacity = clampOpacity(tokens.backgroundEffectOpacity) * (0.11 - index * 0.012);

@@ -169,6 +169,7 @@ export default defineConfig(({ mode }) => {
         game: gameEntry,
         ...(includeAssetWorkshop ? {
           assetWorkshop: fileURLToPath(new URL('asset-workshop.html', import.meta.url)),
+          arenaRimWorkshop: fileURLToPath(new URL('arena-rim-workshop.html', import.meta.url)),
         } : {}),
         webRtcSmoke: fileURLToPath(new URL('webrtc-smoke.html', import.meta.url)),
         webRtcPeerSmoke: fileURLToPath(new URL('webrtc-peer-smoke.html', import.meta.url)),

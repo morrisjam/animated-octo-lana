@@ -1,0 +1,14 @@
+[
+  {
+    "id": "broken-aperture-silhouette",
+    "score": 0.82,
+    "visible": true,
+    "notes": "The accepted macro aperture remains intact after adding secondary geometry."
+  },
+  {
+    "id": "layered-physical-depth",
+    "score": 0.71,
+    "visible": true,
+    "notes": "Recessed arc and prong backing layers add real depth, but the two upper caps overlap the crown and read as floating tabs."
+  }
+]

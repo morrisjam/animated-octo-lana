@@ -1,0 +1,191 @@
+{
+  "sourceImage": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\arena-rim-concept-v1.png",
+  "zonesDir": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones",
+  "detailInventory": {
+    "scanMethod": "grid-3x3",
+    "targetMinDetails": 10,
+    "details": [
+      {
+        "id": "zone-r0c0",
+        "kind": "bevel",
+        "description": "Upper-left armor arcs use broad chamfered caps and a thin violet edge channel.",
+        "region": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "meso",
+        "affects": "geometry and material",
+        "mapsTo": {
+          "type": "component.localFeatures",
+          "ref": "outer-arc-segments/beveled-arc-caps"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r0c0.png",
+        "confidence": 0.94
+      },
+      {
+        "id": "zone-r0c1",
+        "kind": "hole",
+        "description": "The top split crown gate forms a compact open ring and begins the paired inward prongs.",
+        "region": {
+          "x": 0.3333,
+          "y": 0.0,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "meso",
+        "affects": "geometry",
+        "mapsTo": {
+          "type": "component.localFeatures",
+          "ref": "crown-gate/split-crown-profile"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r0c1.png",
+        "confidence": 0.95
+      },
+      {
+        "id": "zone-r0c2",
+        "kind": "emissive",
+        "description": "Upper-right armor arcs carry interrupted cyan channels with one sparse violet accent.",
+        "region": {
+          "x": 0.6667,
+          "y": 0.0,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "micro",
+        "affects": "material and geometry",
+        "mapsTo": {
+          "type": "material.localOverrides",
+          "ref": "emissive-cyan/arc-channel-layout"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r0c2.png",
+        "confidence": 0.95
+      },
+      {
+        "id": "zone-r1c0",
+        "kind": "ridge",
+        "description": "Left-side modules reveal stacked dark support ribs beneath larger top armor slabs.",
+        "region": {
+          "x": 0.0,
+          "y": 0.3333,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "meso",
+        "affects": "geometry",
+        "mapsTo": {
+          "type": "component.localFeatures",
+          "ref": "understructure/stacked-ribs"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r1c0.png",
+        "confidence": 0.91
+      },
+      {
+        "id": "zone-r1c1",
+        "kind": "contour",
+        "description": "Paired inner blades taper toward the hollow center and cross in the lower half.",
+        "region": {
+          "x": 0.3333,
+          "y": 0.3333,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "macro",
+        "affects": "geometry",
+        "mapsTo": {
+          "type": "component.localFeatures",
+          "ref": "inner-prongs/tapered-crossing-profile"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r1c1.png",
+        "confidence": 0.97
+      },
+      {
+        "id": "zone-r1c2",
+        "kind": "seam",
+        "description": "Right-side top armor uses shallow panel seams and stepped transitions between unequal arc modules.",
+        "region": {
+          "x": 0.6667,
+          "y": 0.3333,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "micro",
+        "affects": "geometry",
+        "mapsTo": {
+          "type": "component.localFeatures",
+          "ref": "outer-arc-segments/panel-seams"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r1c2.png",
+        "confidence": 0.88
+      },
+      {
+        "id": "zone-r2c0",
+        "kind": "contour",
+        "description": "The lower-left boundary opens into a major intentional gap with a pointed inward cap.",
+        "region": {
+          "x": 0.0,
+          "y": 0.6667,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "macro",
+        "affects": "geometry",
+        "mapsTo": {
+          "type": "component.localFeatures",
+          "ref": "root/four-primary-breaks"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r2c0.png",
+        "confidence": 0.98
+      },
+      {
+        "id": "zone-r2c1",
+        "kind": "contour",
+        "description": "A heavy forked lower keystone ends in a central V notch and split cyan/violet channel.",
+        "region": {
+          "x": 0.3333,
+          "y": 0.6667,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "macro",
+        "affects": "geometry and material",
+        "mapsTo": {
+          "type": "component.localFeatures",
+          "ref": "lower-keystone/forked-keystone-profile"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r2c1.png",
+        "confidence": 0.98
+      },
+      {
+        "id": "zone-r2c2",
+        "kind": "gloss",
+        "description": "Lower-right slab bevels catch restrained blue-grey highlights while recesses remain nearly black.",
+        "region": {
+          "x": 0.6667,
+          "y": 0.6667,
+          "width": 0.3333,
+          "height": 0.3333,
+          "units": "normalized"
+        },
+        "scale": "micro",
+        "affects": "material",
+        "mapsTo": {
+          "type": "material.localOverrides",
+          "ref": "armor-metal/edge-wear-response"
+        },
+        "evidenceRef": "C:\\Users\\jmorr\\Documents\\GW\\animated-octo-lana\\art\\source\\generated\\arena-rim-v1\\detail-zones\\zone-r2c2.png",
+        "confidence": 0.86
+      }
+    ]
+  },
+  "authoringInstruction": "Open each zone crop under zonesDir and replace every detail stub's kind, description, scale, affects, mapsTo, and confidence with what is actually observed. Add more detail entries per zone if a single zone contains multiple distinct marks; do not leave stubs unfilled or unlinked (mapsTo must reference a real component.localFeatures or material.localOverrides entry)."
+}

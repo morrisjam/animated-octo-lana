@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Gravity Well Arena Rim Review</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/assetWorkshop/arenaRimStyles.css" />
+  </head>
+  <body>
+    <main class="review-shell">
+      <header class="review-header">
+        <div>
+          <p class="eyebrow">Gravity Well / Procedural Stage Study</p>
+          <h1>Arena Rim</h1>
+        </div>
+        <div class="header-actions">
+          <span class="pass-badge">Pilot Candidate</span>
+          <a href="/asset-workshop.html">Sprite Workshop</a>
+          <a href="/">Return to game</a>
+        </div>
+      </header>
+
+      <section class="review-layout">
+        <section class="viewport-panel">
+          <div class="viewport-title">
+            <div>
+              <p class="eyebrow">Live procedural model</p>
+              <h2>Broken ritual aperture</h2>
+            </div>
+            <p id="viewLabel" class="view-label">Reference three-quarter</p>
+          </div>
+          <div class="viewport-frame">
+            <canvas id="modelCanvas" aria-label="Interactive 3D arena rim preview"></canvas>
+            <div class="axis-key" aria-hidden="true">
+              <span class="axis-x">X</span>
+              <span class="axis-y">Y</span>
+              <span class="axis-z">Z</span>
+            </div>
+            <p class="orbit-hint">Drag to orbit / wheel to zoom</p>
+          </div>
+          <div class="control-strip" aria-label="Model review controls">
+            <div class="control-group">
+              <span>View</span>
+              <button type="button" data-view="reference" aria-pressed="true">Reference</button>
+              <button type="button" data-view="front" aria-pressed="false">Front</button>
+              <button type="button" data-view="left" aria-pressed="false">Left 30</button>
+              <button type="button" data-view="right" aria-pressed="false">Right 30</button>
+            </div>
+            <div class="control-group">
+              <span>Light</span>
+              <button type="button" data-light="reference" aria-pressed="true">Studio</button>
+              <button type="button" data-light="neutral" aria-pressed="false">Neutral</button>
+              <button type="button" data-light="grazing" aria-pressed="false">Grazing</button>
+            </div>
+            <div class="control-group utility-controls">
+              <button id="wireframeButton" type="button" aria-pressed="false">Wireframe</button>
+              <button id="saveFrameButton" type="button">Save frame</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="review-rail">
+          <section class="reference-card">
+            <div class="rail-heading">
+              <p class="eyebrow">Source target</p>
+              <h2>Concept reference</h2>
+            </div>
+            <img id="referenceImage" alt="Generated arena rim concept reference" />
+          </section>
+
+          <section class="metrics-card">
+            <div class="rail-heading">
+              <p class="eyebrow">Runtime budget</p>
+              <h2>Current model metrics</h2>
+            </div>
+            <dl class="metrics-list">
+              <div><dt>Triangles</dt><dd id="triangleCount">...</dd></div>
+              <div><dt>Preview render calls</dt><dd id="drawCallCount">...</dd></div>
+              <div><dt>Visible meshes</dt><dd id="meshCount">...</dd></div>
+              <div><dt>Materials</dt><dd id="materialCount">...</dd></div>
+            </dl>
+            <div class="budget-line">
+              <span>Production target</span>
+              <strong>&le; 12k triangles / 8 calls</strong>
+            </div>
+          </section>
+
+          <section class="gate-card">
+            <p class="eyebrow">Acceptance gate</p>
+            <h2>What must read now</h2>
+            <ul>
+              <li>Four outer gaps stay visibly open.</li>
+              <li>Top crown, crossing prongs, and lower fork are distinct.</li>
+              <li>The form holds from front and orbit views.</li>
+            </ul>
+            <p id="workshopStatus" class="status" aria-live="polite">Preparing model...</p>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="/src/assetWorkshop/arenaRim.ts"></script>
+  </body>
+</html>

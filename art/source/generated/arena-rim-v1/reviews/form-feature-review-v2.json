@@ -1,0 +1,20 @@
+[
+  {
+    "id": "landmark-triad",
+    "score": 0.83,
+    "visible": true,
+    "notes": "The split crown, crossing inner prongs, and forked lower keystone remain distinct in the reference and both 30-degree orbit views."
+  },
+  {
+    "id": "energy-channel-routing",
+    "score": 0.76,
+    "visible": true,
+    "notes": "Cyan routes now sit above the outer armor and follow all four broken arcs, while the asymmetric violet accents and separate keystone strips retain their color without clipping to white."
+  },
+  {
+    "id": "layered-physical-depth",
+    "score": 0.78,
+    "visible": true,
+    "notes": "Armor, recessed support sweeps, and raised inlays preserve volume under reference, neutral, grazing, and orbit views."
+  }
+]

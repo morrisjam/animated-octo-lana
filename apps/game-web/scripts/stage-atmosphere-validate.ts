@@ -181,7 +181,7 @@ function validate(): StageAtmosphereValidationReport {
           atmosphereId: atmosphere.id,
           message: 'tokens.backgroundEffectId must be null or a non-empty string.',
         });
-      } else if (!['wormhole_v1'].includes(tokens.backgroundEffectId)) {
+      } else if (!['wormhole_v1', 'wormhole_luminous_v2'].includes(tokens.backgroundEffectId)) {
         issues.push({
           atmosphereId: atmosphere.id,
           message: `tokens.backgroundEffectId "${tokens.backgroundEffectId}" is not a supported runtime effect.`,

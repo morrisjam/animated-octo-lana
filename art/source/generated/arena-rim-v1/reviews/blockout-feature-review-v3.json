@@ -1,0 +1,14 @@
+[
+  {
+    "id": "broken-aperture-silhouette",
+    "score": 0.82,
+    "visible": true,
+    "notes": "The four intentional gaps, open center, unequal upper and lower arc weights, and compact top split are all readable. Exact gap widths remain a structural-pass refinement."
+  },
+  {
+    "id": "landmark-triad",
+    "score": 0.8,
+    "visible": true,
+    "notes": "The split crown, lower blade crossover, and deep two-part keystone now read as separate engineered systems from the reference and remain volumetric in both orbit views."
+  }
+]

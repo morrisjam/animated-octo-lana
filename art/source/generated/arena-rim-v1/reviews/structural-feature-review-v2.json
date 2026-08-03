@@ -1,0 +1,14 @@
+[
+  {
+    "id": "broken-aperture-silhouette",
+    "score": 0.82,
+    "visible": true,
+    "notes": "Secondary supports preserve the four macro breaks and do not fill the central well."
+  },
+  {
+    "id": "layered-physical-depth",
+    "score": 0.78,
+    "visible": true,
+    "notes": "Armor, recessed support arcs, and blade backings remain visibly separated in the reference and both 30-degree orbit views. The corrected upper caps terminate near the outer arcs instead of crossing the crown."
+  }
+]

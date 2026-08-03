@@ -1,0 +1,382 @@
+:root {
+  color-scheme: dark;
+  --void: #02070c;
+  --panel: rgba(5, 15, 23, 0.92);
+  --panel-soft: rgba(8, 25, 36, 0.72);
+  --ink: #dcf8ff;
+  --muted: #7594a0;
+  --cyan: #39ddff;
+  --violet: #9878ff;
+  --orange: #ff9e57;
+  --line: rgba(85, 224, 255, 0.18);
+  --line-strong: rgba(85, 224, 255, 0.44);
+  font-family: Bahnschrift, "Aptos Display", sans-serif;
+  background: var(--void);
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(circle at 35% 24%, rgba(23, 120, 151, 0.2), transparent 32rem),
+    radial-gradient(circle at 80% 70%, rgba(100, 71, 181, 0.12), transparent 28rem),
+    repeating-linear-gradient(90deg, transparent 0 95px, rgba(64, 201, 230, 0.022) 96px),
+    linear-gradient(150deg, #010408, #06141c 52%, #02070b);
+}
+
+button,
+a {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 3px;
+}
+
+.review-shell {
+  width: min(1760px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 24px clamp(16px, 2.8vw, 46px) 38px;
+}
+
+.review-header {
+  display: flex;
+  min-height: 112px;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.eyebrow {
+  margin: 0 0 7px;
+  color: var(--orange);
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: clamp(2.8rem, 6vw, 6.1rem);
+  font-weight: 700;
+  letter-spacing: -0.065em;
+  line-height: 0.78;
+  text-transform: uppercase;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.03em;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.header-actions a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.header-actions a:hover {
+  color: var(--cyan);
+}
+
+.pass-badge {
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 158, 87, 0.54);
+  color: #ffd2ae;
+}
+
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  min-height: calc(100vh - 174px);
+}
+
+.viewport-panel {
+  min-width: 0;
+  padding: 26px clamp(0px, 1.8vw, 28px) 0 0;
+}
+
+.viewport-title {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 14px;
+}
+
+.view-label {
+  margin: 0;
+  color: var(--cyan);
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.viewport-frame {
+  position: relative;
+  height: min(70vh, 790px);
+  min-height: 520px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background:
+    radial-gradient(circle at 50% 48%, rgba(30, 73, 94, 0.16), transparent 42%),
+    linear-gradient(145deg, #02080d, #010408);
+  box-shadow:
+    inset 0 0 130px rgba(0, 0, 0, 0.74),
+    0 24px 80px rgba(0, 0, 0, 0.34);
+}
+
+#modelCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.orbit-hint {
+  position: absolute;
+  right: 16px;
+  bottom: 13px;
+  margin: 0;
+  color: rgba(220, 248, 255, 0.36);
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  text-transform: uppercase;
+}
+
+.axis-key {
+  position: absolute;
+  bottom: 13px;
+  left: 15px;
+  display: flex;
+  gap: 7px;
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.64rem;
+  pointer-events: none;
+}
+
+.axis-x {
+  color: #ff6d6d;
+}
+
+.axis-y {
+  color: #74f0ad;
+}
+
+.axis-z {
+  color: #56c8ff;
+}
+
+.control-strip {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.control-group > span {
+  margin-right: 4px;
+  color: var(--muted);
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.control-group button {
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  background: rgba(5, 19, 28, 0.78);
+  color: #9db7c0;
+  cursor: pointer;
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.63rem;
+  text-transform: uppercase;
+}
+
+.control-group button:hover,
+.control-group button[aria-pressed="true"] {
+  border-color: var(--cyan);
+  color: var(--ink);
+}
+
+.control-group button[aria-pressed="true"] {
+  background: rgba(57, 221, 255, 0.1);
+}
+
+.utility-controls button:last-child {
+  border-color: rgba(255, 158, 87, 0.5);
+  color: #ffd0ad;
+}
+
+.review-rail {
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  padding-top: 26px;
+  border-left: 1px solid var(--line);
+  background: rgba(2, 9, 14, 0.42);
+}
+
+.reference-card,
+.metrics-card,
+.gate-card {
+  padding: 22px;
+  background: var(--panel);
+}
+
+.rail-heading {
+  margin-bottom: 14px;
+}
+
+.reference-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  object-fit: cover;
+}
+
+.metrics-list {
+  margin: 18px 0 0;
+}
+
+.metrics-list div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.metrics-list dt {
+  color: var(--muted);
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metrics-list dd {
+  margin: 0;
+  color: var(--cyan);
+  font-size: 1.08rem;
+}
+
+.budget-line {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 11px;
+  border-left: 2px solid var(--violet);
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.budget-line strong {
+  color: var(--ink);
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.65rem;
+}
+
+.gate-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 20px;
+  padding-left: 18px;
+  color: #9fb6bf;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.status {
+  margin: 0;
+  color: var(--cyan);
+  font-family: Consolas, "Lucida Console", monospace;
+  font-size: 0.66rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 1080px) {
+  .review-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .review-rail {
+    grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .control-strip {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .review-header,
+  .viewport-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
+  }
+
+  .viewport-frame {
+    min-height: 430px;
+  }
+
+  .review-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .control-group {
+    flex-wrap: wrap;
+  }
+}

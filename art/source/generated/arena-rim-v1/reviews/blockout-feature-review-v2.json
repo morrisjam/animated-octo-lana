@@ -1,0 +1,14 @@
+[
+  {
+    "id": "broken-aperture-silhouette",
+    "score": 0.84,
+    "visible": true,
+    "notes": "The aperture remains clearly broken into four major outer arcs with a stable hollow center."
+  },
+  {
+    "id": "landmark-triad",
+    "score": 0.74,
+    "visible": true,
+    "notes": "The prong crossover is improved and the keystone has enough mass, but its two halves still read as separate shields rather than one split forked assembly."
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "broken-aperture-silhouette",
+    "score": 0.82,
+    "visible": true,
+    "notes": "The four boundary breaks and hollow center read clearly, although the outer arcs remain more uniform than the reference."
+  },
+  {
+    "id": "landmark-triad",
+    "score": 0.68,
+    "visible": true,
+    "notes": "The crown and crossing prongs read, but the lower keystone is too shallow and split into generic trapezoids instead of a heavy forked landmark."
+  }
+]

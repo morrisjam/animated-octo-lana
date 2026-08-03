@@ -17,6 +17,7 @@ describe('stage atmosphere registry', () => {
     expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_rim_v3')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_funnel_v6_candidate')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_rift_v7_candidate')).toBe(true);
+    expect(STAGE_ATMOSPHERE_IDS.includes('wormhole_luminous_v8_candidate')).toBe(true);
     expect(STAGE_ATMOSPHERE_IDS.includes(ONLINE_ALPHA_STAGE_ATMOSPHERE_ID)).toBe(true);
     expect(resolveStageAtmosphere(undefined).id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
     expect(resolveStageAtmosphere('').id).toBe(DEFAULT_STAGE_ATMOSPHERE_ID);
@@ -94,5 +95,17 @@ describe('stage atmosphere registry', () => {
     expect(riftCandidate.tokens.cameraPitchDegrees).toBe(24);
     expect(riftCandidate.tokens.cameraPitchDegrees).toBeLessThan(funnelCandidate.tokens.cameraPitchDegrees);
     expect(alphaPreset.tokens.cameraPitchDegrees).toBe(28);
+  });
+
+  test('offers a luminous procedural vortex without the mechanical background model', () => {
+    const luminous = resolveStageAtmosphere('wormhole_luminous_v8_candidate');
+    expect(luminous.tokens.backgroundModelId).toBeNull();
+    expect(luminous.tokens.backgroundEffectId).toBe('wormhole_luminous_v2');
+    expect(luminous.tokens.backgroundEffectCoreOpacity).toBeGreaterThan(0.4);
+    expect(luminous.tokens.arenaRimOpacity).toBe(0);
+    expect(luminous.tokens.arenaDepthTickOpacity).toBe(0);
+    expect(luminous.tokens.backgroundEffectSpeed).toBeLessThan(
+      resolveStageAtmosphere('wormhole_depths_v1').tokens.backgroundEffectSpeed,
+    );
   });
 });

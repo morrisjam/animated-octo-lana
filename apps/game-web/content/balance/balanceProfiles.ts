@@ -38,7 +38,7 @@ export const BALANCE_PROFILE_DEFINITIONS: BalanceProfileDefinition[] = [
   {
     id: 'well_hazard_v1',
     label: 'Well Hazard V1',
-    description: 'Experimental: the well swallows helpless fighters, its corona drains fuel, empty tanks launch further, and launches are short explosive arcs instead of long drifts.',
+    description: 'Experimental: lethal well core, corona fuel drain, explosive launch arcs.',
     tuning: {
       wellCoreRadius: 12,
       wellCoronaRadius: 34,

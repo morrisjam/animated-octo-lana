@@ -64,7 +64,7 @@ function placeHelplessOverCore(state: GameState): void {
   target.pos.x = 5;
   target.pos.y = 0;
   target.vel.x = 0;
-  target.vel.y = 60;
+  target.vel.y = 150;
   target.helpless = 5;
   target.lastLaunchedBy = 'P1';
 }
@@ -197,7 +197,7 @@ describe('well corona drain', () => {
     state.players.P2.pos.x = 20;
     state.players.P2.pos.y = 0;
     state.players.P2.vel.x = 0;
-    state.players.P2.vel.y = 60;
+    state.players.P2.vel.y = 150;
     state.players.P2.helpless = 5;
     state.players.P2.lastLaunchedBy = 'P1';
     const fuelBefore = state.players.P2.fuel;
@@ -215,11 +215,11 @@ describe('well pull on helpless fighters', () => {
       applyWellTuning(state, { wellHelplessPull: pull });
       state.players.P2.pos.x = 0;
       state.players.P2.pos.y = -40;
-      state.players.P2.vel.x = 60;
+      state.players.P2.vel.x = 120;
       state.players.P2.vel.y = 0;
       state.players.P2.helpless = 5;
       state.players.P2.lastLaunchedBy = 'P1';
-      runSteps(state, neutralInput(), 40);
+      runSteps(state, neutralInput(), 25);
       return Math.hypot(state.players.P2.pos.x, state.players.P2.pos.y);
     };
 

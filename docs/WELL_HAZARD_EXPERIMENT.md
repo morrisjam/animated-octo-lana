@@ -23,7 +23,13 @@ All live in `GameTuning` (`src/sim/types.ts`), clamped in `sanitiseTuning` (`src
 | `wellHelplessPull` | 0 | 30 | 0–300 |
 | `launchMissingFuelPowerScale` | 0 | 0.5 | 0–3 |
 
-Reference geometry: arena radius 72, fighter radius 2.25, dunk hit range 8. A base-power launch (126) crosses wall-to-core in roughly 0.6s, leaving a tight-but-human break window; chain-scaled launches compress it — chains near the well are lethal, chains at the rim are not. Outward launches wrap at the rim and never transit the centre, so the escape route survives.
+Reference geometry: arena radius 72, fighter radius 2.25, dunk hit range 8. Under the profile's launch feel (power 180), an inward launch crosses wall-to-core in roughly 0.4s, so the break window is tight — the pull and core radius are the knobs to soften it if playtests want more reaction time; chain-scaled launches compress it further. Outward launches wrap at the rim and never transit the centre, so the escape route survives.
+
+## Launch feel (profile-only for now)
+
+The profile also carries a launch-state retune: `launchBasePower 180` (from 126), `helplessVelocityDamping 0.985` (from 0.995), `helplessReleaseSpeedRatio 0.7` (from 0.38). Launches become ~1.5s explosive arcs — control returns as soon as the flight visibly stops — instead of ~5s drifts.
+
+These deliberately stay **out of the base defaults**: with fast recovery, the old launch → chase → button-dunk pipeline collapses (dunk pursuit at 58 u/s cannot catch victims flying at ~180), so dunk-recovery fuel drains stop happening and matches stop reaching the zero-fuel finish — verified empirically: under these values even AI matches no longer produce a winner inside the ranked 3-minute round cap (`RANKED_MAX_FRAMES`). Inside this profile the well core replaces the collapsed finish route. Promoting the feel to base defaults therefore requires a companion decision first: buff dunk startup pursuit to new-physics speeds, retune the AI/thresholds around fuel-war finishes, or make the well hazard part of the default game.
 
 ## How to play it
 

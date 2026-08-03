@@ -64,7 +64,7 @@ This document summarises the current gameplay rules and mechanics implemented in
   - Targets do not lose projectile fuel while launched.
 - Launch:
   - Applies high knockback and helpless state.
-  - Launched target keeps momentum with very light damping.
+  - Launched target keeps momentum with very light damping. (The `well_hazard_v1` profile overrides this feel: harder pop, faster momentum bleed, earlier control return — see `docs/WELL_HAZARD_EXPERIMENT.md`.)
   - Very small directional influence comes from the launched player input.
 - Parry:
   - Short active window, plus end-lag.

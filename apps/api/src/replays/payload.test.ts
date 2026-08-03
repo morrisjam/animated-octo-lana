@@ -10,6 +10,13 @@ const ZERO_NEUTRAL_TUNING_KEY = 'postControlCounterLaunchClashGraceSeconds' as c
 const COMBAT_BOOST_TUNING_KEY = 'combatBoostReacquireDelaySeconds' as const;
 const COMMITTED_LOCOMOTION_TUNING_KEY = 'committedLocomotionInputAuthority' as const;
 const BOOST_ACCELERATION_TUNING_KEY = 'ordinaryBoostAccelerationSeconds' as const;
+const WELL_HAZARD_TUNING_KEYS = [
+  'wellCoreRadius',
+  'wellCoronaRadius',
+  'wellCoronaDrainPerSecond',
+  'wellHelplessPull',
+  'launchMissingFuelPowerScale',
+] as const;
 
 const TUNING = {
   chainWindowSeconds: 1,
@@ -77,6 +84,7 @@ function fingerprintTuning(tuning: Record<string, unknown>): string {
     COMBAT_BOOST_TUNING_KEY,
     COMMITTED_LOCOMOTION_TUNING_KEY,
     BOOST_ACCELERATION_TUNING_KEY,
+    ...WELL_HAZARD_TUNING_KEYS,
   ] as const) {
     if (fingerprintInput[key] === 0) {
       delete fingerprintInput[key];
@@ -442,6 +450,47 @@ test('accepts a current recorder tuning snapshot with nonzero ordinary boost acc
     validation.payload.header.balanceTuning?.[BOOST_ACCELERATION_TUNING_KEY],
     0.18,
   );
+});
+
+test('accepts a recorder tuning snapshot carrying the well hazard keys at zero', () => {
+  const payload = canonicalOnlinePayload('current');
+  for (const key of WELL_HAZARD_TUNING_KEYS) {
+    payload.header.balanceTuning![key] = 0;
+  }
+  payload.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
+    payload.header.balanceTuning!,
+  );
+  payload.integrity!.digest = computeReplayCanonicalDigestForArchive(payload);
+
+  const validation = validateReplayPayloadForArchive(payload);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) {
+    throw new Error(validation.errorMessage);
+  }
+  assert.equal(validation.payload.header.balanceTuning?.wellCoreRadius, 0);
+});
+
+test('accepts a well hazard tuning snapshot with nonzero values', () => {
+  const payload = canonicalOnlinePayload('current');
+  payload.header.balanceTuning!.wellCoreRadius = 12;
+  payload.header.balanceTuning!.wellCoronaRadius = 34;
+  payload.header.balanceTuning!.wellCoronaDrainPerSecond = 6;
+  payload.header.balanceTuning!.wellHelplessPull = 30;
+  payload.header.balanceTuning!.launchMissingFuelPowerScale = 0.5;
+  payload.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
+    payload.header.balanceTuning!,
+  );
+  payload.integrity!.digest = computeReplayCanonicalDigestForArchive(payload);
+
+  const validation = validateReplayPayloadForArchive(payload);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) {
+    throw new Error(validation.errorMessage);
+  }
+  assert.equal(validation.payload.header.balanceTuning?.wellCoreRadius, 12);
+  assert.equal(validation.payload.header.balanceTuning?.launchMissingFuelPowerScale, 0.5);
 });
 
 test('rejects canonical tuning shapes with any other missing or additional key', () => {

@@ -99,6 +99,11 @@ const ZERO_DEFAULT_TUNING_KEYS = [
   'combatBoostReacquireDelaySeconds',
   'committedLocomotionInputAuthority',
   'ordinaryBoostAccelerationSeconds',
+  'wellCoreRadius',
+  'wellCoronaRadius',
+  'wellCoronaDrainPerSecond',
+  'wellHelplessPull',
+  'launchMissingFuelPowerScale',
 ] as const;
 
 const GAME_TUNING_KEYS = [
@@ -135,6 +140,11 @@ const GAME_TUNING_KEYS = [
   'dunkRecoveryDurationSeconds',
   'dunkRecoveryMoveSpeed',
   'dunkRecoveryFuelFraction',
+  'wellCoreRadius',
+  'wellCoronaRadius',
+  'wellCoronaDrainPerSecond',
+  'wellHelplessPull',
+  'launchMissingFuelPowerScale',
 ] as const;
 
 function hasSupportedGameTuningKeys(value: Record<string, unknown>): boolean {

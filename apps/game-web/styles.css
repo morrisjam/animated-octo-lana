@@ -98,6 +98,18 @@ html, body {
 .fill.p2 { background: linear-gradient(90deg, var(--ui-hud-p2-fill-start), var(--p2)); }
 .meta { margin-top: 6px; color: var(--ui-hud-meta-text); font-size: 12px; }
 
+.break-pips { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle; }
+.break-pip {
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  border-radius: 2px;
+  border: 1px solid var(--ui-hud-panel-border);
+  background: var(--ui-hud-track-bg);
+}
+.break-pip.filled.p1 { background: var(--p1); border-color: var(--p1); box-shadow: 0 0 6px var(--p1); }
+.break-pip.filled.p2 { background: var(--p2); border-color: var(--p2); box-shadow: 0 0 6px var(--p2); }
+
 #status {
   align-self: center;
   margin-bottom: 8vh;

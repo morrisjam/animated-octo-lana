@@ -96,11 +96,25 @@ function toFuelPercent(fuel: number, maxFuel: number): number {
   return clampPercent((fuel / maxFuel) * 100);
 }
 
-function formatBreakIcons(breaks: number): string {
+function renderBreakPips(container: HTMLElement, breaks: number, playerClass: 'p1' | 'p2'): void {
   const clamped = Math.max(0, Math.min(MAX_BREAK_ICONS, Math.floor(breaks)));
-  const filled = '[*]'.repeat(clamped);
-  const empty = '[ ]'.repeat(MAX_BREAK_ICONS - clamped);
-  return `${filled}${empty}`;
+  if (container.dataset.breakPips === String(clamped)) {
+    return;
+  }
+  container.dataset.breakPips = String(clamped);
+  container.replaceChildren();
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = 'Breaks';
+  container.appendChild(label);
+  const pips = document.createElement('span');
+  pips.className = 'break-pips';
+  for (let index = 0; index < MAX_BREAK_ICONS; index += 1) {
+    const pip = document.createElement('span');
+    pip.className = index < clamped ? `break-pip filled ${playerClass}` : 'break-pip';
+    pips.appendChild(pip);
+  }
+  container.appendChild(pips);
 }
 
 function getRequiredElement<T extends Element>(selector: string): T {
@@ -368,8 +382,8 @@ export function createHud(): HudController {
 
       elements.p1Fuel.style.width = `${toFuelPercent(p1.fuel, p1.maxFuel)}%`;
       elements.p2Fuel.style.width = `${toFuelPercent(p2.fuel, p2.maxFuel)}%`;
-      elements.p1Breaks.textContent = `Breaks: ${formatBreakIcons(p1.launchBreaks)}`;
-      elements.p2Breaks.textContent = `Breaks: ${formatBreakIcons(p2.launchBreaks)}`;
+      renderBreakPips(elements.p1Breaks, p1.launchBreaks, 'p1');
+      renderBreakPips(elements.p2Breaks, p2.launchBreaks, 'p2');
 
       elements.status.textContent = snapshot.statusText;
       if (snapshot.winner) {

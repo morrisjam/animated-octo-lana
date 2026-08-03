@@ -64,6 +64,11 @@ export function createDefaultTuning(): GameTuning {
     dunkRecoveryDurationSeconds: DUNK_RECOVERY_DURATION_SECONDS,
     dunkRecoveryMoveSpeed: DUNK_RECOVERY_MOVE_SPEED,
     dunkRecoveryFuelFraction: DUNK_RECOVERY_FUEL_FRACTION,
+    wellCoreRadius: 0,
+    wellCoronaRadius: 0,
+    wellCoronaDrainPerSecond: 0,
+    wellHelplessPull: 0,
+    launchMissingFuelPowerScale: 0,
   };
 }
 
@@ -112,6 +117,11 @@ export function sanitiseTuning(tuning: Partial<GameTuning>): GameTuning {
     dunkRecoveryDurationSeconds: clamp(value('dunkRecoveryDurationSeconds'), 0.1, 8),
     dunkRecoveryMoveSpeed: clamp(value('dunkRecoveryMoveSpeed'), 1, 300),
     dunkRecoveryFuelFraction: clamp(value('dunkRecoveryFuelFraction'), 0, 1),
+    wellCoreRadius: clamp(value('wellCoreRadius'), 0, 40),
+    wellCoronaRadius: clamp(value('wellCoronaRadius'), 0, 72),
+    wellCoronaDrainPerSecond: clamp(value('wellCoronaDrainPerSecond'), 0, 60),
+    wellHelplessPull: clamp(value('wellHelplessPull'), 0, 300),
+    launchMissingFuelPowerScale: clamp(value('launchMissingFuelPowerScale'), 0, 3),
   };
 }
 
@@ -128,6 +138,21 @@ export function createGameTuningFingerprintInput(tuning: GameTuning): Partial<Ga
   }
   if (fingerprintInput.ordinaryBoostAccelerationSeconds === 0) {
     delete fingerprintInput.ordinaryBoostAccelerationSeconds;
+  }
+  if (fingerprintInput.wellCoreRadius === 0) {
+    delete fingerprintInput.wellCoreRadius;
+  }
+  if (fingerprintInput.wellCoronaRadius === 0) {
+    delete fingerprintInput.wellCoronaRadius;
+  }
+  if (fingerprintInput.wellCoronaDrainPerSecond === 0) {
+    delete fingerprintInput.wellCoronaDrainPerSecond;
+  }
+  if (fingerprintInput.wellHelplessPull === 0) {
+    delete fingerprintInput.wellHelplessPull;
+  }
+  if (fingerprintInput.launchMissingFuelPowerScale === 0) {
+    delete fingerprintInput.launchMissingFuelPowerScale;
   }
   return fingerprintInput;
 }

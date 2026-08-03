@@ -78,6 +78,11 @@ describe('game tuning', () => {
     delete legacyDefaults.combatBoostReacquireDelaySeconds;
     delete legacyDefaults.committedLocomotionInputAuthority;
     delete legacyDefaults.ordinaryBoostAccelerationSeconds;
+    delete legacyDefaults.wellCoreRadius;
+    delete legacyDefaults.wellCoronaRadius;
+    delete legacyDefaults.wellCoronaDrainPerSecond;
+    delete legacyDefaults.wellHelplessPull;
+    delete legacyDefaults.launchMissingFuelPowerScale;
 
     expect(fingerprintGameTuning(defaults)).toBe(fingerprintDeterministicValue(legacyDefaults));
     expect(fingerprintGameTuning({
@@ -95,6 +100,26 @@ describe('game tuning', () => {
     expect(fingerprintGameTuning({
       ...defaults,
       ordinaryBoostAccelerationSeconds: 0.18,
+    })).not.toBe(fingerprintGameTuning(defaults));
+    expect(fingerprintGameTuning({
+      ...defaults,
+      wellCoreRadius: 12,
+    })).not.toBe(fingerprintGameTuning(defaults));
+    expect(fingerprintGameTuning({
+      ...defaults,
+      wellCoronaRadius: 34,
+    })).not.toBe(fingerprintGameTuning(defaults));
+    expect(fingerprintGameTuning({
+      ...defaults,
+      wellCoronaDrainPerSecond: 6,
+    })).not.toBe(fingerprintGameTuning(defaults));
+    expect(fingerprintGameTuning({
+      ...defaults,
+      wellHelplessPull: 30,
+    })).not.toBe(fingerprintGameTuning(defaults));
+    expect(fingerprintGameTuning({
+      ...defaults,
+      launchMissingFuelPowerScale: 0.5,
     })).not.toBe(fingerprintGameTuning(defaults));
   });
 });

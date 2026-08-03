@@ -35,4 +35,16 @@ export const BALANCE_PROFILE_DEFINITIONS: BalanceProfileDefinition[] = [
       superBoostFuelMultiplier: 1.2,
     },
   },
+  {
+    id: 'well_hazard_v1',
+    label: 'Well Hazard V1',
+    description: 'Experimental: the well swallows helpless fighters, its corona drains fuel, and empty tanks launch further.',
+    tuning: {
+      wellCoreRadius: 12,
+      wellCoronaRadius: 34,
+      wellCoronaDrainPerSecond: 6,
+      wellHelplessPull: 30,
+      launchMissingFuelPowerScale: 0.5,
+    },
+  },
 ];

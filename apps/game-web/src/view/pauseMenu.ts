@@ -337,6 +337,11 @@ const TUNING_FIELDS: TuningField[] = [
   { key: 'dunkRecoveryFuelFraction', label: 'Dunk Recovery Fuel Fraction', step: 0.01, min: 0, max: 1 },
   { key: 'dunkRecoveryDurationSeconds', label: 'Dunk Recovery Duration', step: 0.01, min: 0.1, max: 8 },
   { key: 'dunkRecoveryMoveSpeed', label: 'Dunk Recovery Move Speed', step: 0.5, min: 1, max: 300 },
+  { key: 'wellCoreRadius', label: 'Well Core Radius (0 = Off)', step: 0.5, min: 0, max: 40 },
+  { key: 'wellCoronaRadius', label: 'Well Corona Radius (0 = Off)', step: 0.5, min: 0, max: 72 },
+  { key: 'wellCoronaDrainPerSecond', label: 'Well Corona Fuel Drain', step: 0.5, min: 0, max: 60 },
+  { key: 'wellHelplessPull', label: 'Well Pull While Launched', step: 1, min: 0, max: 300 },
+  { key: 'launchMissingFuelPowerScale', label: 'Launch Power Per Missing Fuel', step: 0.05, min: 0, max: 3 },
 ];
 
 const TUNING_FIELD_BY_KEY = new Map(TUNING_FIELDS.map((field) => [field.key, field]));
@@ -396,6 +401,16 @@ const GLOBAL_TUNING_SECTIONS: ReadonlyArray<{
       'dunkRecoveryFuelFraction',
       'dunkRecoveryDurationSeconds',
       'dunkRecoveryMoveSpeed',
+    ],
+  },
+  {
+    label: 'Well hazard (experimental)',
+    keys: [
+      'wellCoreRadius',
+      'wellCoronaRadius',
+      'wellCoronaDrainPerSecond',
+      'wellHelplessPull',
+      'launchMissingFuelPowerScale',
     ],
   },
 ];

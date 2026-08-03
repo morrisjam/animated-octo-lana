@@ -79,6 +79,14 @@ Definition of done:
 - ranked online smoke now checks invalid session-token rejection for frame relay and ranked submission
 - ranked online smoke now checks outsider ranked-result submission rejection
 
+### Batch E: Well hazard experiment (gameplay, default off)
+
+- the well is now an optional gameplay object: core capture of helpless fighters (resolving through the dunk finish), corona fuel drain, helpless-only pull, and missing-fuel launch scaling
+- five zero-default `GameTuning` knobs registered in the zero-default fingerprint/replay compatibility lists; default sim verified bit-identical (`replay:check` and existing matchup baselines unchanged)
+- shipped as balance profile `well_hazard_v1` (not ranked-allowlisted), live-tunable via Debug Tuning → "Well hazard (experimental)"
+- validation: `wellHazard.test.ts` (13 tests), full unit suite, `replay:check`, `matchup:smoke` (additive rows only), `balance:validate`, `balance:patch-notes`, `rollback:soak` (converged, depth within budget), `ai:balance-gate` (pass)
+- targets the documented "launches do not become finishes" / "zero-fuel stall" loop debt; design + promotion path in `docs/WELL_HAZARD_EXPERIMENT.md`
+
 ## Producer Checklist
 
 - keep all work mapped to one of the three stream docs

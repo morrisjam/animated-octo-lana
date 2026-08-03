@@ -122,6 +122,11 @@ describe('AI batch rule comparison', () => {
       combatBoostReacquireDelaySeconds: _combatBoostNeutralField,
       committedLocomotionInputAuthority: _locomotionAuthorityNeutralField,
       ordinaryBoostAccelerationSeconds: _boostAccelerationNeutralField,
+      wellCoreRadius: _wellCoreNeutralField,
+      wellCoronaRadius: _wellCoronaNeutralField,
+      wellCoronaDrainPerSecond: _wellCoronaDrainNeutralField,
+      wellHelplessPull: _wellHelplessPullNeutralField,
+      launchMissingFuelPowerScale: _launchMissingFuelNeutralField,
       ...legacyTuning
     } = current.tuning;
     const legacy = {
@@ -142,6 +147,11 @@ describe('AI batch rule comparison', () => {
     expect(parseAiBatchRuleSnapshot(legacy)?.tuning.combatBoostReacquireDelaySeconds).toBe(0);
     expect(parseAiBatchRuleSnapshot(legacy)?.tuning.committedLocomotionInputAuthority).toBe(0);
     expect(parseAiBatchRuleSnapshot(legacy)?.tuning.ordinaryBoostAccelerationSeconds).toBe(0);
+    expect(parseAiBatchRuleSnapshot(legacy)?.tuning.wellCoreRadius).toBe(0);
+    expect(parseAiBatchRuleSnapshot(legacy)?.tuning.wellCoronaRadius).toBe(0);
+    expect(parseAiBatchRuleSnapshot(legacy)?.tuning.wellCoronaDrainPerSecond).toBe(0);
+    expect(parseAiBatchRuleSnapshot(legacy)?.tuning.wellHelplessPull).toBe(0);
+    expect(parseAiBatchRuleSnapshot(legacy)?.tuning.launchMissingFuelPowerScale).toBe(0);
   });
 
   test('includes a non-zero post-control counter grace value in rule fingerprints', () => {

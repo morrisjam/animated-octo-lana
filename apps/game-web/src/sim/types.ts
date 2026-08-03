@@ -71,6 +71,11 @@ export interface GameTuning {
   dunkRecoveryDurationSeconds: number;
   dunkRecoveryMoveSpeed: number;
   dunkRecoveryFuelFraction: number;
+  wellCoreRadius: number;
+  wellCoronaRadius: number;
+  wellCoronaDrainPerSecond: number;
+  wellHelplessPull: number;
+  launchMissingFuelPowerScale: number;
 }
 
 export interface GameRules {

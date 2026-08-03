@@ -573,8 +573,13 @@ function resolveLaunchConnection(
 
   const launchPower = (tuning.launchBasePower * attackerStats.launchBasePowerMultiplier)
     + attacker.chain * (tuning.launchChainBonus * attackerStats.launchChainBonusMultiplier);
-  target.vel.x = dir.x * launchPower;
-  target.vel.y = dir.y * launchPower;
+  const missingFuelFraction = target.maxFuel > 0
+    ? clamp(1 - target.fuel / target.maxFuel, 0, 1)
+    : 0;
+  const scaledLaunchPower = launchPower
+    * (1 + tuning.launchMissingFuelPowerScale * missingFuelFraction);
+  target.vel.x = dir.x * scaledLaunchPower;
+  target.vel.y = dir.y * scaledLaunchPower;
   target.helpless = tuning.launchHelplessSeconds * targetStats.launchDurationTakenMultiplier;
   target.stunned = 0;
   target.lastLaunchedBy = attacker.id;
@@ -1525,6 +1530,44 @@ function clampToArena(player: PlayerState, dir: Vec2): void {
   }
 }
 
+// Experimental well hazard — every knob defaults to 0/off; enabled via the
+// well_hazard_v1 balance profile (see docs/WELL_HAZARD_EXPERIMENT.md).
+// The corona drains fuel from fighters in control without touching steering;
+// the core swallows helpless fighters, resolving through the existing dunk
+// finish so a zero-fuel capture wins the round and a fuelled one costs the
+// standard recovery.
+function applyWellHazard(state: GameState, player: PlayerState, dt: number): void {
+  const tuning = state.tuning;
+  const coronaActive = tuning.wellCoronaRadius > 0 && tuning.wellCoronaDrainPerSecond > 0;
+  const coreActive = tuning.wellCoreRadius > 0;
+  if (!coronaActive && !coreActive) {
+    return;
+  }
+  const centerDistance = Math.hypot(player.pos.x, player.pos.y);
+  if (
+    coronaActive
+    && player.helpless <= 0
+    && player.stunned <= 0
+    && player.recovering <= 0
+    && centerDistance < tuning.wellCoronaRadius
+  ) {
+    player.fuel = Math.max(0, player.fuel - dt * tuning.wellCoronaDrainPerSecond);
+  }
+  if (
+    coreActive
+    && !state.winner
+    && player.helpless > 0
+    && player.recovering <= 0
+    && centerDistance < tuning.wellCoreRadius
+  ) {
+    const launcherId = player.lastLaunchedBy;
+    if (launcherId) {
+      player.dunkFlash = DUNK_FLASH_SECONDS;
+      startDunkRecovery(state, state.players[launcherId], player);
+    }
+  }
+}
+
 function handleArenaBoundary(player: PlayerState): void {
   const radius = Math.hypot(player.pos.x, player.pos.y);
   if (radius <= ARENA_RADIUS) {
@@ -1604,6 +1647,12 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): PlayerI
     }
   }
 
+  if (player.helpless > 0 && tuning.wellHelplessPull > 0) {
+    const pullDir = normalise(-player.pos.x, -player.pos.y);
+    player.vel.x += pullDir.x * tuning.wellHelplessPull * dt;
+    player.vel.y += pullDir.y * tuning.wellHelplessPull * dt;
+  }
+
   if (player.chain > 0) {
     player.chainTimer = Math.max(0, player.chainTimer - dt);
     if (player.chainTimer <= 0) {
@@ -1636,6 +1685,7 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): PlayerI
   }
 
   handleArenaBoundary(player);
+  applyWellHazard(state, player, dt);
 
   if (wasRecovering && player.recovering <= 0) {
     player.recoveryDuration = 0;

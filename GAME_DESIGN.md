@@ -27,14 +27,23 @@ This document summarises the current gameplay rules and mechanics implemented in
   - If an allowed crossing goes beyond `ARENA_WRAP_RADIUS`, the player wraps to the opposite side of the circle.
   - Wrap fuel penalty applies only when not launched.
 
+## Well Hazard (Experimental, Default Off)
+
+- The central well can be enabled as a gameplay object via five zero-default tuning knobs (see `docs/WELL_HAZARD_EXPERIMENT.md`), shipped as balance profile `well_hazard_v1`.
+- Core (`wellCoreRadius`): swallows helpless fighters, resolving through the dunk finish — a zero-fuel capture wins the round, a fuelled one costs the standard dunk recovery. Fighters in control hover safely.
+- Corona (`wellCoronaRadius` / `wellCoronaDrainPerSecond`): drains fuel from fighters in control; never affects steering.
+- Pull (`wellHelplessPull`): accelerates only helpless fighters toward the centre, bending launches into arcs.
+- Launch scaling (`launchMissingFuelPowerScale`): launches hit harder against low-fuel targets.
+- With all knobs at `0` the simulation is bit-identical to the pre-experiment build.
+
 ## Player Resources
 
-- Max fuel: `100`.
+- Max fuel: `300` (`MAX_FUEL`), scaled per character by `fuelCapacityMultiplier`.
 - Launch breaks: `3`.
 - Fuel usage:
   - Movement uses fuel over time.
   - Projectile uses fuel.
-  - Boost, launch, parry, and break do not directly consume fuel.
+  - Boost drains fuel slowly while held (`boost.holdFuelPerSecond`); launch, parry, and break do not directly consume fuel.
   - Super boost has an upfront cost and end cost.
   - Dunk recovery removes fuel from the dunked player.
 
@@ -64,7 +73,7 @@ This document summarises the current gameplay rules and mechanics implemented in
   - Usable only while launched and with break stock remaining.
   - Clears helpless state and applies a short stun to the user.
 - Dunk:
-  - Requires close range and attacker fuel.
+  - Requires close range; there is no attacker fuel requirement.
   - If target fuel is zero, dunk ends the game.
   - Otherwise target enters recovery.
 
@@ -83,7 +92,7 @@ This document summarises the current gameplay rules and mechanics implemented in
 - Recovery triggers when dunked target still has fuel.
 - Recovery fuel cost:
   - `20%` of max fuel, or all remaining fuel if lower.
-- No recovery possible at `0` fuel.
+- At `0` fuel there is no recovery: the dunk ends the game while `allowDunkWin` is true; when it is false, the target is refuelled to max and recovers.
 - Recovery behaviour:
   - Target is moved towards the arena centre and away from attacker.
   - Target cannot act during recovery.

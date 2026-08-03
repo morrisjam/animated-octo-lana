@@ -82,6 +82,11 @@ const ZERO_DEFAULT_TUNING_KEYS = [
   'combatBoostReacquireDelaySeconds',
   'committedLocomotionInputAuthority',
   'ordinaryBoostAccelerationSeconds',
+  'wellCoreRadius',
+  'wellCoronaRadius',
+  'wellCoronaDrainPerSecond',
+  'wellHelplessPull',
+  'launchMissingFuelPowerScale',
 ] as const satisfies readonly (keyof GameTuning)[];
 
 export interface ReplayHeader {

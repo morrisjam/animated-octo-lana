@@ -35,8 +35,8 @@
   "artifacts": {
     "reviewAtlas": {
       "path": "art/review/duelist_sprite_v1_atlas.png",
-      "sha256": "d782c11879b23ac274c70954aec508f83feadcaa05e8567aa91af392b52e7e52",
-      "bytes": 513059,
+      "sha256": "01b44864fd717739440ac3e0bfe1ac73f2bd21eb81df47583d64a1aabe56f894",
+      "bytes": 439753,
       "widthPixels": 1536,
       "heightPixels": 768
     },
@@ -48,9 +48,9 @@
       "heightPixels": 256
     },
     "runtimeAtlas": {
-      "path": "apps/game-web/public/assets/characters/duelist/duelist-alpha-atlas-v2.png",
-      "sha256": "c6e4791614dd6a8cfe4fe4c60dc41ce19c65cb63101ec2c6438f58b3f7c8c2a3",
-      "bytes": 82366,
+      "path": "apps/game-web/public/assets/characters/duelist/duelist-alpha-atlas-v3.png",
+      "sha256": "050e037db17af8031817431b9be05c0c2dcadc536668b3000e817b2e89485fbd",
+      "bytes": 76162,
       "widthPixels": 512,
       "heightPixels": 256
     },

@@ -5,7 +5,7 @@
     "id": "character_duelist_animset",
     "atlas": {
       "id": "character_duelist_animset",
-      "src": "/assets/characters/duelist/duelist-alpha-atlas-v2.png?v=2",
+      "src": "/assets/characters/duelist/duelist-alpha-atlas-v3.png?v=3",
       "contentType": "image/png",
       "widthPixels": 512,
       "heightPixels": 256,

@@ -181,6 +181,7 @@ describe('character visual adapters', () => {
     const body = p1.node.getObjectByName('sprite-body') as THREE.Sprite;
     const own = makeSnapshot('vanguard');
 
+    // The very first update snaps the displayed facing without a turn tween.
     updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: -10, y: 0 } }, 1);
     expect(body.scale.x).toBeLessThan(0);
 
@@ -188,8 +189,55 @@ describe('character visual adapters', () => {
     updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: 1, y: 0 } }, 1.1);
     expect(body.scale.x).toBeLessThan(0);
 
-    updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: 10, y: 0 } }, 1.2);
+    // A real side switch turns over a few frames (edge-on squash), so the
+    // mirrored scale crosses to positive after a short tween, not instantly.
+    let time = 1.2;
+    for (let i = 0; i < 8; i += 1) {
+      updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: 10, y: 0 } }, time);
+      time += 0.05;
+    }
     expect(body.scale.x).toBeGreaterThan(0);
+
+    disposeCharacterVisualNode(p1.node);
+  });
+
+  test('crossfades into calm clips and hard-cuts into attacks', () => {
+    const p1 = createCharacterVisualHandle('vanguard', 'P1');
+    const ghost = p1.node.getObjectByName('sprite-ghost') as THREE.Sprite;
+    const opponent = makeSnapshot('duelist');
+    const idle = makeSnapshot('vanguard');
+    const recovering = {
+      ...makeSnapshot('vanguard'),
+      presentationAction: 'recover' as const,
+      presentationPhase: 'recovery' as const,
+      recovering: 0.6,
+      recoveryProgress: 0.7,
+    };
+    const launching = {
+      ...makeSnapshot('vanguard'),
+      presentationAction: 'launch' as const,
+      presentationPhase: 'startup' as const,
+    };
+
+    updateCharacterVisualHandle(p1, idle, opponent, 1);
+    expect(ghost.visible).toBe(false);
+
+    // idle -> recover is a calm transition: the previous pose dissolves out.
+    updateCharacterVisualHandle(p1, recovering, opponent, 1.016);
+    expect(ghost.visible).toBe(true);
+    expect(ghost.material.opacity).toBeGreaterThan(0.5);
+
+    // The dissolve decays and clears within a few frames.
+    let time = 1.07;
+    for (let i = 0; i < 4; i += 1) {
+      updateCharacterVisualHandle(p1, recovering, opponent, time);
+      time += 0.06;
+    }
+    expect(ghost.visible).toBe(false);
+
+    // recover -> launch startup is an attack: no dissolve, instant cut.
+    updateCharacterVisualHandle(p1, launching, opponent, time);
+    expect(ghost.visible).toBe(false);
 
     disposeCharacterVisualNode(p1.node);
   });

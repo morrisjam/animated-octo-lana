@@ -52,12 +52,53 @@ interface SpriteVisualRuntime {
   animationSet: SpriteAnimationSet;
   body: THREE.Sprite;
   rim: THREE.Sprite;
+  ghost: THREE.Sprite;
+  ghostFadeRemaining: number;
   facing: number;
+  facingDisplay: number;
+  lastGameTime: number | null;
+  lastDisplayed: {
+    sheetId: string;
+    frame: number;
+    scaleX: number;
+    scaleY: number;
+    rotation: number;
+  } | null;
   clipId: SpriteClipId;
   sheetId: string;
   clipStartedAt: number;
   phase: number;
-  sheetTextures: Map<string, { body: THREE.Texture; rim: THREE.Texture }>;
+  sheetTextures: Map<string, { body: THREE.Texture; rim: THREE.Texture; ghost: THREE.Texture }>;
+}
+
+// Clips a transition may dissolve into. Attacks, parries, and getting hit
+// stay hard cuts so telegraphs and impacts keep their snap; the dissolve
+// smooths the seams back into neutral flight and recovery.
+const SMOOTH_TRANSITION_CLIPS = new Set<SpriteClipId>(['idle', 'boost', 'recover']);
+const SPRITE_CROSSFADE_SECONDS = 0.11;
+const SPRITE_TURN_SECONDS = 0.09;
+
+function beginSpriteTransition(runtime: SpriteVisualRuntime, nextClipId: SpriteClipId): void {
+  const previous = runtime.lastDisplayed;
+  const sheet = previous ? runtime.animationSet.sheets[previous.sheetId] : undefined;
+  const textures = previous ? runtime.sheetTextures.get(previous.sheetId) : undefined;
+  if (!previous || !sheet || !textures || !SMOOTH_TRANSITION_CLIPS.has(nextClipId)) {
+    runtime.ghostFadeRemaining = 0;
+    runtime.ghost.visible = false;
+    return;
+  }
+  const ghostMaterial = runtime.ghost.material as THREE.SpriteMaterial;
+  if (ghostMaterial.map !== textures.ghost) {
+    ghostMaterial.map = textures.ghost;
+    ghostMaterial.needsUpdate = true;
+  }
+  applyAtlasFrame(textures.ghost, sheet, previous.frame);
+  runtime.ghost.center.set(sheet.anchorX, sheet.anchorY);
+  runtime.ghost.scale.set(previous.scaleX, previous.scaleY, 1);
+  ghostMaterial.rotation = previous.rotation;
+  ghostMaterial.opacity = 0.85;
+  runtime.ghost.visible = true;
+  runtime.ghostFadeRemaining = SPRITE_CROSSFADE_SECONDS;
 }
 
 export type RequiredPackagedAtlasRuntimeState = 'loading' | 'ready' | 'failed';
@@ -583,16 +624,42 @@ function createSpriteNode(
   body.scale.set(initialSheet.worldWidth, initialSheet.worldHeight, 1);
   group.add(body);
 
+  // Crossfade layer: holds the previous clip's final pose for a beat while
+  // the body plays the next clip, softening cuts back into calm states.
+  const ghostTexture = loadAtlasTexture(initialSheet);
+  applyAtlasFrame(ghostTexture, initialSheet, initialFrame);
+  const ghost = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: ghostTexture,
+    color: bodyTint,
+    transparent: true,
+    opacity: 0,
+    alphaTest: 0.06,
+    depthWrite: false,
+  }));
+  ghost.name = 'sprite-ghost';
+  ghost.center.set(initialSheet.anchorX, initialSheet.anchorY);
+  ghost.position.z = 0.38;
+  ghost.scale.set(initialSheet.worldWidth, initialSheet.worldHeight, 1);
+  ghost.visible = false;
+  group.add(ghost);
+
   const runtime: SpriteVisualRuntime = {
     animationSet,
     body,
     rim,
+    ghost,
+    ghostFadeRemaining: 0,
     facing: 1,
+    facingDisplay: 1,
+    lastGameTime: null,
+    lastDisplayed: null,
     clipId: initialClipId,
     sheetId: initialSheet.id,
     clipStartedAt: 0,
     phase: playerId === 'P1' ? 0 : 0.13,
-    sheetTextures: new Map([[initialSheet.id, { body: bodyTexture, rim: rimTexture }]]),
+    sheetTextures: new Map([
+      [initialSheet.id, { body: bodyTexture, rim: rimTexture, ghost: ghostTexture }],
+    ]),
   };
   group.userData.spriteRuntime = runtime;
   return group;
@@ -679,8 +746,13 @@ const spriteAdapter: CharacterVisualAdapter = {
     if (!runtime) {
       return;
     }
+    const dt = runtime.lastGameTime === null
+      ? 0
+      : THREE.MathUtils.clamp(context.gameTime - runtime.lastGameTime, 0, 0.05);
+    runtime.lastGameTime = context.gameTime;
     const clipId = resolveSpriteClip(runtime.animationSet, context.own);
     if (clipId !== runtime.clipId) {
+      beginSpriteTransition(runtime, clipId);
       runtime.clipId = clipId;
       runtime.clipStartedAt = context.gameTime;
     }
@@ -702,6 +774,7 @@ const spriteAdapter: CharacterVisualAdapter = {
         textures = {
           body: loadAtlasTexture(sheet),
           rim: loadAtlasTexture(sheet),
+          ghost: loadAtlasTexture(sheet),
         };
         runtime.sheetTextures.set(selection.sheetId, textures);
       }
@@ -729,7 +802,21 @@ const spriteAdapter: CharacterVisualAdapter = {
     if (Math.abs(opponentDeltaX) > 2) {
       runtime.facing = opponentDeltaX >= 0 ? 1 : -1;
     }
-    const facing = runtime.facing;
+    // Ease the mirror through an edge-on squash so a side switch reads as the
+    // fighter turning around instead of popping. First update snaps.
+    if (dt === 0) {
+      runtime.facingDisplay = runtime.facing;
+    } else {
+      const turnStep = dt / SPRITE_TURN_SECONDS;
+      runtime.facingDisplay += THREE.MathUtils.clamp(
+        runtime.facing - runtime.facingDisplay,
+        -turnStep,
+        turnStep,
+      );
+    }
+    const facing = Math.abs(runtime.facingDisplay) < 0.04
+      ? (runtime.facingDisplay < 0 ? -0.04 : 0.04)
+      : runtime.facingDisplay;
     const startupTelegraph = context.own.presentationPhase === 'startup'
       ? 0.18 + Math.abs(Math.sin(context.gameTime * 18 + runtime.phase * 10)) * 0.18
       : 0;
@@ -766,6 +853,23 @@ const spriteAdapter: CharacterVisualAdapter = {
     // The rim doubles as the readability layer on dark stages: keep a strong
     // team-color silhouette floor and let actions push it brighter.
     rimMaterial.opacity = THREE.MathUtils.clamp(0.42 + actionPulse * 0.5, 0.4, 0.85);
+
+    if (runtime.ghostFadeRemaining > 0) {
+      runtime.ghostFadeRemaining = Math.max(0, runtime.ghostFadeRemaining - dt);
+      const ghostMaterial = runtime.ghost.material as THREE.SpriteMaterial;
+      ghostMaterial.opacity = 0.85 * (runtime.ghostFadeRemaining / SPRITE_CROSSFADE_SECONDS);
+      if (runtime.ghostFadeRemaining <= 0) {
+        runtime.ghost.visible = false;
+      }
+    }
+
+    runtime.lastDisplayed = {
+      sheetId: selection.sheetId,
+      frame: selection.frame,
+      scaleX: runtime.body.scale.x,
+      scaleY: runtime.body.scale.y,
+      rotation: bodyMaterial.rotation,
+    };
   },
 };
 
@@ -824,7 +928,7 @@ export function disposeCharacterVisualNode(node: THREE.Object3D): void {
   const disposedTextures = new Set<THREE.Texture>();
   const spriteRuntime = node.userData.spriteRuntime as SpriteVisualRuntime | undefined;
   for (const textures of spriteRuntime?.sheetTextures.values() ?? []) {
-    for (const texture of [textures.body, textures.rim]) {
+    for (const texture of [textures.body, textures.rim, textures.ghost]) {
       if (!disposedTextures.has(texture)) {
         disposedTextures.add(texture);
         texture.dispose();

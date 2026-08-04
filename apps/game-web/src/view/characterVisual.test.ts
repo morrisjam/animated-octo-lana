@@ -195,7 +195,7 @@ describe('required packaged atlas runtime', () => {
     });
 
     duelistImage.succeed();
-    vanguardImage.succeed();
+    vanguardImage.succeed(1024, 896);
     await expect(ready).resolves.toMatchObject({
       state: 'ready',
       requiredIds: ['character_duelist_animset', 'character_vanguard_animset'],
@@ -221,7 +221,7 @@ describe('required packaged atlas runtime', () => {
 
     duelistImage.fail();
     await expect(ready).rejects.toThrow('Unable to decode sprite atlas');
-    vanguardImage.succeed();
+    vanguardImage.succeed(1024, 896);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(characterVisual.getRequiredPackagedAtlasRuntimeSnapshot()).toEqual({
@@ -245,7 +245,7 @@ describe('required packaged atlas runtime', () => {
     const ready = characterVisual.getRequiredPackagedAtlasRuntimeReadyPromise();
 
     findControlledImage('duelist').succeed(256, 256);
-    findControlledImage('vanguard').succeed();
+    findControlledImage('vanguard').succeed(1024, 896);
 
     await expect(ready).rejects.toThrow(
       'Decoded sprite atlas character_duelist_animset is 256x256; expected 512x256.',

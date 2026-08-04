@@ -60,8 +60,8 @@ describe('sprite animation sets', () => {
     expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'helpless', presentationPhase: 'sustain' }))).toBe('helpless');
     expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'recover', presentationPhase: 'recovery' }))).toBe('recover');
     expect(resolveSpriteFrame(set!, 'idle', 0)).toBe(0);
-    expect(resolveSpriteFrame(set!, 'idle', 0.34)).toBe(1);
-    expect(resolveSpriteFrame(set!, 'idle', 0.67)).toBe(0);
+    expect(resolveSpriteFrame(set!, 'idle', 0.34)).toBe(2);
+    expect(resolveSpriteFrame(set!, 'idle', 0.67)).toBe(5);
   });
 
   test('resolves frames and layout from the sheet selected by each clip', () => {

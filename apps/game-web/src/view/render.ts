@@ -338,6 +338,17 @@ function updateProjectileMeshes(context: SceneContext, snapshot: RenderSnapshot)
   }
 }
 
+// Fighter readability framing: keep the pair large on screen. At FOV 52 the
+// visible world height is roughly cameraZ, so sprite screen share is about
+// worldHeight / cameraZ — these clamps keep close combat near 14% screen
+// height instead of the old whole-arena framing.
+const NEUTRAL_CAMERA_MIN_Z = 52;
+const NEUTRAL_CAMERA_MAX_Z = 118;
+const LAUNCH_CAMERA_MIN_Z = 60;
+const LAUNCH_CAMERA_MAX_Z = 148;
+const CAMERA_DISTANCE_SCALE = 0.55;
+const CAMERA_VERTICAL_SCALE = 0.3;
+
 function updateCamera(context: SceneContext, snapshot: RenderSnapshot): void {
   const launchActive = snapshot.players.P1.helpless > 0 || snapshot.players.P2.helpless > 0;
   if (!launchActive && context.launchCameraActive) {
@@ -346,32 +357,22 @@ function updateCamera(context: SceneContext, snapshot: RenderSnapshot): void {
   }
   context.launchCameraActive = launchActive;
 
-  let desiredCameraX = 0;
-  let desiredCameraY = 0;
-  let desiredCameraZ = 168;
-  let desiredLookAtX = 0;
-  let desiredLookAtY = 0;
+  syncCameraTrackToWorld(context.cameraPlayerTracks.P1, snapshot.players.P1.pos.x, snapshot.players.P1.pos.y);
+  syncCameraTrackToWorld(context.cameraPlayerTracks.P2, snapshot.players.P2.pos.x, snapshot.players.P2.pos.y);
+  const p1 = context.cameraPlayerTracks.P1;
+  const p2 = context.cameraPlayerTracks.P2;
+  const midX = (p1.x + p2.x) * 0.5;
+  const midY = (p1.y + p2.y) * 0.5;
+  const distance = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+  const spread = distance * CAMERA_DISTANCE_SCALE + Math.abs(p1.y - p2.y) * CAMERA_VERTICAL_SCALE;
+  const minZ = launchActive ? LAUNCH_CAMERA_MIN_Z : NEUTRAL_CAMERA_MIN_Z;
+  const maxZ = launchActive ? LAUNCH_CAMERA_MAX_Z : NEUTRAL_CAMERA_MAX_Z;
 
-  if (launchActive) {
-    desiredCameraX = 0;
-    desiredCameraY = 0;
-    desiredCameraZ = 168;
-    desiredLookAtX = 0;
-    desiredLookAtY = 0;
-  } else {
-    syncCameraTrackToWorld(context.cameraPlayerTracks.P1, snapshot.players.P1.pos.x, snapshot.players.P1.pos.y);
-    syncCameraTrackToWorld(context.cameraPlayerTracks.P2, snapshot.players.P2.pos.x, snapshot.players.P2.pos.y);
-    const p1 = context.cameraPlayerTracks.P1;
-    const p2 = context.cameraPlayerTracks.P2;
-    const midX = (p1.x + p2.x) * 0.5;
-    const midY = (p1.y + p2.y) * 0.5;
-    const distance = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-    desiredCameraX = midX * 0.22;
-    desiredCameraY = midY * 0.32;
-    desiredCameraZ = THREE.MathUtils.clamp(76 + distance * 0.45 + Math.abs(p1.y - p2.y) * 0.28, 76, 132);
-    desiredLookAtX = midX * 0.2;
-    desiredLookAtY = midY * 0.2;
-  }
+  const desiredCameraX = midX * 0.22;
+  let desiredCameraY = midY * 0.32;
+  const desiredCameraZ = THREE.MathUtils.clamp(minZ + spread, minZ, maxZ);
+  const desiredLookAtX = midX * 0.2;
+  let desiredLookAtY = midY * 0.2;
 
   // Stage-authored pitch changes presentation only; simulation coordinates remain strictly 2D.
   const cameraPitchDegrees = resolveStageCameraPitchDegrees(

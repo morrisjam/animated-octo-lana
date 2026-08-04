@@ -599,6 +599,66 @@ describe('super boost commit tracking', () => {
     expect(commitState.players.P1.fuel - noCommitState.players.P1.fuel).toBeGreaterThan(expectedPenaltyGap * 0.6);
   });
 
+  test('ends a released super boost immediately when no minimum dash distance is tuned', () => {
+    const state = createInitialState();
+    const startSuper = neutralInput();
+    startSuper.p1.superBoost = true;
+    startSuper.p1.moveX = 1;
+    step(state, startSuper, FIXED_DT);
+    expect(state.players.P1.superBoost).toBe(1);
+
+    step(state, neutralInput(), FIXED_DT);
+    expect(state.players.P1.superBoost).toBe(0);
+  });
+
+  test('holds a released super boost until the tuned minimum dash distance', () => {
+    const state = createInitialState();
+    state.tuning.superBoostMinDistance = 14;
+    const startSuper = neutralInput();
+    startSuper.p1.superBoost = true;
+    startSuper.p1.moveX = 1;
+    step(state, startSuper, FIXED_DT);
+
+    const released = neutralInput();
+    runSteps(state, released, 3);
+    expect(state.players.P1.superBoost).toBe(1);
+    expect(state.players.P1.superDistance).toBeLessThan(14);
+
+    let stepsUntilFinish = 0;
+    while (state.players.P1.superBoost > 0 && stepsUntilFinish < 120) {
+      step(state, released, FIXED_DT);
+      stepsUntilFinish += 1;
+    }
+    expect(state.players.P1.superBoost).toBe(0);
+    expect(stepsUntilFinish).toBeLessThan(120);
+    expect(state.players.P1.superDistance).toBeGreaterThanOrEqual(14);
+  });
+
+  test('scales the minimum dash distance by the character multiplier', () => {
+    const originalSuperBoost = CHARACTER_BY_ID.vanguard.moves.superBoost;
+    CHARACTER_BY_ID.vanguard.moves.superBoost = { ...originalSuperBoost, minDistanceMultiplier: 0.5 };
+    try {
+      const state = createInitialState();
+      state.tuning.superBoostMinDistance = 14;
+      const startSuper = neutralInput();
+      startSuper.p1.superBoost = true;
+      startSuper.p1.moveX = 1;
+      step(state, startSuper, FIXED_DT);
+
+      const released = neutralInput();
+      let stepsUntilFinish = 0;
+      while (state.players.P1.superBoost > 0 && stepsUntilFinish < 120) {
+        step(state, released, FIXED_DT);
+        stepsUntilFinish += 1;
+      }
+      expect(state.players.P1.superBoost).toBe(0);
+      expect(state.players.P1.superDistance).toBeGreaterThanOrEqual(7);
+      expect(state.players.P1.superDistance).toBeLessThan(14);
+    } finally {
+      CHARACTER_BY_ID.vanguard.moves.superBoost = originalSuperBoost;
+    }
+  });
+
   test.each(['stunned', 'helpless', 'recovering'] as const)(
     'ends active super boost and settles its cost when the fighter becomes %s',
     (controlLoss) => {

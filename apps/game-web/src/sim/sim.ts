@@ -1453,7 +1453,13 @@ function movement(
       }
     }
   } else if (player.superBoost > 0) {
-    finishSuperBoost(state, player);
+    // Minimum-commit dash: once started, super boost carries the player at
+    // least superBoostMinDistance before a release can end it (0 = off).
+    const superBoostMinDistance = tuning.superBoostMinDistance
+      * playerMoves.superBoost.minDistanceMultiplier;
+    if (player.superDistance >= superBoostMinDistance) {
+      finishSuperBoost(state, player);
+    }
   }
 
   const moveInputLengthSq = playerInput.moveX * playerInput.moveX + playerInput.moveY * playerInput.moveY;

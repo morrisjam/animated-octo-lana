@@ -76,6 +76,7 @@ export interface GameTuning {
   wellCoronaDrainPerSecond: number;
   wellHelplessPull: number;
   launchMissingFuelPowerScale: number;
+  superBoostMinDistance: number;
 }
 
 export interface GameRules {

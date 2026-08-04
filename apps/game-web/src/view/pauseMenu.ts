@@ -334,6 +334,7 @@ const TUNING_FIELDS: TuningField[] = [
   { key: 'superBoostVelocityBlend', label: 'Super Velocity Blend', step: 0.01, min: 0.01, max: 1 },
   { key: 'superBoostWaveAmplitude', label: 'Super Zigzag Amplitude', step: 0.1, min: 0, max: 30 },
   { key: 'superBoostFuelMultiplier', label: 'Super Fuel Multiplier', step: 0.01, min: 0.01, max: 3 },
+  { key: 'superBoostMinDistance', label: 'Super Min Dash Distance (0 = Off)', step: 0.5, min: 0, max: 72 },
   { key: 'dunkRecoveryFuelFraction', label: 'Dunk Recovery Fuel Fraction', step: 0.01, min: 0, max: 1 },
   { key: 'dunkRecoveryDurationSeconds', label: 'Dunk Recovery Duration', step: 0.01, min: 0.1, max: 8 },
   { key: 'dunkRecoveryMoveSpeed', label: 'Dunk Recovery Move Speed', step: 0.5, min: 1, max: 300 },
@@ -365,6 +366,7 @@ const GLOBAL_TUNING_SECTIONS: ReadonlyArray<{
       'superBoostVelocityBlend',
       'superBoostWaveAmplitude',
       'superBoostFuelMultiplier',
+      'superBoostMinDistance',
     ],
   },
   {

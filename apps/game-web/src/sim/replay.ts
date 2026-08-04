@@ -87,6 +87,7 @@ const ZERO_DEFAULT_TUNING_KEYS = [
   'wellCoronaDrainPerSecond',
   'wellHelplessPull',
   'launchMissingFuelPowerScale',
+  'superBoostMinDistance',
 ] as const satisfies readonly (keyof GameTuning)[];
 
 export interface ReplayHeader {

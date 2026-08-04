@@ -59,6 +59,20 @@ describe('sprite animation sets', () => {
     expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'launch', presentationPhase: 'active' }))).toBe('launch_active');
     expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'helpless', presentationPhase: 'sustain' }))).toBe('helpless');
     expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'recover', presentationPhase: 'recovery' }))).toBe('recover');
+    // Early dunk recovery prefers the crumple clip; late recovery and plain
+    // end-lag (recovering === 0) stay on the shared recover clip.
+    expect(resolveSpriteClip(set!, makeSnapshot({
+      presentationAction: 'recover',
+      presentationPhase: 'recovery',
+      recovering: 1.2,
+      recoveryProgress: 0.2,
+    }))).toBe('dunked');
+    expect(resolveSpriteClip(set!, makeSnapshot({
+      presentationAction: 'recover',
+      presentationPhase: 'recovery',
+      recovering: 0.6,
+      recoveryProgress: 0.7,
+    }))).toBe('recover');
     expect(resolveSpriteFrame(set!, 'idle', 0)).toBe(0);
     expect(resolveSpriteFrame(set!, 'idle', 0.34)).toBe(2);
     expect(resolveSpriteFrame(set!, 'idle', 0.67)).toBe(5);

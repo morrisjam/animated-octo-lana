@@ -46,6 +46,8 @@ export interface SuperBoostMoveData {
   travelFuelPerDistance: number;
   nonCommitPenalty: number;
   turnPenaltyGainMultiplier: number;
+  // Scales tuning.superBoostMinDistance per character; 1 = the shared value.
+  minDistanceMultiplier: number;
 }
 
 export interface ProjectileMoveData {
@@ -237,6 +239,7 @@ export function createMoveFrameData(projectileVisualId = DEFAULT_PROJECTILE_VISU
       travelFuelPerDistance: 0.05,
       nonCommitPenalty: 2.5,
       turnPenaltyGainMultiplier: 1,
+      minDistanceMultiplier: 1,
     },
   };
 }

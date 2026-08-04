@@ -38,7 +38,7 @@ export const BALANCE_PROFILE_DEFINITIONS: BalanceProfileDefinition[] = [
   {
     id: 'well_hazard_v1',
     label: 'Well Hazard V1',
-    description: 'Experimental: lethal well core, corona fuel drain, explosive launch arcs.',
+    description: 'Experimental: lethal well core, corona fuel drain, explosive launch arcs, committed super dash.',
     tuning: {
       wellCoreRadius: 12,
       wellCoronaRadius: 34,
@@ -48,6 +48,7 @@ export const BALANCE_PROFILE_DEFINITIONS: BalanceProfileDefinition[] = [
       launchBasePower: 180,
       helplessVelocityDamping: 0.985,
       helplessReleaseSpeedRatio: 0.7,
+      superBoostMinDistance: 14,
     },
   },
 ];

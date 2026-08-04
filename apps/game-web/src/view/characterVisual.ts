@@ -52,8 +52,7 @@ interface SpriteVisualRuntime {
   animationSet: SpriteAnimationSet;
   body: THREE.Sprite;
   rim: THREE.Sprite;
-  contactShadow: THREE.Mesh;
-  groundGlow: THREE.Mesh;
+  facing: number;
   clipId: SpriteClipId;
   sheetId: string;
   clipStartedAt: number;
@@ -544,35 +543,8 @@ function createSpriteNode(
   const group = new THREE.Group();
   group.name = `${profile.animationSetId}:sprite`;
 
-  const contactShadow = new THREE.Mesh(
-    new THREE.CircleGeometry(1, 32),
-    new THREE.MeshBasicMaterial({
-      color: '#01040c',
-      transparent: true,
-      opacity: 0.34,
-      depthWrite: false,
-    }),
-  );
-  contactShadow.name = 'sprite-contact-shadow';
-  contactShadow.position.z = 0.08;
-  contactShadow.scale.set(initialSheet.worldWidth * 0.38, initialSheet.worldWidth * 0.12, 1);
-  group.add(contactShadow);
-
-  const groundGlow = new THREE.Mesh(
-    new THREE.RingGeometry(0.42, 1, 48),
-    new THREE.MeshBasicMaterial({
-      color: palette.body,
-      transparent: true,
-      opacity: 0.16,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  );
-  groundGlow.name = 'sprite-ground-glow';
-  groundGlow.position.z = 0.1;
-  groundGlow.scale.set(initialSheet.worldWidth * 0.44, initialSheet.worldWidth * 0.15, 1);
-  group.add(groundGlow);
-
+  // No contact shadow or ground ring: fighters are always airborne — grounding
+  // cues read as standing on a disc. Team identity comes from the rim glow.
   const initialFrame = initialClip?.frames[0] ?? 0;
   const rimTexture = loadAtlasTexture(initialSheet);
   applyAtlasFrame(rimTexture, initialSheet, initialFrame);
@@ -593,9 +565,13 @@ function createSpriteNode(
 
   const bodyTexture = loadAtlasTexture(initialSheet);
   applyAtlasFrame(bodyTexture, initialSheet, initialFrame);
+  // Multiplying by the full team color crushes the navy artwork into the dark
+  // stage; keep the art near full brightness with only a hint of team hue and
+  // let the rim glow carry team identity.
+  const bodyTint = new THREE.Color(palette.body).lerp(new THREE.Color('#ffffff'), 0.78);
   const body = new THREE.Sprite(new THREE.SpriteMaterial({
     map: bodyTexture,
-    color: palette.body,
+    color: bodyTint,
     transparent: true,
     opacity: 1,
     alphaTest: 0.06,
@@ -611,8 +587,7 @@ function createSpriteNode(
     animationSet,
     body,
     rim,
-    contactShadow,
-    groundGlow,
+    facing: 1,
     clipId: initialClipId,
     sheetId: initialSheet.id,
     clipStartedAt: 0,
@@ -747,12 +722,23 @@ const spriteAdapter: CharacterVisualAdapter = {
       applyAtlasFrame(rimMap, sheet, selection.frame);
     }
 
-    const directionalLean = THREE.MathUtils.clamp(context.opponent.pos.x - context.own.pos.x, -1, 1) * 0.08;
-    const facing = context.opponent.pos.x >= context.own.pos.x ? 1 : -1;
+    const opponentDeltaX = context.opponent.pos.x - context.own.pos.x;
+    const directionalLean = THREE.MathUtils.clamp(opponentDeltaX, -1, 1) * 0.08;
+    // Face the opponent, with hysteresis so near-vertical passes don't strobe
+    // the mirror flip every frame.
+    if (Math.abs(opponentDeltaX) > 2) {
+      runtime.facing = opponentDeltaX >= 0 ? 1 : -1;
+    }
+    const facing = runtime.facing;
     const startupTelegraph = context.own.presentationPhase === 'startup'
       ? 0.18 + Math.abs(Math.sin(context.gameTime * 18 + runtime.phase * 10)) * 0.18
       : 0;
     const activeTelegraph = context.own.presentationPhase === 'active' ? 0.22 : 0;
+    // Super boost shares the boost clip with ordinary boost; the sustained
+    // glow surge is what tells the two apart.
+    const superBoostSurge = context.own.superBoost > 0
+      ? 0.5 + Math.abs(Math.sin(context.gameTime * 26 + runtime.phase * 10)) * 0.16
+      : 0;
     const actionPulse = Math.max(
       context.own.launchFlash,
       context.own.parryFlash,
@@ -761,6 +747,7 @@ const spriteAdapter: CharacterVisualAdapter = {
       context.own.dunkFlash,
       startupTelegraph,
       activeTelegraph,
+      superBoostSurge,
     );
     const idlePulse = Math.abs(Math.sin(context.gameTime * 4.2 + runtime.phase * 10)) * 0.025;
     const pulse = 1 + idlePulse + actionPulse * 0.16;
@@ -776,23 +763,9 @@ const spriteAdapter: CharacterVisualAdapter = {
       1,
     );
     rimMaterial.rotation = directionalLean;
-    rimMaterial.opacity = THREE.MathUtils.clamp(0.2 + actionPulse * 0.7, 0.18, 0.82);
-    runtime.contactShadow.scale.set(
-      sheet.worldWidth * (0.38 + context.own.recovering * 0.02),
-      sheet.worldWidth * 0.12,
-      1,
-    );
-    (runtime.contactShadow.material as THREE.MeshBasicMaterial).opacity = context.own.recovering > 0
-      ? 0.06
-      : 0.34 + actionPulse * 0.1;
-    runtime.groundGlow.scale.set(
-      sheet.worldWidth * (0.44 + actionPulse * 0.08),
-      sheet.worldWidth * (0.15 + actionPulse * 0.025),
-      1,
-    );
-    (runtime.groundGlow.material as THREE.MeshBasicMaterial).opacity = context.own.recovering > 0
-      ? 0.04
-      : 0.14 + actionPulse * 0.28;
+    // The rim doubles as the readability layer on dark stages: keep a strong
+    // team-color silhouette floor and let actions push it brighter.
+    rimMaterial.opacity = THREE.MathUtils.clamp(0.42 + actionPulse * 0.5, 0.4, 0.85);
   },
 };
 

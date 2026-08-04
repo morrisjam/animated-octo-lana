@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-03T12:38:25.477Z",
+  "generatedAt": "2026-08-04T06:49:14.310Z",
   "profileIds": [
     "default",
     "mobility_focus_v1",
@@ -84,22 +84,22 @@
     "well_hazard_v1": {
       "fixtures": {
         "launch_connect": {
-          "finalChecksum": 406499955
+          "finalChecksum": 3320710651
         },
         "launch_vs_parry": {
-          "finalChecksum": 1325224450
+          "finalChecksum": 2279562074
         },
         "dunk_connect": {
-          "finalChecksum": 2655399193
+          "finalChecksum": 346074833
         },
         "special_projectile_spawn": {
-          "finalChecksum": 2521106163
+          "finalChecksum": 3205585771
         },
         "special_guard_window": {
-          "finalChecksum": 826331620
+          "finalChecksum": 2855153388
         },
         "special_dash_resolve": {
-          "finalChecksum": 2290182042
+          "finalChecksum": 2168542722
         }
       }
     }

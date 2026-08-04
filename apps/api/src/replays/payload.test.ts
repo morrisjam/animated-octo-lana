@@ -17,6 +17,7 @@ const WELL_HAZARD_TUNING_KEYS = [
   'wellHelplessPull',
   'launchMissingFuelPowerScale',
 ] as const;
+const SUPER_DASH_TUNING_KEY = 'superBoostMinDistance' as const;
 
 const TUNING = {
   chainWindowSeconds: 1,
@@ -85,6 +86,7 @@ function fingerprintTuning(tuning: Record<string, unknown>): string {
     COMMITTED_LOCOMOTION_TUNING_KEY,
     BOOST_ACCELERATION_TUNING_KEY,
     ...WELL_HAZARD_TUNING_KEYS,
+    SUPER_DASH_TUNING_KEY,
   ] as const) {
     if (fingerprintInput[key] === 0) {
       delete fingerprintInput[key];
@@ -457,6 +459,7 @@ test('accepts a recorder tuning snapshot carrying the well hazard keys at zero',
   for (const key of WELL_HAZARD_TUNING_KEYS) {
     payload.header.balanceTuning![key] = 0;
   }
+  payload.header.balanceTuning![SUPER_DASH_TUNING_KEY] = 0;
   payload.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
     payload.header.balanceTuning!,
   );
@@ -469,6 +472,7 @@ test('accepts a recorder tuning snapshot carrying the well hazard keys at zero',
     throw new Error(validation.errorMessage);
   }
   assert.equal(validation.payload.header.balanceTuning?.wellCoreRadius, 0);
+  assert.equal(validation.payload.header.balanceTuning?.superBoostMinDistance, 0);
 });
 
 test('accepts a well hazard tuning snapshot with nonzero values', () => {
@@ -478,6 +482,7 @@ test('accepts a well hazard tuning snapshot with nonzero values', () => {
   payload.header.balanceTuning!.wellCoronaDrainPerSecond = 6;
   payload.header.balanceTuning!.wellHelplessPull = 30;
   payload.header.balanceTuning!.launchMissingFuelPowerScale = 0.5;
+  payload.header.balanceTuning!.superBoostMinDistance = 14;
   payload.header.onlineMatch!.tuningFingerprint = fingerprintTuning(
     payload.header.balanceTuning!,
   );
@@ -491,6 +496,7 @@ test('accepts a well hazard tuning snapshot with nonzero values', () => {
   }
   assert.equal(validation.payload.header.balanceTuning?.wellCoreRadius, 12);
   assert.equal(validation.payload.header.balanceTuning?.launchMissingFuelPowerScale, 0.5);
+  assert.equal(validation.payload.header.balanceTuning?.superBoostMinDistance, 14);
 });
 
 test('rejects canonical tuning shapes with any other missing or additional key', () => {

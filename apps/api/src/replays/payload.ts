@@ -104,6 +104,7 @@ const ZERO_DEFAULT_TUNING_KEYS = [
   'wellCoronaDrainPerSecond',
   'wellHelplessPull',
   'launchMissingFuelPowerScale',
+  'superBoostMinDistance',
 ] as const;
 
 const GAME_TUNING_KEYS = [
@@ -145,6 +146,7 @@ const GAME_TUNING_KEYS = [
   'wellCoronaDrainPerSecond',
   'wellHelplessPull',
   'launchMissingFuelPowerScale',
+  'superBoostMinDistance',
 ] as const;
 
 function hasSupportedGameTuningKeys(value: Record<string, unknown>): boolean {

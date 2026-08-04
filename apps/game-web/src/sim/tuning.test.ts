@@ -83,6 +83,7 @@ describe('game tuning', () => {
     delete legacyDefaults.wellCoronaDrainPerSecond;
     delete legacyDefaults.wellHelplessPull;
     delete legacyDefaults.launchMissingFuelPowerScale;
+    delete legacyDefaults.superBoostMinDistance;
 
     expect(fingerprintGameTuning(defaults)).toBe(fingerprintDeterministicValue(legacyDefaults));
     expect(fingerprintGameTuning({
@@ -120,6 +121,10 @@ describe('game tuning', () => {
     expect(fingerprintGameTuning({
       ...defaults,
       launchMissingFuelPowerScale: 0.5,
+    })).not.toBe(fingerprintGameTuning(defaults));
+    expect(fingerprintGameTuning({
+      ...defaults,
+      superBoostMinDistance: 14,
     })).not.toBe(fingerprintGameTuning(defaults));
   });
 });

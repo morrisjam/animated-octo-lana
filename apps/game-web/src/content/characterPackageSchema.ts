@@ -492,6 +492,7 @@ function validateMoves(
     travelFuelPerDistance: readNumber(superBoost, 'travelFuelPerDistance', 'moves.superBoost.travelFuelPerDistance', issues, { min: 0, max: 100 }),
     nonCommitPenalty: readNumber(superBoost, 'nonCommitPenalty', 'moves.superBoost.nonCommitPenalty', issues, { min: 0, max: 1000 }),
     turnPenaltyGainMultiplier: readNumber(superBoost, 'turnPenaltyGainMultiplier', 'moves.superBoost.turnPenaltyGainMultiplier', issues, { min: 0, max: 20 }),
+    minDistanceMultiplier: readOptionalNumber(superBoost, 'minDistanceMultiplier', 'moves.superBoost.minDistanceMultiplier', issues, 1, { min: 0, max: 20 }),
   };
 
   const specialData = {

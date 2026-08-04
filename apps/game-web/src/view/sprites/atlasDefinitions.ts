@@ -86,6 +86,17 @@ export function resolveSpriteClip(
   snapshot: PlayerRenderSnapshot,
 ): SpriteClipId {
   const state = `${snapshot.presentationAction}.${snapshot.presentationPhase}` as CharacterPresentationStateKey;
+  // Early dunk recovery reads as "just got hit": prefer an optional crumple
+  // clip before handing off to the shared recover clip. Guarding on
+  // snapshot.recovering keeps ordinary attack end-lag on the recover clip.
+  if (
+    state === 'recover.recovery'
+    && snapshot.recovering > 0
+    && snapshot.recoveryProgress < 0.45
+    && animationSet.clips.dunked
+  ) {
+    return 'dunked';
+  }
   return animationSet.stateClips[state]
     ?? animationSet.stateClips['idle.none']
     ?? 'idle';

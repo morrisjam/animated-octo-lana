@@ -64,11 +64,11 @@
     "recover_b",
     "recover_c",
     "recover_d",
-    "unused_a",
-    "unused_b",
-    "unused_c",
-    "unused_d",
-    "unused_e"
+    "dunked_a",
+    "dunked_b",
+    "dunked_c",
+    "dunked_d",
+    "dunked_e"
   ],
   "runtimeLayout": {
     "columns": 8,
@@ -81,8 +81,8 @@
   "artifacts": {
     "reviewAtlas": {
       "path": "art/review/vanguard_sprite_v1_atlas.png",
-      "sha256": "a10748b5d88b59debc044cf6c3e443e795a776ca1a6c2394c8393dcf50ceb002",
-      "bytes": 5197439,
+      "sha256": "ae6ce2b16d2fa31a3393cd58a219d0c115335234bfaf97ac7d93e8f1c6d92d01",
+      "bytes": 5680146,
       "widthPixels": 3072,
       "heightPixels": 2688
     },
@@ -94,9 +94,9 @@
       "heightPixels": 256
     },
     "runtimeAtlas": {
-      "path": "apps/game-web/public/assets/characters/vanguard/vanguard-alpha-atlas-v3.png",
-      "sha256": "5b2f1c7164e8bcab7e097f3fc704a1906183c137d2190e685511e9e340aca92b",
-      "bytes": 832443,
+      "path": "apps/game-web/public/assets/characters/vanguard/vanguard-alpha-atlas-v4.png",
+      "sha256": "90ff8257e4b2d509cdfdf99e63994755839365cb32665f41ec3c7232ea4d351d",
+      "bytes": 910535,
       "widthPixels": 1024,
       "heightPixels": 896
     },

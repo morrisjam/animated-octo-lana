@@ -127,6 +127,7 @@ describe('AI batch rule comparison', () => {
       wellCoronaDrainPerSecond: _wellCoronaDrainNeutralField,
       wellHelplessPull: _wellHelplessPullNeutralField,
       launchMissingFuelPowerScale: _launchMissingFuelNeutralField,
+      superBoostMinDistance: _superBoostMinDistanceNeutralField,
       ...legacyTuning
     } = current.tuning;
     const legacy = {
@@ -152,6 +153,7 @@ describe('AI batch rule comparison', () => {
     expect(parseAiBatchRuleSnapshot(legacy)?.tuning.wellCoronaDrainPerSecond).toBe(0);
     expect(parseAiBatchRuleSnapshot(legacy)?.tuning.wellHelplessPull).toBe(0);
     expect(parseAiBatchRuleSnapshot(legacy)?.tuning.launchMissingFuelPowerScale).toBe(0);
+    expect(parseAiBatchRuleSnapshot(legacy)?.tuning.superBoostMinDistance).toBe(0);
   });
 
   test('includes a non-zero post-control counter grace value in rule fingerprints', () => {

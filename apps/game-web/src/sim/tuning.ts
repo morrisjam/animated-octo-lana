@@ -69,6 +69,7 @@ export function createDefaultTuning(): GameTuning {
     wellCoronaDrainPerSecond: 0,
     wellHelplessPull: 0,
     launchMissingFuelPowerScale: 0,
+    superBoostMinDistance: 0,
   };
 }
 
@@ -122,6 +123,7 @@ export function sanitiseTuning(tuning: Partial<GameTuning>): GameTuning {
     wellCoronaDrainPerSecond: clamp(value('wellCoronaDrainPerSecond'), 0, 60),
     wellHelplessPull: clamp(value('wellHelplessPull'), 0, 300),
     launchMissingFuelPowerScale: clamp(value('launchMissingFuelPowerScale'), 0, 3),
+    superBoostMinDistance: clamp(value('superBoostMinDistance'), 0, 72),
   };
 }
 
@@ -153,6 +155,9 @@ export function createGameTuningFingerprintInput(tuning: GameTuning): Partial<Ga
   }
   if (fingerprintInput.launchMissingFuelPowerScale === 0) {
     delete fingerprintInput.launchMissingFuelPowerScale;
+  }
+  if (fingerprintInput.superBoostMinDistance === 0) {
+    delete fingerprintInput.superBoostMinDistance;
   }
   return fingerprintInput;
 }

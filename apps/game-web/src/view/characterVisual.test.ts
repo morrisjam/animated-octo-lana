@@ -136,42 +136,62 @@ describe('character visual adapters', () => {
     }
   });
 
-  test('anchors sprite characters at their feet with contact shadows and player-coloured glows', () => {
+  test('keeps sprite characters airborne with soft team tints and a constant rim glow', () => {
     const p1 = createCharacterVisualHandle('vanguard', 'P1');
     const p2 = createCharacterVisualHandle('duelist', 'P2');
-    const p1Shadow = p1.node.getObjectByName('sprite-contact-shadow');
-    const p2Shadow = p2.node.getObjectByName('sprite-contact-shadow');
-    const p1Glow = p1.node.getObjectByName('sprite-ground-glow');
-    const p2Glow = p2.node.getObjectByName('sprite-ground-glow');
     const p1Body = p1.node.getObjectByName('sprite-body');
     const p2Body = p2.node.getObjectByName('sprite-body');
+    const p1Rim = p1.node.getObjectByName('sprite-rim');
+    const p2Rim = p2.node.getObjectByName('sprite-rim');
 
-    expect(p1Shadow).toBeInstanceOf(THREE.Mesh);
-    expect(p2Shadow).toBeInstanceOf(THREE.Mesh);
-    expect(p1Glow).toBeInstanceOf(THREE.Mesh);
-    expect(p2Glow).toBeInstanceOf(THREE.Mesh);
+    // Fighters never touch the ground: no contact shadow or ground ring.
+    expect(p1.node.getObjectByName('sprite-contact-shadow')).toBeUndefined();
+    expect(p2.node.getObjectByName('sprite-contact-shadow')).toBeUndefined();
+    expect(p1.node.getObjectByName('sprite-ground-glow')).toBeUndefined();
+    expect(p2.node.getObjectByName('sprite-ground-glow')).toBeUndefined();
     expect(p1Body).toBeInstanceOf(THREE.Sprite);
     expect(p2Body).toBeInstanceOf(THREE.Sprite);
-    const p1Material = (p1Shadow as THREE.Mesh).material as THREE.MeshBasicMaterial;
-    const p2Material = (p2Shadow as THREE.Mesh).material as THREE.MeshBasicMaterial;
-    const p1GlowMaterial = (p1Glow as THREE.Mesh).material as THREE.MeshBasicMaterial;
-    const p2GlowMaterial = (p2Glow as THREE.Mesh).material as THREE.MeshBasicMaterial;
-    expect(p1Material.color.getHexString()).toBe('01040c');
-    expect(p2Material.color.getHexString()).toBe('01040c');
-    expect(p1Material.opacity).toBeCloseTo(0.34);
-    expect(p1GlowMaterial.color.getHexString()).toBe('58b6ff');
-    expect(p2GlowMaterial.color.getHexString()).toBe('ff74b8');
-    expect(p1GlowMaterial.blending).toBe(THREE.AdditiveBlending);
+    expect(p1Rim).toBeInstanceOf(THREE.Sprite);
+    expect(p2Rim).toBeInstanceOf(THREE.Sprite);
+
+    // Body tint stays near white so the navy artwork keeps its brightness.
+    const p1BodyMaterial = (p1Body as THREE.Sprite).material;
+    const p2BodyMaterial = (p2Body as THREE.Sprite).material;
+    expect(p1BodyMaterial.color.getHexString()).toBe('e7f1ff');
+    expect(p2BodyMaterial.color.getHexString()).toBe('ffe9f2');
+    const p1RimMaterial = (p1Rim as THREE.Sprite).material;
+    expect(p1RimMaterial.color.getHexString()).toBe('8fe0ff');
+    expect(p1RimMaterial.blending).toBe(THREE.AdditiveBlending);
     expect((p1Body as THREE.Sprite).center.y).toBeCloseTo(0.1);
     expect((p2Body as THREE.Sprite).center.y).toBeCloseTo(0.1);
 
-    const recovering = { ...makeSnapshot('vanguard'), recovering: 0.4, recoveryProgress: 0.5 };
-    updateCharacterVisualHandle(p1, recovering, makeSnapshot('duelist'), 1);
-    expect(p1Material.opacity).toBeCloseTo(0.06);
-    expect(p1GlowMaterial.opacity).toBeCloseTo(0.04);
+    // The rim keeps a visibility floor while idle and surges during super boost.
+    updateCharacterVisualHandle(p1, makeSnapshot('vanguard'), makeSnapshot('duelist'), 1);
+    expect(p1RimMaterial.opacity).toBeGreaterThanOrEqual(0.4);
+    const superBoosting = { ...makeSnapshot('vanguard'), superBoost: 1 };
+    updateCharacterVisualHandle(p1, superBoosting, makeSnapshot('duelist'), 1.5);
+    expect(p1RimMaterial.opacity).toBeGreaterThan(0.6);
 
     disposeCharacterVisualNode(p1.node);
     disposeCharacterVisualNode(p2.node);
+  });
+
+  test('mirrors sprites toward the opponent with hysteresis around vertical passes', () => {
+    const p1 = createCharacterVisualHandle('vanguard', 'P1');
+    const body = p1.node.getObjectByName('sprite-body') as THREE.Sprite;
+    const own = makeSnapshot('vanguard');
+
+    updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: -10, y: 0 } }, 1);
+    expect(body.scale.x).toBeLessThan(0);
+
+    // Inside the deadband the previous facing must hold instead of strobing.
+    updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: 1, y: 0 } }, 1.1);
+    expect(body.scale.x).toBeLessThan(0);
+
+    updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: 10, y: 0 } }, 1.2);
+    expect(body.scale.x).toBeGreaterThan(0);
+
+    disposeCharacterVisualNode(p1.node);
   });
 });
 

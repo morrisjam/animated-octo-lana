@@ -17,7 +17,9 @@ export const DEFAULT_PRODUCTION_BUNDLE_LIMITS: ProductionBundleLimits = {
   // Raised for the well hazard experiment: five tuning knobs plus a balance
   // profile live in the entry (sanitiser, fingerprints, profile content).
   maxInitialJavaScriptBytes: 1_130_000,
-  maxInitialJavaScriptGzipBytes: 300_000,
+  // Raised for the animated character presentation clips (multi-frame atlas
+  // definitions live in the entry via the presentation registry).
+  maxInitialJavaScriptGzipBytes: 308_000,
   // Entry raised for the luminous vortex V8 procedural shader, which replaces
   // the authored wormhole GLB download outright.
   maxEntryChunkBytes: 492_000,

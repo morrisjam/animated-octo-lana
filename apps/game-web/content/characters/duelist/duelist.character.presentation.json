@@ -37,6 +37,8 @@
       "dunk_startup": { "frames": [6], "fps": 1, "loop": false },
       "dunk_active": { "frames": [6], "fps": 1, "loop": false },
       "helpless": { "frames": [7], "fps": 1, "loop": false },
+      "attack_recovery": { "frames": [0], "fps": 1, "loop": false },
+      "parry_startup": { "frames": [0], "fps": 1, "loop": false },
       "recover": { "frames": [7], "fps": 1, "loop": false }
     },
     "stateClips": {
@@ -45,6 +47,8 @@
       "launch.startup": "launch_startup",
       "launch.active": "launch_active",
       "parry.active": "parry_active",
+      "parry.startup": "parry_startup",
+      "attack_recovery.recovery": "attack_recovery",
       "break.active": "break_active",
       "special.startup": "special_startup",
       "special.active": "special_active",

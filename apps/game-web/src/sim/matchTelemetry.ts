@@ -724,6 +724,7 @@ export class MatchTelemetryTracker {
     return this.isPlayerMovementControllable(player)
       && player.endLag <= 0
       && player.parry <= 0
+      && player.parryStartup <= 0
       && player.launchStartup <= 0
       && player.launchActive <= 0
       && player.dunkStartup <= 0

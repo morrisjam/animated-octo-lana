@@ -4110,7 +4110,7 @@ function emitReviewReplayArtifacts(
         rules: report.simulation.rules,
         tuning: balanceRules.tuning,
         characterBalanceOverrides: balanceRules.characterBalanceOverrides,
-        rulesetVersion: 'prototype-2026.02',
+        rulesetVersion: 'prototype-2026.09',
         simBuildHash: `ai-batch:${report.aiProfilesFingerprint}:${report.balanceProfile.tuningFingerprint}`,
         reviewFocus: {
           source: `ai-matchup-batch:${reportName}`,

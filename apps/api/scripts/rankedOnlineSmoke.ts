@@ -6,8 +6,8 @@ import {
 } from './rankedProofFixture';
 import { assertSafeSmokeTarget } from './smokeTargetGuard';
 
-const SMOKE_BUILD_VERSION = 'prototype-2026.02';
-const SMOKE_RULESET_VERSION = 'prototype-2026.02';
+const SMOKE_BUILD_VERSION = 'prototype-2026.09';
+const SMOKE_RULESET_VERSION = 'prototype-2026.09';
 const SMOKE_BALANCE_PROFILE_ID = 'default';
 
 interface AccountRecord {

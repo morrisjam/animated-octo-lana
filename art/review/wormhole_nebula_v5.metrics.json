@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "gw.blender-stage-source-metrics.v1",
+  "assetId": "wormhole_nebula_v5",
+  "blenderVersion": "5.2.0 LTS",
+  "sourceScript": "art/source/blender/wormhole_nebula_v5.py",
+  "sourceBlend": "art/source/blender/wormhole_nebula_v5.blend",
+  "runtimeGlb": "apps/game-web/public/assets/stages/wormhole/wormhole-nebula-v5.glb",
+  "coordinateContract": {
+    "blenderPlane": "XZ",
+    "blenderDepth": "+Y",
+    "runtimePlane": "XY",
+    "runtimeDepth": "-Z",
+    "arenaRadius": 72
+  },
+  "metrics": {
+    "vertices": 5248,
+    "triangles": 10240,
+    "glbBytes": 188832,
+    "glbSha256": "2ec0a10e35ac37be3c2bf567de567307ef31ee5f7461d0ab39c1e44dfb56c1da",
+    "objects": 1,
+    "materials": 1
+  },
+  "budgets": {
+    "vertices": 6000,
+    "triangles": 11000,
+    "glbBytes": 262144
+  }
+}

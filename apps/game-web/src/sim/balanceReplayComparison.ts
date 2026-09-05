@@ -1,4 +1,7 @@
 import type { BalanceLabRuleChange } from './balanceLab';
+import { applyBalanceScenario } from './balanceScenarios';
+import { createInitialState, nextDeterministicRandom, step } from './sim';
+import type { PlayerFrameInput, PlayerId } from './types';
 import {
   findFirstChecksumMismatch,
   runReplay,
@@ -33,12 +36,88 @@ export interface BalanceReplayComparisonDescription {
   label: string;
 }
 
+export interface BalanceReplayOutcome {
+  winner: PlayerId | null;
+  finishFrame: number | null;
+  finishSeconds: number | null;
+}
+
+const replayOutcomes = new WeakMap<ReplayPayload, BalanceReplayOutcome>();
+
+function outcomePlayerInput(input?: Partial<PlayerFrameInput> & { shot?: boolean }): PlayerFrameInput {
+  return {
+    moveX: Number.isFinite(input?.moveX) ? Number(input.moveX) : 0,
+    moveY: Number.isFinite(input?.moveY) ? Number(input.moveY) : 0,
+    boost: Boolean(input?.boost),
+    superBoost: Boolean(input?.superBoost),
+    special: Boolean(input?.special || input?.shot),
+    launch: Boolean(input?.launch),
+    dunk: Boolean(input?.dunk),
+    parry: Boolean(input?.parry),
+    breakLaunch: Boolean(input?.breakLaunch),
+  };
+}
+
+export function getBalanceReplayOutcome(payload: ReplayPayload): BalanceReplayOutcome {
+  const cached = replayOutcomes.get(payload);
+  if (cached) return cached;
+  const header = payload.header;
+  const fixedDt = Number.isFinite(header.fixedDt) && header.fixedDt! > 0 ? header.fixedDt! : 1 / 60;
+  // Mirror replay initialization without pulling the full review/telemetry UI into the bundle.
+  const finalRound = header.onlineMatch ? payload.rounds?.at(-1) : undefined;
+  const state = createInitialState({
+    seed: finalRound?.seed ?? header.seed,
+    loadout: header.loadout,
+    rules: header.rules,
+    characterBalanceOverrides: header.characterBalanceOverrides,
+  });
+  if (header.balanceTuning) state.tuning = { ...header.balanceTuning };
+  if (header.startingSituation) applyBalanceScenario(state, header.startingSituation.id);
+  let finishFrame: number | null = null;
+  const endFrame = finalRound?.endFrame ?? payload.inputTimeline.length - 1;
+  for (let frame = finalRound?.startFrame ?? 0; frame <= endFrame; frame += 1) {
+    const input = payload.inputTimeline[frame];
+    step(state, { p1: outcomePlayerInput(input?.p1), p2: outcomePlayerInput(input?.p2) }, fixedDt);
+    if (header.advanceRngPerFrame) nextDeterministicRandom(state);
+    if (state.winner !== null) {
+      finishFrame = frame;
+      break;
+    }
+  }
+  const outcome: BalanceReplayOutcome = {
+    winner: state.winner,
+    finishFrame,
+    finishSeconds: finishFrame === null ? null : (finishFrame + 1) * fixedDt,
+  };
+  replayOutcomes.set(payload, outcome);
+  return outcome;
+}
+
+export function describeBalanceReplayTiming(comparison: BalanceReplayComparison): string {
+  const baseline = comparison.baseline.payload;
+  const candidate = comparison.candidate?.payload;
+  if (!candidate) return 'Baseline captured; candidate not yet available.';
+  const sharedFrames = Math.min(baseline.inputTimeline.length, candidate.inputTimeline.length);
+  const a = getBalanceReplayOutcome(baseline);
+  const b = getBalanceReplayOutcome(candidate);
+  const outcomeLabel = (outcome: BalanceReplayOutcome): string => outcome.winner
+    ? `${outcome.winner} won at F${outcome.finishFrame} (${outcome.finishSeconds!.toFixed(2)}s)`
+    : 'unfinished at capture';
+  const delta = a.finishSeconds !== null && b.finishSeconds !== null
+    ? ` Finish delta (candidate - baseline): ${(b.finishSeconds - a.finishSeconds).toFixed(2)}s.`
+    : ' Finish delta unavailable until both runs finish.';
+  return `Common interval: F0-F${sharedFrames - 1} (${sharedFrames} frames). Baseline: ${outcomeLabel(a)}. Candidate: ${outcomeLabel(b)}.${delta}`;
+}
+
 function cloneVerifiedReplay(payloadRaw: unknown, label: string): ReplayPayload {
   const validation = validateReplayPayload(payloadRaw);
   if (validation.ok === false) {
     throw new Error(`${label} replay is invalid: ${validation.error.message}`);
   }
   const payload = validation.payload;
+  if (payload.inputTimeline.length === 0) {
+    throw new Error(`${label} replay must contain at least one input frame.`);
+  }
   if (!payload.expectedChecksums || payload.expectedChecksums.length !== payload.inputTimeline.length) {
     throw new Error(`${label} replay must contain one deterministic checksum per input frame.`);
   }
@@ -104,7 +183,8 @@ function stableIdentity(payload: ReplayPayload): string {
       epoch: round.epoch ?? null,
       seed: round.seed ?? null,
       startFrame: round.startFrame,
-      endFrame: round.endFrame ?? null,
+      // The final boundary is an outcome, not part of the controlled setup.
+      endFrame: round === payload.rounds?.at(-1) ? null : round.endFrame ?? null,
     })) ?? null,
   });
 }
@@ -185,11 +265,16 @@ export function attachBalanceReplayCandidate(
     throw new Error('Incident comparisons require zero changes for repeatability or exactly one effective rule change.');
   }
   const candidate = cloneVerifiedReplay(candidateRaw, 'Candidate');
-  if (candidate.inputTimeline.length !== comparison.baseline.payload.inputTimeline.length) {
-    throw new Error('Candidate replay must use the baseline matched-sample frame count.');
-  }
   if (stableIdentity(candidate) !== stableIdentity(comparison.baseline.payload)) {
     throw new Error('Candidate replay must preserve the baseline base ruleset, build, seed, loadout, scenario, and round identity.');
+  }
+  const baselineFrames = comparison.baseline.payload.inputTimeline.length;
+  const candidateFrames = candidate.inputTimeline.length;
+  if (candidateFrames !== baselineFrames) {
+    const shorter = candidateFrames < baselineFrames ? candidate : comparison.baseline.payload;
+    if (getBalanceReplayOutcome(shorter).winner === null) {
+      throw new Error('Unequal matched-sample frame counts require the shorter replay to reach a terminal outcome.');
+    }
   }
   return {
     schemaVersion: BALANCE_REPLAY_COMPARISON_SCHEMA_VERSION,

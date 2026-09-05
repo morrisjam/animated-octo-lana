@@ -938,6 +938,15 @@ export class StartMenu {
     const localArcadeHistoryPanel = this.createStatusPanel('Arcade History');
     this.localArcadeHistoryHeadline = localArcadeHistoryPanel.headline;
     this.localArcadeHistoryDetail = localArcadeHistoryPanel.detail;
+    for (const element of [
+      localArcadeContinuesRow.row,
+      this.localArcadeContinuesOptionsLabel,
+      localArcadeRetryRow.row,
+      localArcadeLadderPanel.root,
+      localArcadeHistoryPanel.root,
+    ]) {
+      element.dataset.arcadeOnly = 'true';
+    }
 
     const localStartRow = this.createActionRow('Start Local Match', () => {
       this.startLocalMatch();
@@ -1723,6 +1732,9 @@ export class StartMenu {
 
   private refreshLocalRows(): void {
     const arcadeModeSelected = this.currentMode === 'arcade';
+    for (const element of this.localPanel.querySelectorAll<HTMLElement>('[data-arcade-only]')) {
+      element.hidden = !arcadeModeSelected;
+    }
     const aiVsAiSelected = this.currentMode === 'cpu_vs_cpu';
     this.localModeButton.textContent = `Mode: ${MODE_LABELS[this.currentMode]}`;
     this.localModeOptionsLabel.textContent = this.enabledModes
@@ -2299,8 +2311,16 @@ export class StartMenu {
       return;
     }
     const current = this.getCurrentRowIndex();
-    const next = (current + direction + rows.length) % rows.length;
-    this.setCurrentRowIndex(next);
+    for (let offset = 1; offset <= rows.length; offset += 1) {
+      const next = (current + direction * offset + rows.length) % rows.length;
+      const row = rows[next];
+      if (row.hidden || row.matches(':disabled') || row.querySelector('button')?.disabled) {
+        continue;
+      }
+      this.setCurrentRowIndex(next);
+      row.scrollIntoView({ block: 'nearest' });
+      return;
+    }
   }
 
   private activateSelection(): void {

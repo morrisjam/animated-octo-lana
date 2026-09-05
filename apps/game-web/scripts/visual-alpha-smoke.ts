@@ -69,7 +69,7 @@ const artifactDirectoryName = STAGE_TARGET.override
 const artifactRoot = path.resolve(appRoot, 'build-artifacts', artifactDirectoryName);
 const reportPath = path.resolve(artifactRoot, 'report.json');
 const smokeFixturePath = path.resolve(replayRoot, 'smoke.replay.json');
-const alphaFixturePath = path.resolve(replayRoot, 'alpha-visual.replay.json');
+const alphaFixturePath = path.resolve(replayRoot, 'alpha-visual-2026.09.replay.json');
 const localRankedRootSmokeBuildPath = path.resolve(distRoot, 'local-ranked-root-smoke-build.json');
 
 interface FixtureSummary {
@@ -838,6 +838,13 @@ async function verifyBalanceSparring(
   const recoveryField = pauseMenu.locator(
     '[data-tuning-key="naturalRecoveryResetMultiplier"] input',
   );
+  // Advanced controls are intentionally collapsed. Exercise their real disclosure
+  // controls instead of making hidden inputs visible through DOM mutation.
+  for (const section of (await recoveryField.locator('xpath=ancestor::details').all()).reverse()) {
+    if (await section.getAttribute('open') === null) {
+      await section.locator(':scope > summary').click();
+    }
+  }
   await recoveryField.waitFor({ state: 'visible', timeout: timeoutMs });
   if (await recoveryField.isDisabled()) {
     throw new Error('Balance Sparring did not enable local recovery tuning.');
@@ -1473,7 +1480,7 @@ async function run(): Promise<void> {
       .waitFor({ state: 'visible', timeout: timeoutMs });
     report.webgl = await verifyWebGl(page);
     report.fixtures.push(await verifyFixtureResponse(page, origin, 'smoke.replay.json'));
-    report.fixtures.push(await verifyFixtureResponse(page, origin, 'alpha-visual.replay.json'));
+    report.fixtures.push(await verifyFixtureResponse(page, origin, 'alpha-visual-2026.09.replay.json'));
     await waitForRenderedFrame(page);
     await captureScreenshot(page, report.screenshots, 'home', null);
 
@@ -1507,7 +1514,7 @@ async function run(): Promise<void> {
       ALPHA_ACTION_MARKER_FRAMES,
       true,
     );
-    const emittedAlpha = report.fixtures.find((fixture) => fixture.fileName === 'alpha-visual.replay.json');
+    const emittedAlpha = report.fixtures.find((fixture) => fixture.fileName === 'alpha-visual-2026.09.replay.json');
     if (emittedAlpha?.frames !== alphaFrames) {
       throw new Error(
         `Local alpha replay rendered ${alphaFrames} frames but its emitted JSON contains ${emittedAlpha?.frames ?? 0}.`,

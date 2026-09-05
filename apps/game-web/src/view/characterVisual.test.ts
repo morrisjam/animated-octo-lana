@@ -181,27 +181,30 @@ describe('character visual adapters', () => {
     const body = p1.node.getObjectByName('sprite-body') as THREE.Sprite;
     const own = makeSnapshot('vanguard');
 
-    // The very first update snaps the displayed facing without a turn tween.
+    // Both body and rim must retain their full silhouette throughout a turn.
+    const rim = p1.node.getObjectByName('sprite-rim') as THREE.Sprite;
     updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: -10, y: 0 } }, 1);
     expect(body.scale.x).toBeLessThan(0);
+    const width = Math.abs(body.scale.x);
 
     // Inside the deadband the previous facing must hold instead of strobing.
     updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: 1, y: 0 } }, 1.1);
     expect(body.scale.x).toBeLessThan(0);
 
-    // A real side switch turns over a few frames (edge-on squash), so the
-    // mirrored scale crosses to positive after a short tween, not instantly.
+    // A real side switch mirrors at full width, including at high refresh rates.
     let time = 1.2;
-    for (let i = 0; i < 8; i += 1) {
+    for (let i = 0; i < 24; i += 1) {
       updateCharacterVisualHandle(p1, own, { ...makeSnapshot('duelist'), pos: { x: 10, y: 0 } }, time);
-      time += 0.05;
+      expect(body.scale.x).toBeGreaterThan(width * 0.95);
+      expect(rim.scale.x).toBeGreaterThan(width);
+      time += 1 / 144;
     }
     expect(body.scale.x).toBeGreaterThan(0);
 
     disposeCharacterVisualNode(p1.node);
   });
 
-  test('crossfades into calm clips and hard-cuts into attacks', () => {
+  test('only crossfades neutral-to-neutral, never into or out of combat and recovery', () => {
     const p1 = createCharacterVisualHandle('vanguard', 'P1');
     const ghost = p1.node.getObjectByName('sprite-ghost') as THREE.Sprite;
     const opponent = makeSnapshot('duelist');
@@ -222,24 +225,95 @@ describe('character visual adapters', () => {
     updateCharacterVisualHandle(p1, idle, opponent, 1);
     expect(ghost.visible).toBe(false);
 
-    // idle -> recover is a calm transition: the previous pose dissolves out.
-    updateCharacterVisualHandle(p1, recovering, opponent, 1.016);
+    const boost = { ...idle, presentationAction: 'boost' as const, presentationPhase: 'sustain' as const };
+    updateCharacterVisualHandle(p1, boost, opponent, 1.008);
     expect(ghost.visible).toBe(true);
-    expect(ghost.material.opacity).toBeGreaterThan(0.5);
 
-    // The dissolve decays and clears within a few frames.
-    let time = 1.07;
-    for (let i = 0; i < 4; i += 1) {
-      updateCharacterVisualHandle(p1, recovering, opponent, time);
-      time += 0.06;
-    }
+    // A dunk victim's get-up is not a calm transition.
+    updateCharacterVisualHandle(p1, recovering, opponent, 1.016);
     expect(ghost.visible).toBe(false);
-
-    // recover -> launch startup is an attack: no dissolve, instant cut.
-    updateCharacterVisualHandle(p1, launching, opponent, time);
+    updateCharacterVisualHandle(p1, idle, opponent, 1.032);
+    expect(ghost.visible).toBe(false);
+    updateCharacterVisualHandle(p1, launching, opponent, 1.048);
+    expect(ghost.visible).toBe(false);
+    updateCharacterVisualHandle(p1, boost, opponent, 1.064);
     expect(ghost.visible).toBe(false);
 
     disposeCharacterVisualNode(p1.node);
+  });
+
+  test('clears neutral ghosts on rewind, long seeks, and facing changes', () => {
+    for (const change of ['rewind', 'seek', 'turn']) {
+      const handle = createCharacterVisualHandle('vanguard', 'P1');
+      const idle = makeSnapshot('vanguard');
+      const opponent = { ...makeSnapshot('duelist'), pos: { x: 10, y: 0 } };
+      const boost = { ...idle, presentationAction: 'boost' as const, presentationPhase: 'sustain' as const };
+      updateCharacterVisualHandle(handle, idle, opponent, 1);
+      updateCharacterVisualHandle(handle, boost, opponent, 1.01);
+      const ghost = handle.node.getObjectByName('sprite-ghost') as THREE.Sprite;
+      expect(ghost.visible).toBe(true);
+      updateCharacterVisualHandle(handle, boost,
+        change === 'turn' ? { ...opponent, pos: { x: -10, y: 0 } } : opponent,
+        change === 'rewind' ? 0.5 : change === 'seek' ? 5 : 1.02);
+      expect(ghost.visible).toBe(false);
+      disposeCharacterVisualNode(handle.node);
+    }
+  });
+
+  test('starts both player seats on the first combat frame and resets same-clip legacy rewinds', () => {
+    for (const playerId of ['P1', 'P2'] as const) {
+      const handle = createCharacterVisualHandle('vanguard', playerId);
+      const startup = { ...makeSnapshot('vanguard'), id: playerId,
+        presentationAction: 'launch' as const, presentationPhase: 'startup' as const };
+      const opponent = makeSnapshot('duelist');
+      updateCharacterVisualHandle(handle, startup, opponent, 10);
+      expect(handle.node.userData.spriteRuntime.lastDisplayed.frame).toBe(12);
+      updateCharacterVisualHandle(handle, startup, opponent, 10.1);
+      expect(handle.node.userData.spriteRuntime.lastDisplayed.frame).toBe(14);
+      updateCharacterVisualHandle(handle, startup, opponent, 0);
+      expect(handle.node.userData.spriteRuntime.lastDisplayed.frame).toBe(12);
+      updateCharacterVisualHandle(handle, startup, opponent, 0.05);
+      expect(handle.node.userData.spriteRuntime.lastDisplayed.frame).toBe(13);
+      disposeCharacterVisualNode(handle.node);
+    }
+  });
+
+  test('uses simulation phase time for fresh handles, forward seeks, rewinds, and same-time resets', () => {
+    for (const playerId of ['P1', 'P2'] as const) {
+      const handle = createCharacterVisualHandle('vanguard', playerId);
+      const opponent = makeSnapshot('duelist');
+      const startup = { ...makeSnapshot('vanguard'), id: playerId,
+        presentationAction: 'launch' as const, presentationPhase: 'startup' as const };
+      for (const [gameTime, elapsed, frame] of [
+        [10, 0.06, 13], // First observed snapshot is already mid-startup.
+        [20, 0.10, 14], // Forward seek must not use the old renderer's clock.
+        [2, 0.05, 13], // Rewind remains in the same clip.
+        [2, 0, 12], // Reset/rollback can replace a snapshot at the same time.
+        [2, 0, 12], // Paused renders must not advance animation.
+        [2.01, 0.10, 14],
+      ]) {
+        updateCharacterVisualHandle(handle, { ...startup, presentationElapsedSeconds: elapsed }, opponent, gameTime);
+        expect(handle.node.userData.spriteRuntime.lastDisplayed.frame).toBe(frame);
+        expect(handle.node.getObjectByName('sprite-ghost')!.visible).toBe(false);
+      }
+      disposeCharacterVisualNode(handle.node);
+    }
+  });
+
+  test('both seats show identical combat silhouettes as well as identical frames', () => {
+    const p1 = createCharacterVisualHandle('vanguard', 'P1');
+    const p2 = createCharacterVisualHandle('vanguard', 'P2');
+    const snapshot = { ...makeSnapshot('vanguard'), presentationAction: 'launch' as const,
+      presentationPhase: 'startup' as const, presentationElapsedSeconds: 0.05 };
+    updateCharacterVisualHandle(p1, snapshot, { ...snapshot, pos: { x: 10, y: 0 } }, 3);
+    updateCharacterVisualHandle(p2, { ...snapshot, id: 'P2' }, { ...snapshot, pos: { x: -10, y: 0 } }, 3);
+    const p1Body = p1.node.getObjectByName('sprite-body') as THREE.Sprite;
+    const p2Body = p2.node.getObjectByName('sprite-body') as THREE.Sprite;
+    expect(p1Body.scale.x).toBe(-p2Body.scale.x);
+    expect(p1Body.scale.y).toBe(p2Body.scale.y);
+    expect(p1Body.material.map!.offset).toEqual(p2Body.material.map!.offset);
+    disposeCharacterVisualNode(p1.node);
+    disposeCharacterVisualNode(p2.node);
   });
 });
 

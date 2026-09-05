@@ -85,6 +85,10 @@ Required presentation states are `idle.none`, `boost.sustain`, launch startup/ac
 
 The simulation emits a render-only `presentationAction` and `presentationPhase` for each fighter. Atlas playback therefore follows the complete startup and active windows for launch, dunk, special, parry, and break rather than relying on short impact flashes. Facing, world scale, startup telegraph pulse, additive rim light, and ground shadow are applied by `characterVisual.ts`; those effects do not need to be baked into the sprite.
 
+`attack_recovery.recovery` and `parry.startup` are optional presentation mappings. New art should supply distinct upright follow-through and parry anticipation poses for them. `recover.recovery` is reserved for the victim's dunk recovery; do not use prone/get-up art for an attacker's ordinary end-lag. Current packages use an upright temporary pose until those clips are authored.
+
+Combat phases expose `presentationElapsedSeconds` when their duration is known, so seeking into startup or active frames does not restart the animation. P2's decorative phase offset applies only to neutral loops. Combat transitions are hard cuts, while neutral-to-neutral changes may briefly crossfade. Facing uses a full-width mirror with a dead zone, never an edge-on squash through zero width.
+
 Stage presets also own `cameraPitchDegrees` and `cameraLookAtYOffset`. This lets visual review compare the default shallow view with the stronger wormhole "arena lip" angle without changing simulation coordinates.
 
 ## Replacing a temporary atlas

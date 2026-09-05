@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-04T06:49:14.310Z",
+  "generatedAt": "2026-09-05T10:40:13.503Z",
   "profileIds": [
     "default",
     "mobility_focus_v1",
@@ -18,13 +18,13 @@
     "default": {
       "fixtures": {
         "launch_connect": {
-          "finalChecksum": 2748225468
+          "finalChecksum": 404131117
         },
         "launch_vs_parry": {
-          "finalChecksum": 2978006476
+          "finalChecksum": 3213307891
         },
         "dunk_connect": {
-          "finalChecksum": 1824345031
+          "finalChecksum": 1124545965
         },
         "special_projectile_spawn": {
           "finalChecksum": 1433905853
@@ -33,20 +33,20 @@
           "finalChecksum": 1365713510
         },
         "special_dash_resolve": {
-          "finalChecksum": 2188758096
+          "finalChecksum": 1777338320
         }
       }
     },
     "mobility_focus_v1": {
       "fixtures": {
         "launch_connect": {
-          "finalChecksum": 3787029967
+          "finalChecksum": 892448110
         },
         "launch_vs_parry": {
-          "finalChecksum": 4206739903
+          "finalChecksum": 1221548008
         },
         "dunk_connect": {
-          "finalChecksum": 1756831260
+          "finalChecksum": 2226717494
         },
         "special_projectile_spawn": {
           "finalChecksum": 2153271748
@@ -55,20 +55,20 @@
           "finalChecksum": 25164469
         },
         "special_dash_resolve": {
-          "finalChecksum": 301769095
+          "finalChecksum": 1785012983
         }
       }
     },
     "control_focus_v1": {
       "fixtures": {
         "launch_connect": {
-          "finalChecksum": 1847111775
+          "finalChecksum": 3219707619
         },
         "launch_vs_parry": {
-          "finalChecksum": 154233902
+          "finalChecksum": 3366678841
         },
         "dunk_connect": {
-          "finalChecksum": 1378985409
+          "finalChecksum": 3793697515
         },
         "special_projectile_spawn": {
           "finalChecksum": 1076963671
@@ -77,20 +77,20 @@
           "finalChecksum": 3277495520
         },
         "special_dash_resolve": {
-          "finalChecksum": 2145055806
+          "finalChecksum": 988862494
         }
       }
     },
     "well_hazard_v1": {
       "fixtures": {
         "launch_connect": {
-          "finalChecksum": 3320710651
+          "finalChecksum": 1282652006
         },
         "launch_vs_parry": {
-          "finalChecksum": 2279562074
+          "finalChecksum": 3986799621
         },
         "dunk_connect": {
-          "finalChecksum": 346074833
+          "finalChecksum": 629863607
         },
         "special_projectile_spawn": {
           "finalChecksum": 3205585771
@@ -99,7 +99,7 @@
           "finalChecksum": 2855153388
         },
         "special_dash_resolve": {
-          "finalChecksum": 2168542722
+          "finalChecksum": 1672942594
         }
       }
     }

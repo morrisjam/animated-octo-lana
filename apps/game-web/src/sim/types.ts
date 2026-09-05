@@ -99,6 +99,7 @@ export interface PlayerState {
   stunned: number;
   helpless: number;
   parry: number;
+  parryStartup: number;
   endLag: number;
   chain: number;
   chainTimer: number;
@@ -170,6 +171,7 @@ export type PlayerPresentationAction =
   | 'special'
   | 'dunk'
   | 'helpless'
+  | 'attack_recovery'
   | 'recover';
 
 export type PlayerPresentationPhase = 'none' | 'startup' | 'active' | 'sustain' | 'recovery';
@@ -194,6 +196,7 @@ export interface PlayerRenderSnapshot {
   recoveryProgress: number;
   presentationAction: PlayerPresentationAction;
   presentationPhase: PlayerPresentationPhase;
+  presentationElapsedSeconds?: number;
 }
 
 export interface ProjectileRenderSnapshot {

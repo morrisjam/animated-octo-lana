@@ -22,7 +22,6 @@ import {
 import { disposeImageTextureLibrary } from './assets/imageTextureLibrary';
 import {
   resolveStageCameraPitchDegrees,
-  resolveStageCameraYOffset,
   resolveWormholeCoreOpacity,
   resolveWormholeLayerDepth,
   resolveWormholeParticleDepth,
@@ -32,7 +31,7 @@ import {
   resolvePlayerActionReadability,
   type ActionReadabilityId,
 } from './actionReadability';
-import { syncCameraTrackToWorld } from './cameraTracking';
+import { cameraDampingAlpha, fitCombatCameraDistance, syncCameraTrackToWorld } from './cameraTracking';
 
 const LIVE_PROJECTILE_IDS = new Set<number>();
 
@@ -338,18 +337,12 @@ function updateProjectileMeshes(context: SceneContext, snapshot: RenderSnapshot)
   }
 }
 
-// Fighter readability framing: keep the pair large on screen. At FOV 52 the
-// visible world height is roughly cameraZ, so sprite screen share is about
-// worldHeight / cameraZ — these clamps keep close combat near 14% screen
-// height instead of the old whole-arena framing.
+// Prefer close combat framing, but let the containment fit pull back as far
+// as necessary for both fighters and the current viewport.
 const NEUTRAL_CAMERA_MIN_Z = 52;
-const NEUTRAL_CAMERA_MAX_Z = 118;
 const LAUNCH_CAMERA_MIN_Z = 60;
-const LAUNCH_CAMERA_MAX_Z = 148;
-const CAMERA_DISTANCE_SCALE = 0.55;
-const CAMERA_VERTICAL_SCALE = 0.3;
 
-function updateCamera(context: SceneContext, snapshot: RenderSnapshot): void {
+function updateCamera(context: SceneContext, snapshot: RenderSnapshot, deltaSeconds: number, reset: boolean): void {
   const launchActive = snapshot.players.P1.helpless > 0 || snapshot.players.P2.helpless > 0;
   if (!launchActive && context.launchCameraActive) {
     context.cameraPlayerTracks.P1.set(snapshot.players.P1.pos.x, snapshot.players.P1.pos.y);
@@ -363,16 +356,7 @@ function updateCamera(context: SceneContext, snapshot: RenderSnapshot): void {
   const p2 = context.cameraPlayerTracks.P2;
   const midX = (p1.x + p2.x) * 0.5;
   const midY = (p1.y + p2.y) * 0.5;
-  const distance = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-  const spread = distance * CAMERA_DISTANCE_SCALE + Math.abs(p1.y - p2.y) * CAMERA_VERTICAL_SCALE;
   const minZ = launchActive ? LAUNCH_CAMERA_MIN_Z : NEUTRAL_CAMERA_MIN_Z;
-  const maxZ = launchActive ? LAUNCH_CAMERA_MAX_Z : NEUTRAL_CAMERA_MAX_Z;
-
-  const desiredCameraX = midX * 0.22;
-  let desiredCameraY = midY * 0.32;
-  const desiredCameraZ = THREE.MathUtils.clamp(minZ + spread, minZ, maxZ);
-  const desiredLookAtX = midX * 0.2;
-  let desiredLookAtY = midY * 0.2;
 
   // Stage-authored pitch changes presentation only; simulation coordinates remain strictly 2D.
   const cameraPitchDegrees = resolveStageCameraPitchDegrees(
@@ -380,22 +364,38 @@ function updateCamera(context: SceneContext, snapshot: RenderSnapshot): void {
     context.cameraLaunchPitchBoostDegrees,
     launchActive,
   );
-  desiredCameraY += resolveStageCameraYOffset(desiredCameraZ, cameraPitchDegrees);
-  desiredLookAtY += context.cameraLookAtYOffset;
-
-  const maxCameraStep = launchActive ? 5.4 : 3.2;
-  context.cameraTarget.x += THREE.MathUtils.clamp(desiredCameraX - context.cameraTarget.x, -maxCameraStep, maxCameraStep);
-  context.cameraTarget.y += THREE.MathUtils.clamp(desiredCameraY - context.cameraTarget.y, -maxCameraStep, maxCameraStep);
-  context.cameraTarget.z += THREE.MathUtils.clamp(desiredCameraZ - context.cameraTarget.z, -maxCameraStep, maxCameraStep);
-  context.camera.position.lerp(context.cameraTarget, launchActive ? 0.22 : 0.16);
-
-  const maxLookAtStep = 2.8;
-  context.lookAtTarget.x += THREE.MathUtils.clamp(desiredLookAtX - context.lookAtTarget.x, -maxLookAtStep, maxLookAtStep);
-  context.lookAtTarget.y += THREE.MathUtils.clamp(desiredLookAtY - context.lookAtTarget.y, -maxLookAtStep, maxLookAtStep);
+  const alpha = reset ? 1 : cameraDampingAlpha(deltaSeconds);
+  context.lookAtTarget.x += (midX - context.lookAtTarget.x) * alpha;
+  context.lookAtTarget.y += (midY + context.cameraLookAtYOffset - context.lookAtTarget.y) * alpha;
+  context.lookAtTarget.z = 0;
+  const pitch = THREE.MathUtils.degToRad(cameraPitchDegrees);
+  // Refit around the smoothed target as well: a warp must never leave the
+  // fighters outside the frame while the camera catches up.
+  const requiredDistance = fitCombatCameraDistance({
+    players: [p1, p2],
+    center: context.lookAtTarget,
+    pitchDegrees: cameraPitchDegrees,
+    verticalFovDegrees: context.camera.fov,
+    aspect: context.camera.aspect,
+    minDistance: minZ / Math.cos(pitch),
+  });
+  const previousDistance = context.camera.position.distanceTo(context.lookAtTarget);
+  const distance = Math.max(requiredDistance, previousDistance + (requiredDistance - previousDistance) * alpha);
+  context.cameraTarget.set(context.lookAtTarget.x,
+    context.lookAtTarget.y - Math.sin(pitch) * distance, Math.cos(pitch) * distance);
+  context.camera.position.copy(context.cameraTarget);
+  const far = Math.max(500, distance + 400);
+  if (context.camera.far !== far) {
+    context.camera.far = far;
+    context.camera.updateProjectionMatrix();
+  }
   context.camera.lookAt(context.lookAtTarget);
 }
 
 export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): void {
+  const previousTime = context.lastRenderSnapshot?.gameTime;
+  const resetCamera = previousTime === undefined || snapshot.gameTime < previousTime;
+  const cameraDelta = resetCamera ? 0 : Math.min(0.1, snapshot.gameTime - previousTime);
   if (context.lastRenderSnapshot && snapshot.gameTime < context.lastRenderSnapshot.gameTime) {
     clearCombatVfxRuntime(context.combatVfxRuntime);
     context.lastRenderSnapshot = null;
@@ -404,11 +404,13 @@ export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): vo
   emitCombatVfxEvents(context.combatVfxRuntime, combatEvents, snapshot.gameTime);
   updateCombatVfxRuntime(context.combatVfxRuntime, snapshot.gameTime);
   context.lastRenderSnapshot = snapshot;
+  context.stageBackgroundModel.root.userData.gameTime = snapshot.gameTime;
 
   context.gravityWell.rotation.z = 0;
   const gravityWellMaterial = context.gravityWell.material;
   if (gravityWellMaterial instanceof THREE.ShaderMaterial) {
-    gravityWellMaterial.uniforms.uTime.value = snapshot.gameTime;
+    gravityWellMaterial.uniforms.uTime.value = snapshot.gameTime
+      * (context.wormholeBackdrop.group.userData.effectSpeed ?? 1);
   }
   context.ring.rotation.z = 0;
   const ringMaterial = context.ring.material as THREE.MeshBasicMaterial;
@@ -433,7 +435,7 @@ export function renderFrame(context: SceneContext, snapshot: RenderSnapshot): vo
   updatePlayerIndicators(context, snapshot);
   updateProjectileMeshes(context, snapshot);
   updateWormholeBackdrop(context, snapshot);
-  updateCamera(context, snapshot);
+  updateCamera(context, snapshot, cameraDelta, resetCamera);
 
   context.renderer.render(context.scene, context.camera);
 }

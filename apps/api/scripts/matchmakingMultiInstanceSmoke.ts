@@ -106,8 +106,8 @@ interface DatabaseInterruptionEvidence {
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const AUTH_SECRET = 'local-multi-instance-auth-secret-0123456789-abcdefghijklmnopqrstuvwxyz';
 const ADMIN_KEY = 'local-multi-instance-admin-key-0123456789';
-const BUILD_VERSION = 'prototype-2026.02';
-const RULESET_VERSION = 'prototype-2026.02';
+const BUILD_VERSION = 'prototype-2026.09';
+const RULESET_VERSION = 'prototype-2026.09';
 const BALANCE_PROFILE_ID = 'default';
 const AUTH_RATE_LIMIT_SECRET = randomBytes(32).toString('hex');
 const accessTokenByAccountId = new Map<string, string>();

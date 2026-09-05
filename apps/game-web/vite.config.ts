@@ -170,6 +170,7 @@ export default defineConfig(({ mode }) => {
         ...(includeAssetWorkshop ? {
           assetWorkshop: fileURLToPath(new URL('asset-workshop.html', import.meta.url)),
           arenaRimWorkshop: fileURLToPath(new URL('arena-rim-workshop.html', import.meta.url)),
+          nebulaWorkshop: fileURLToPath(new URL('nebula-workshop.html', import.meta.url)),
         } : {}),
         webRtcSmoke: fileURLToPath(new URL('webrtc-smoke.html', import.meta.url)),
         webRtcPeerSmoke: fileURLToPath(new URL('webrtc-peer-smoke.html', import.meta.url)),
@@ -203,6 +204,12 @@ export default defineConfig(({ mode }) => {
             if (normalizedId.endsWith('/src/input/bindings.ts')) {
               // Reuse an existing initial chunk instead of paying for another module preload.
               return 'onlineRuntime';
+            }
+            if (normalizedId.endsWith('/src/net/rankedQueueClient.ts')) {
+              return 'rankedQueueClient';
+            }
+            if (normalizedId.endsWith('/src/net/onlineMenuState.ts')) {
+              return 'onlineMenuState';
             }
             if (normalizedId.includes('/src/net/')) {
               return 'onlineRuntime';

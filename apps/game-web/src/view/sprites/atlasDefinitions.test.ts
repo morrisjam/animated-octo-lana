@@ -5,6 +5,7 @@ import {
   resolveSpriteAnimationSet,
   resolveSpriteClip,
   resolveSpriteClipSheet,
+  resolveSpriteElapsedSeconds,
   resolveSpriteFrame,
   resolveSpriteFrameSelection,
   validateSpriteAnimationSet,
@@ -58,9 +59,8 @@ describe('sprite animation sets', () => {
     expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'launch', presentationPhase: 'startup' }))).toBe('launch_startup');
     expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'launch', presentationPhase: 'active' }))).toBe('launch_active');
     expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'helpless', presentationPhase: 'sustain' }))).toBe('helpless');
-    expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'recover', presentationPhase: 'recovery' }))).toBe('recover');
-    // Early dunk recovery prefers the crumple clip; late recovery and plain
-    // end-lag (recovering === 0) stay on the shared recover clip.
+    expect(resolveSpriteClip(set!, makeSnapshot({ presentationAction: 'recover', presentationPhase: 'recovery' }))).toBe('attack_recovery');
+    // Only victim recovery can use crumple/get-up imagery.
     expect(resolveSpriteClip(set!, makeSnapshot({
       presentationAction: 'recover',
       presentationPhase: 'recovery',
@@ -76,6 +76,54 @@ describe('sprite animation sets', () => {
     expect(resolveSpriteFrame(set!, 'idle', 0)).toBe(0);
     expect(resolveSpriteFrame(set!, 'idle', 0.34)).toBe(2);
     expect(resolveSpriteFrame(set!, 'idle', 0.67)).toBe(5);
+  });
+
+  test('keeps decorative seat offsets out of every combat clip, including looping guards', () => {
+    for (const set of getSpriteAnimationSets()) {
+      for (const [state, clipId] of Object.entries(set.stateClips)) {
+        if (state === 'idle.none' || state === 'boost.sustain') continue;
+        for (const elapsed of [0, 0.05, 0.13, 0.25, 1]) {
+          expect(resolveSpriteFrameSelection(set, clipId!, elapsed, 0.13))
+            .toEqual(resolveSpriteFrameSelection(set, clipId!, elapsed, 0));
+          expect(resolveSpriteFrame(set, clipId!, elapsed, 0.13))
+            .toBe(resolveSpriteFrame(set, clipId!, elapsed, 0));
+        }
+      }
+    }
+    const set = resolveSpriteAnimationSet('character_vanguard_animset')!;
+    expect(resolveSpriteFrame(set, 'launch_startup', 0, 0.13)).toBe(12);
+    expect(resolveSpriteFrame(set, 'idle', 0, 0.13)).toBe(1);
+  });
+
+  test('uses safe upright placeholders for ordinary recovery and inactive parry startup', () => {
+    for (const set of getSpriteAnimationSets()) {
+      for (const presentationAction of ['attack_recovery', 'parry'] as const) {
+        const snapshot = makeSnapshot({ presentationAction,
+          presentationPhase: presentationAction === 'parry' ? 'startup' : 'recovery' });
+        const clipId = resolveSpriteClip(set, snapshot);
+        expect(set.clips[clipId].frames).toEqual([0]);
+        expect(set.clips[clipId].loop).toBe(false);
+        const legacySet = structuredClone(set);
+        delete legacySet.stateClips['attack_recovery.recovery'];
+        delete legacySet.stateClips['parry.startup'];
+        expect(resolveSpriteClip(legacySet, snapshot)).toBe('idle');
+      }
+    }
+  });
+
+  test('seeks within crumple/get-up recovery segments without renderer history', () => {
+    const set = resolveSpriteAnimationSet('character_vanguard_animset')!;
+    for (const useMetadata of [false, true]) {
+      for (const progress of [0, 0.2, 0.449, 0.45, 0.7, 0.9]) {
+        const snapshot = makeSnapshot({ presentationAction: 'recover', presentationPhase: 'recovery',
+          recovering: 2 * (1 - progress), recoveryProgress: progress,
+          ...(useMetadata ? { presentationElapsedSeconds: progress * 2 } : {}) });
+        const clipId = resolveSpriteClip(set, snapshot);
+        const elapsed = resolveSpriteElapsedSeconds(set, snapshot, clipId, 999);
+        expect(clipId).toBe(progress < 0.45 ? 'dunked' : 'recover');
+        expect(elapsed).toBeCloseTo(progress < 0.45 ? progress * 2 : (progress - 0.45) * 2);
+      }
+    }
   });
 
   test('resolves frames and layout from the sheet selected by each clip', () => {

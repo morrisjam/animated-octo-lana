@@ -458,7 +458,7 @@ const presenceInviteService = createPresenceInviteService({
 const replayBlobStore = createReplayBlobStoreFromEnv(process.env, { database: db });
 const rankedReplayRetentionDays = parsePositiveIntegerEnv(process.env.REPLAY_RETENTION_DAYS_RANKED) ?? 365;
 const rankedSupportedRulesetVersions = new Set(
-  (process.env.RANKED_SUPPORTED_RULESET_VERSIONS ?? 'prototype-2026.02')
+  (process.env.RANKED_SUPPORTED_RULESET_VERSIONS ?? 'prototype-2026.09')
     .split(',')
     .map((value) => value.trim())
     .filter((value) => value.length > 0),

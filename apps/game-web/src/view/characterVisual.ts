@@ -10,6 +10,7 @@ import {
   getSpriteAnimationSets,
   resolveSpriteAnimationSet,
   resolveSpriteClip,
+  resolveSpriteElapsedSeconds,
   resolveSpriteFrameSelection,
   type SpriteAnimationSet,
   type SpriteAtlasSheet,
@@ -55,8 +56,9 @@ interface SpriteVisualRuntime {
   ghost: THREE.Sprite;
   ghostFadeRemaining: number;
   facing: number;
-  facingDisplay: number;
   lastGameTime: number | null;
+  presentationState: string | null;
+  lastPresentationElapsed: number | null;
   lastDisplayed: {
     sheetId: string;
     frame: number;
@@ -71,18 +73,18 @@ interface SpriteVisualRuntime {
   sheetTextures: Map<string, { body: THREE.Texture; rim: THREE.Texture; ghost: THREE.Texture }>;
 }
 
-// Clips a transition may dissolve into. Attacks, parries, and getting hit
-// stay hard cuts so telegraphs and impacts keep their snap; the dissolve
-// smooths the seams back into neutral flight and recovery.
-const SMOOTH_TRANSITION_CLIPS = new Set<SpriteClipId>(['idle', 'boost', 'recover']);
+// Only neutral-to-neutral transitions may dissolve. Neither side of a combat
+// boundary may leave a stale attacking or downed pose on screen.
+const SMOOTH_TRANSITION_STATES = new Set(['idle.none', 'boost.sustain']);
 const SPRITE_CROSSFADE_SECONDS = 0.11;
-const SPRITE_TURN_SECONDS = 0.09;
 
-function beginSpriteTransition(runtime: SpriteVisualRuntime, nextClipId: SpriteClipId): void {
+function beginSpriteTransition(runtime: SpriteVisualRuntime, nextState: string): void {
   const previous = runtime.lastDisplayed;
   const sheet = previous ? runtime.animationSet.sheets[previous.sheetId] : undefined;
   const textures = previous ? runtime.sheetTextures.get(previous.sheetId) : undefined;
-  if (!previous || !sheet || !textures || !SMOOTH_TRANSITION_CLIPS.has(nextClipId)) {
+  if (!previous || !sheet || !textures
+    || !SMOOTH_TRANSITION_STATES.has(runtime.presentationState ?? '')
+    || !SMOOTH_TRANSITION_STATES.has(nextState)) {
     runtime.ghostFadeRemaining = 0;
     runtime.ghost.visible = false;
     return;
@@ -649,9 +651,10 @@ function createSpriteNode(
     rim,
     ghost,
     ghostFadeRemaining: 0,
-    facing: 1,
-    facingDisplay: 1,
+    facing: playerId === 'P1' ? 1 : -1,
     lastGameTime: null,
+    presentationState: null,
+    lastPresentationElapsed: null,
     lastDisplayed: null,
     clipId: initialClipId,
     sheetId: initialSheet.id,
@@ -746,21 +749,36 @@ const spriteAdapter: CharacterVisualAdapter = {
     if (!runtime) {
       return;
     }
-    const dt = runtime.lastGameTime === null
+    const resetTimeline = runtime.lastGameTime === null || context.gameTime < runtime.lastGameTime;
+    const dt = resetTimeline
       ? 0
-      : THREE.MathUtils.clamp(context.gameTime - runtime.lastGameTime, 0, 0.05);
+      : Math.max(0, context.gameTime - runtime.lastGameTime!);
     runtime.lastGameTime = context.gameTime;
+    const presentationState = `${context.own.presentationAction}.${context.own.presentationPhase}`;
     const clipId = resolveSpriteClip(runtime.animationSet, context.own);
-    if (clipId !== runtime.clipId) {
-      beginSpriteTransition(runtime, clipId);
+    const phaseRestarted = presentationState === runtime.presentationState
+      && context.own.presentationElapsedSeconds !== undefined
+      && runtime.lastPresentationElapsed !== null
+      && context.own.presentationElapsedSeconds < runtime.lastPresentationElapsed;
+    if (resetTimeline || dt > 0.25 || phaseRestarted) {
+      runtime.lastDisplayed = null;
+      runtime.ghostFadeRemaining = 0;
+      runtime.ghost.visible = false;
+      runtime.facing = context.own.id === 'P1' ? 1 : -1;
+    }
+    if (resetTimeline || clipId !== runtime.clipId || presentationState !== runtime.presentationState) {
+      beginSpriteTransition(runtime, presentationState);
       runtime.clipId = clipId;
       runtime.clipStartedAt = context.gameTime;
     }
+    runtime.presentationState = presentationState;
+    runtime.lastPresentationElapsed = context.own.presentationElapsedSeconds ?? null;
     const selection = resolveSpriteFrameSelection(
       runtime.animationSet,
       runtime.clipId,
-      context.gameTime - runtime.clipStartedAt,
-      runtime.phase,
+      resolveSpriteElapsedSeconds(runtime.animationSet, context.own, runtime.clipId,
+        presentationState === 'idle.none' ? context.gameTime : context.gameTime - runtime.clipStartedAt),
+      SMOOTH_TRANSITION_STATES.has(presentationState) ? runtime.phase : 0,
     );
     if (!selection) {
       return;
@@ -802,23 +820,15 @@ const spriteAdapter: CharacterVisualAdapter = {
     if (Math.abs(opponentDeltaX) > 2) {
       runtime.facing = opponentDeltaX >= 0 ? 1 : -1;
     }
-    // Ease the mirror through an edge-on squash so a side switch reads as the
-    // fighter turning around instead of popping. First update snaps.
-    if (dt === 0) {
-      runtime.facingDisplay = runtime.facing;
-    } else {
-      const turnStep = dt / SPRITE_TURN_SECONDS;
-      runtime.facingDisplay += THREE.MathUtils.clamp(
-        runtime.facing - runtime.facingDisplay,
-        -turnStep,
-        turnStep,
-      );
+    // Without authored turn art, a full-width mirror is clearer than shrinking
+    // through zero. Do not leave an opposite-facing neutral ghost behind.
+    const facing = runtime.facing;
+    if (runtime.lastDisplayed && Math.sign(runtime.lastDisplayed.scaleX) !== facing) {
+      runtime.ghostFadeRemaining = 0;
+      runtime.ghost.visible = false;
     }
-    const facing = Math.abs(runtime.facingDisplay) < 0.04
-      ? (runtime.facingDisplay < 0 ? -0.04 : 0.04)
-      : runtime.facingDisplay;
     const startupTelegraph = context.own.presentationPhase === 'startup'
-      ? 0.18 + Math.abs(Math.sin(context.gameTime * 18 + runtime.phase * 10)) * 0.18
+      ? 0.18 + Math.abs(Math.sin(context.gameTime * 18)) * 0.18
       : 0;
     const activeTelegraph = context.own.presentationPhase === 'active' ? 0.22 : 0;
     // Super boost shares the boost clip with ordinary boost; the sustained
@@ -836,7 +846,9 @@ const spriteAdapter: CharacterVisualAdapter = {
       activeTelegraph,
       superBoostSurge,
     );
-    const idlePulse = Math.abs(Math.sin(context.gameTime * 4.2 + runtime.phase * 10)) * 0.025;
+    const idlePulse = SMOOTH_TRANSITION_STATES.has(presentationState)
+      ? Math.abs(Math.sin(context.gameTime * 4.2 + runtime.phase * 10)) * 0.025
+      : 0;
     const pulse = 1 + idlePulse + actionPulse * 0.16;
     runtime.body.scale.set(
       sheet.worldWidth * pulse * facing,

@@ -308,6 +308,7 @@ interface TrackedPlayer {
   recovering: number;
   endLag: number;
   parry: number;
+  parryStartup: number;
   launchFlash: number;
   launchStartup: number;
   launchActive: number;
@@ -467,7 +468,7 @@ function resolveActiveAction(player: TrackedPlayer): CombatControlReturnActiveAc
   if (player.specialStartup > 0 || player.specialActive > 0) {
     return 'special';
   }
-  if (player.parry > 0) {
+  if (player.parryStartup > 0 || player.parry > 0) {
     return 'parry';
   }
   if (player.superBoost > 0) {
@@ -513,6 +514,7 @@ function trackPlayer(player: PlayerState): TrackedPlayer {
     recovering: player.recovering,
     endLag: player.endLag,
     parry: player.parry,
+    parryStartup: player.parryStartup,
     launchFlash: player.launchFlash,
     launchStartup: player.launchStartup,
     launchActive: player.launchActive,
@@ -607,6 +609,7 @@ function isActionReady(player: TrackedPlayer): boolean {
     && player.recovering <= 0
     && player.endLag <= 0
     && player.parry <= 0
+    && player.parryStartup <= 0
     && player.launchStartup <= 0
     && player.launchActive <= 0
     && player.dunkStartup <= 0
@@ -936,7 +939,8 @@ export class CombatEventTelemetryTracker {
     if (input.special && specialStarted) {
       starts.push('special');
     }
-    if (input.parry && current.parry > previous.parry) {
+    if (input.parry && (current.parryStartup > previous.parryStartup
+      || (previous.parryStartup <= 0 && current.parry > previous.parry))) {
       starts.push('parry');
     }
     if (current.launchBreaks < previous.launchBreaks) {

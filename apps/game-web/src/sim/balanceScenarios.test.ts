@@ -312,6 +312,10 @@ describe('balance scenario semantics', () => {
     applyBalanceScenario(candidate, 'p1_control_return_pressure');
     candidate.tuning.naturalRecoveryResetMultiplier = 0.75;
 
+    // Keep the chase inside its authored active window, not the old residue tick.
+    baseline.players.P2.pos.x -= 0.5;
+    candidate.players.P2.pos.x -= 0.5;
+
     for (let frame = 0; frame < 8; frame += 1) {
       const input = neutralInput();
       input.p1.moveX = 1;

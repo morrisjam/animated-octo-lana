@@ -568,7 +568,8 @@ export function resolveAiDifficultyProfile(
 }
 
 function hasAttackCommitment(player: PlayerState): boolean {
-  return player.launchStartup > 0
+  return player.parryStartup > 0
+    || player.launchStartup > 0
     || player.launchActive > 0
     || player.dunkStartup > 0
     || player.dunkActive > 0

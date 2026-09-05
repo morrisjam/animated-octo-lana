@@ -88,6 +88,7 @@ function resetPlayerForScenario(player: PlayerState): void {
   player.stunned = 0;
   player.helpless = 0;
   player.parry = 0;
+  player.parryStartup = 0;
   player.endLag = 0;
   player.chain = 0;
   player.chainTimer = 0;

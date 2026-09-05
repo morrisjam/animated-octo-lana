@@ -6,8 +6,12 @@ export const AUDIO_SAMPLE_LIBRARY_SCHEMA_VERSION = 1 as const;
 
 export type AudioEventType =
   | 'combat.boost'
+  | 'combat.super_boost'
   | 'combat.launch'
+  | 'combat.clash'
   | 'combat.parry'
+  | 'combat.special'
+  | 'combat.break'
   | 'combat.projectile'
   | 'combat.dunk'
   | 'music.menu'

@@ -1,5 +1,8 @@
 import { createInputBindingStore } from './input/bindings';
 import { createEmptyPlayerInput } from './input/frame';
+import { getOnlineLocalInput } from './net/onlineLocalInput';
+import { createLazyRankedQueueClient } from './net/lazyRankedQueueClient';
+import { toCombatAudioEventType } from './audio/combatEventMapping';
 import { createLazyGameplayInput } from './input/lazyGameplay';
 import type { BrowserControllerRuntime } from './view/controllerUi/browserRuntime';
 import type { BrowserPerformanceRuntime } from './view/performance/browserRuntime';
@@ -261,7 +264,6 @@ import {
 } from './view/scene';
 import { buildInputHistoryView } from './view/inputHistory';
 import { createAudioSystem } from './view/audio/system';
-import type { CombatVfxEvent } from './view/vfx/types';
 import { createMusicStateController, type MusicState } from './view/audio/musicState';
 import { createVoiceCalloutSystem } from './view/audio/voiceLines';
 import {
@@ -355,23 +357,6 @@ interface ArcadePendingLossState {
   allowedActions: ArcadeLossAction[];
 }
 
-function toCombatAudioEventType(eventType: CombatVfxEvent['type']): 'combat.boost' | 'combat.launch' | 'combat.parry' | 'combat.projectile' | 'combat.dunk' {
-  switch (eventType) {
-    case 'boost':
-    case 'super_boost':
-      return 'combat.boost';
-    case 'launch':
-      return 'combat.launch';
-    case 'parry':
-      return 'combat.parry';
-    case 'projectile':
-      return 'combat.projectile';
-    case 'dunk':
-    default:
-      return 'combat.dunk';
-  }
-}
-
 function toMusicAudioEventType(state: MusicState): 'music.menu' | 'music.neutral' | 'music.launch' | 'music.end' {
   switch (state) {
     case 'neutral':
@@ -452,7 +437,9 @@ const sceneContext = createScene(canvas, {
     }
   },
 });
-const hud = createHud();
+const hud = createHud({
+  getActiveCharacterBalanceOverrides: () => state.characterBalanceOverrides,
+});
 let controllerRuntime: BrowserControllerRuntime | null = null;
 let performanceRuntime: BrowserPerformanceRuntime | null = null;
 const inputBindings = createInputBindingStore();
@@ -487,6 +474,7 @@ let selectedArcadeSettings: ArcadeMenuSettings = loadedSettings.arcade;
 let arcadeHistory: ArcadeRunHistory = loadArcadeHistory();
 let profileSettingsCache: Record<string, unknown> = {};
 let scopedPersistenceUserId = `local:${platform.kind}`;
+let scopedPersistenceGeneration = 0;
 const scopedSettingsRevisions = new Map<string, string | null>();
 const scopedArcadeHistoryRevisions = new Map<string, string | null>();
 let scopedSettingsWriteQueue: Promise<void> = Promise.resolve();
@@ -531,7 +519,7 @@ let localBalanceScenarioId: BalanceScenarioId = DEFAULT_BALANCE_SCENARIO_ID;
 let activeBalanceScenarioId: BalanceScenarioId = DEFAULT_BALANCE_SCENARIO_ID;
 const runtimeRulesetVersion = (
   (import.meta.env.VITE_RULESET_VERSION as string | undefined)?.trim()
-  || 'prototype-2026.02'
+  || 'prototype-2026.09'
 );
 function buildRulesetVersion(balanceProfileId: string): string {
   return `${runtimeRulesetVersion}${balanceProfileId === DEFAULT_BALANCE_PROFILE_ID ? '' : `+${balanceProfileId}`}`;
@@ -1163,6 +1151,7 @@ function reportLazyUiLoadFailure(surface: LazyUiSurface, error: Error): void {
 }
 
 const pauseMenu = createLazyPauseMenu({
+  onReturnToMenu: () => returnToHome(),
   getTuning: () => localBalanceTuningDraft,
   setTuning: (tuning) => {
     localBalanceTuningDraft = sanitiseTuning(tuning);
@@ -1709,53 +1698,6 @@ function getQueueWaitMs(queuedAt: string | undefined): number | null {
   return Math.max(0, Date.now() - queuedAtMs);
 }
 
-function getOnlineRuntimeStatusDetail(sessionId: string | null, phase?: string | null): string {
-  const sessionLine = `Session: ${sessionId ?? 'pending'}`;
-  const phaseLine = phase ? `Phase: ${phase}` : null;
-  return [
-    sessionLine,
-    phaseLine,
-    onlineRuntimeEnabled
-      ? 'Runtime: authenticated WebRTC rollback flow enabled for this build.'
-      : 'Runtime: public online match entry is hidden for this build.',
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join('\n');
-}
-
-function getRankedQueueHint(ticket: QueueTicketView | null, session: MatchSessionView | null): string {
-  if (!ticket) {
-    return 'Join queue to start searching. Refresh later if you return to this screen mid-session.';
-  }
-  if (ticket.status === 'queued') {
-    return 'Stay here while searching. Refresh if the wait timer or queue state looks stale.';
-  }
-  if (ticket.status === 'matched') {
-    if (onlineRuntimeEnabled) {
-      return session?.status === 'active'
-        ? 'Match accepted. The client should transition into the online session automatically.'
-        : 'Session created. Stay on this screen while the browser finishes bootstrap.';
-    }
-    return 'This build can create ranked sessions, but the public online runtime entry is intentionally hidden.';
-  }
-  return 'Queue is closed. Join again to start a fresh search.';
-}
-
-function getRoomStateHint(room: RoomView | null): string {
-  if (!room) {
-    return 'Create a room for a private match or join with a six-character code.';
-  }
-  if (room.status === 'closed') {
-    return 'This room is closed. Create a new room for another private session.';
-  }
-  if (room.activeSession) {
-    if (room.activeSession.phase === 'in_match') {
-      return 'Room session is live. Refresh if participant or session state looks stale.';
-    }
-    return 'Room session is staged. Keep players in the room and refresh as the phase advances.';
-  }
-  return 'Share the room code with another player, then refresh once they join.';
-}
 
 function getBootstrapStatusLabel(status: OnlineBootstrapStatus): string {
   switch (status) {
@@ -2299,11 +2241,20 @@ function renderOnlineMatchOverScreen(context: OnlineMatchContext, winner: Player
   });
 }
 
-async function refreshOnlineRankedResultSummary(context: OnlineMatchContext): Promise<void> {
+async function refreshOnlineRankedResultSummary(context: OnlineMatchContext, reconcileResult = true): Promise<void> {
   if (context.queueType !== 'ranked') {
     return;
   }
   try {
+    if (reconcileResult) {
+      const payload = await requestOnlineJson<RankedResultSubmitResponse>(
+        'GET', `/ranked/results/${context.sessionId}`, context.localAccountId, undefined,
+        { matchSessionToken: context.sessionToken, signal: AbortSignal.timeout(10_000) },
+      );
+      if (await applyOnlineRankedResultResponse(context, payload)) {
+        await persistOnlineMatchReplay(context);
+      }
+    }
     await refreshRankedSnapshot();
     context.rankedResultDetail = [
       context.rankedResultDetail.trim(),
@@ -2380,7 +2331,7 @@ async function applyOnlineRankedResultResponse(
   context.rankedResultDetail = localDelta
     ? `${verificationDetail}\nLocal result: ${localDelta.result} | Rating ${localDelta.preRating} -> ${localDelta.postRating} (${formatSigned(localDelta.ratingDelta)})`
     : `${verificationDetail}\nRanked result accepted.`;
-  await refreshOnlineRankedResultSummary(context);
+  await refreshOnlineRankedResultSummary(context, false);
   return true;
 }
 
@@ -2638,149 +2589,48 @@ async function submitOnlineRankedResult(context: OnlineMatchContext): Promise<vo
   }
 }
 
-function toRankedViewState(ticket: QueueTicketView | null, session: MatchSessionView | null): OnlineRankedViewState {
-  if (!ticket) {
-    return {
-      headline: 'Not queued',
-      detail: 'Press "Join Ranked Queue" to start matchmaking.',
-      hint: getRankedQueueHint(ticket, session),
-    };
-  }
-  if (ticket.status === 'queued') {
-    const waitMs = getQueueWaitMs(ticket.queuedAt);
-    const waitLabel = waitMs !== null ? `${Math.floor(waitMs / 1000)}s` : 'unknown';
-    return {
-      headline: 'Searching for match',
-      detail: `Ticket: ${ticket.ticketId}\nQueue: ${ticket.queueType}\nWait: ${waitLabel}`,
-      hint: getRankedQueueHint(ticket, session),
-    };
-  }
-  if (ticket.status === 'matched') {
-    const participantLine = session?.participants?.length
-      ? `Participants: ${session.participants.map((item) => item.accountId).join(', ')}`
-      : 'Participants: pending';
-    const diagnostics = ticket.matchStart?.diagnostics;
-    const diagnosticsLine = diagnostics
-      ? `Band: ${diagnostics.skillTrack ?? 'n/a'} | Gap: ${diagnostics.matchedGap ?? 'n/a'} / ${diagnostics.expectedGap ?? 'n/a'}`
-      : 'Band: pending';
-    return {
-      headline: 'Match found (session created)',
-      detail: [
-        `Ticket: ${ticket.ticketId}`,
-        participantLine,
-        diagnosticsLine,
-        getOnlineRuntimeStatusDetail(
-          ticket.matchStart?.sessionId ?? session?.sessionId ?? null,
-          session?.status ?? null,
-        ),
-      ].join('\n'),
-      tone: onlineRuntimeEnabled ? 'success' : 'warning',
-      hint: getRankedQueueHint(ticket, session),
-    };
-  }
-  return {
-    headline: 'Queue closed',
-    detail: `Ticket: ${ticket.ticketId}\nReason: ${ticket.closedReason ?? 'closed'}`,
-    tone: 'warning',
-    hint: getRankedQueueHint(ticket, session),
-  };
+async function toRankedViewState(ticket: QueueTicketView | null, session: MatchSessionView | null): Promise<OnlineRankedViewState> {
+  const views = await import('./net/onlineMenuState');
+  return views.toRankedViewState(ticket, session, onlineRuntimeEnabled);
 }
 
-function toRoomViewState(room: RoomView | null, fallbackRoomCode?: string): OnlineRoomViewState {
-  if (!room) {
-    return {
-      headline: 'No room loaded',
-      detail: 'Create a room or enter a code to join one.',
-      roomCode: fallbackRoomCode ?? null,
-      hint: getRoomStateHint(room),
-    };
-  }
-  const players = room.participants.filter((item) => item.role === 'player').length;
-  const spectators = room.participants.filter((item) => item.role === 'spectator').length;
-  const sessionDetail = room.activeSession
-    ? getOnlineRuntimeStatusDetail(room.activeSession.sessionId, room.activeSession.phase)
-    : 'Session: none';
-  return {
-    headline: `Room ${room.roomCode} (${room.status})`,
-    detail: `Host: ${room.hostAccountId}\nPlayers: ${players}\nSpectators: ${spectators}\n${sessionDetail}`,
-    roomCode: room.roomCode,
-    tone: room.activeSession ? 'success' : room.status === 'closed' ? 'warning' : 'neutral',
-    hint: getRoomStateHint(room),
-  };
+async function toRoomViewState(room: RoomView | null, fallbackRoomCode?: string): Promise<OnlineRoomViewState> {
+  const views = await import('./net/onlineMenuState');
+  return views.toRoomViewState(room, onlineRuntimeEnabled, fallbackRoomCode);
 }
 
-async function joinRankedQueue(): Promise<OnlineRankedViewState> {
-  const accountId = getOnlineAccountIdOrThrow();
-  const previousTicket = playerRankedTicket;
-  playerRankedTicket = await requestOnlineJson<QueueTicketView>(
-    'POST',
-    '/matchmaking/queue/join',
-    accountId,
-    {
-      queueType: 'ranked',
-      regionPreferences: ['us-east', 'us-west', 'eu-west'],
+const rankedQueueClient = createLazyRankedQueueClient(async () => {
+  const { createHttpRankedQueueClient } = await import('./net/rankedQueueClient');
+  return createHttpRankedQueueClient<QueueTicketView, MatchSessionView>({
+    requestJson: requestOnlineJson,
+    getJoinIdentity: () => ({
       buildVersion: diagnosticsBuildId,
       rulesetVersion: getOnlineRulesetVersion(),
       balanceProfileId: activeBalanceProfile.id,
-      platform: 'web',
       characterId: selectedLoadout.P1,
+    }),
+    onState: (ticket, session) => {
+      playerRankedTicket = ticket;
+      playerRankedSession = session;
     },
-  );
-  if (playerRankedTicket.matchStart?.sessionId) {
-    playerRankedSession = await requestOnlineJson<MatchSessionView>(
-      'GET',
-      `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
-      accountId,
-    );
-    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue', {
-      previousTicket,
-      serverCreatedTicket: playerRankedTicket.joinDisposition === 'created',
-    });
-  } else {
-    playerRankedSession = null;
-  }
+    onMatched: (ticket, session, bootstrap) => {
+      void beginRankedSessionBootstrap(ticket, session, 'ranked_queue', bootstrap);
+    },
+  });
+});
+
+async function joinRankedQueue(): Promise<OnlineRankedViewState> {
+  await rankedQueueClient.join(getOnlineAccountIdOrThrow());
   return toRankedViewState(playerRankedTicket, playerRankedSession);
 }
 
 async function refreshRankedQueue(): Promise<OnlineRankedViewState> {
-  const accountId = getOnlineAccountIdOrThrow();
-  if (!playerRankedTicket) {
-    return toRankedViewState(null, null);
-  }
-  const previousTicket = playerRankedTicket;
-  playerRankedTicket = await requestOnlineJson<QueueTicketView>(
-    'GET',
-    `/matchmaking/queue/tickets/${playerRankedTicket.ticketId}`,
-    accountId,
-  );
-  if (playerRankedTicket.matchStart?.sessionId) {
-    playerRankedSession = await requestOnlineJson<MatchSessionView>(
-      'GET',
-      `/matchmaking/sessions/${playerRankedTicket.matchStart.sessionId}`,
-      accountId,
-    );
-    void beginRankedSessionBootstrap(playerRankedTicket, playerRankedSession, 'ranked_queue', {
-      previousTicket,
-      serverCreatedTicket: false,
-    });
-  } else {
-    playerRankedSession = null;
-  }
+  await rankedQueueClient.refresh(getOnlineAccountIdOrThrow());
   return toRankedViewState(playerRankedTicket, playerRankedSession);
 }
 
 async function leaveRankedQueue(): Promise<OnlineRankedViewState> {
-  const accountId = getOnlineAccountIdOrThrow();
-  if (!playerRankedTicket) {
-    return toRankedViewState(null, null);
-  }
-  playerRankedTicket = await requestOnlineJson<QueueTicketView>(
-    'POST',
-    '/matchmaking/queue/leave',
-    accountId,
-    { ticketId: playerRankedTicket.ticketId },
-  );
-  playerRankedSession = null;
+  await rankedQueueClient.cancel();
   return toRankedViewState(playerRankedTicket, playerRankedSession);
 }
 
@@ -3245,7 +3095,7 @@ async function refreshRankedSnapshot(): Promise<RankedSnapshotViewState> {
 function scheduleRankedQueueAutoRefresh(elapsedSeconds: number): void {
   if (
     !playerRankedTicket
-    || playerRankedTicket.status !== 'queued'
+    || playerRankedTicket.status === 'closed'
     || appPhase !== 'home'
     || onlineMatchContext !== null
     || onlineBootstrapState !== null
@@ -3573,9 +3423,9 @@ function coerceStoredSettings(raw: unknown): LoadedSettings | null {
   };
 }
 
-function loadSettings(): LoadedSettings {
+function createDefaultSettings(): LoadedSettings {
   const fallbackMode = resolveStoredMode('endless');
-  const fallback: LoadedSettings = {
+  return {
     mode: fallbackMode,
     menuThemeId: DEFAULT_MENU_THEME_ID,
     stageAtmosphereId: ONLINE_ALPHA_STAGE_ATMOSPHERE_ID,
@@ -3587,7 +3437,10 @@ function loadSettings(): LoadedSettings {
     arcade: { ...DEFAULT_ARCADE_MENU_SETTINGS },
     audio: DEFAULT_AUDIO_SETTINGS,
   };
+}
 
+function loadSettings(): LoadedSettings {
+  const fallback = createDefaultSettings();
   const persisted = platform.persistence.readJson<StoredSettings>(SETTINGS_STORAGE_KEY);
   if (!persisted.ok) {
     return fallback;
@@ -3604,9 +3457,11 @@ function loadArcadeHistory(): ArcadeRunHistory {
 }
 
 function persistArcadeHistory(): void {
-  const writeResult = platform.persistence.writeJson(ARCADE_HISTORY_STORAGE_KEY, arcadeHistory);
-  if (!writeResult.ok && runtimeConfig.features.debugToolsEnabled) {
-    console.warn('[persistence] arcade history write skipped', writeResult);
+  if (scopedPersistenceUserId === `local:${platform.kind}`) {
+    const writeResult = platform.persistence.writeJson(ARCADE_HISTORY_STORAGE_KEY, arcadeHistory);
+    if (!writeResult.ok && runtimeConfig.features.debugToolsEnabled) {
+      console.warn('[persistence] arcade history write skipped', writeResult);
+    }
   }
   queueScopedArcadeHistoryWrite(arcadeHistory);
 }
@@ -3712,9 +3567,11 @@ function persistSettings(): void {
     arcade: selectedArcadeSettings,
     audio: audioSettings,
   };
-  const result = platform.persistence.writeJson(SETTINGS_STORAGE_KEY, payload);
-  if (!result.ok && runtimeConfig.features.debugToolsEnabled) {
-    console.warn('[persistence] settings write skipped', result);
+  if (scopedPersistenceUserId === `local:${platform.kind}`) {
+    const result = platform.persistence.writeJson(SETTINGS_STORAGE_KEY, payload);
+    if (!result.ok && runtimeConfig.features.debugToolsEnabled) {
+      console.warn('[persistence] settings write skipped', result);
+    }
   }
   queueScopedSettingsWrite(payload);
 }
@@ -3734,7 +3591,7 @@ async function ensureScopedRevision(
   }
   const current = await platform.persistence.read<unknown>(key, {
     userId,
-    legacySources: [{ key: legacyKey }],
+    legacySources: userId === `local:${platform.kind}` ? [{ key: legacyKey }] : [],
   });
   const revision = current.ok ? current.metadata.revision : null;
   revisions.set(userId, revision);
@@ -3765,7 +3622,7 @@ async function writeScopedValue(
       }
       return;
     }
-    const latest = await platform.persistence.read<unknown>(key, { userId });
+    const latest = await platform.persistence.read<unknown>(key, { userId, legacySources: [] });
     expectedRevision = latest.ok ? latest.metadata.revision : null;
     revisions.set(userId, expectedRevision);
   }
@@ -3807,29 +3664,36 @@ function queueScopedArcadeHistoryWrite(history: ArcadeRunHistory): void {
 
 async function hydrateScopedPersistence(accountId: string | null): Promise<void> {
   const userId = resolveScopedPersistenceUserId(accountId);
+  const generation = ++scopedPersistenceGeneration;
+  const identityChanged = scopedPersistenceUserId !== userId;
   scopedPersistenceUserId = userId;
+  if (identityChanged) {
+    arcadeHistory = createEmptyArcadeRunHistory();
+    profileSettingsCache = {};
+    applyLoadedProfileSettings(createDefaultSettings());
+    applyArcadeHistoryView();
+  }
   platform.lifecycleHooks.userChanged(accountId);
+  await Promise.all([scopedSettingsWriteQueue, scopedArcadeHistoryWriteQueue]);
+  if (generation !== scopedPersistenceGeneration) return;
 
   const [settingsResult, historyResult] = await Promise.all([
     platform.persistence.read<StoredSettings>(PLATFORM_PERSISTENCE_KEYS.settings, {
       userId,
-      legacySources: [{ key: SETTINGS_STORAGE_KEY }],
+      legacySources: userId === `local:${platform.kind}` ? [{ key: SETTINGS_STORAGE_KEY }] : [],
     }),
     platform.persistence.read<unknown>(PLATFORM_PERSISTENCE_KEYS.arcadeHistory, {
       userId,
-      legacySources: [{ key: ARCADE_HISTORY_STORAGE_KEY }],
+      legacySources: userId === `local:${platform.kind}` ? [{ key: ARCADE_HISTORY_STORAGE_KEY }] : [],
     }),
   ]);
 
+  if (generation !== scopedPersistenceGeneration) return;
   scopedSettingsRevisions.set(userId, settingsResult.ok ? settingsResult.metadata.revision : null);
   scopedArcadeHistoryRevisions.set(userId, historyResult.ok ? historyResult.metadata.revision : null);
 
-  if (settingsResult.ok) {
-    const settings = coerceStoredSettings(settingsResult.value);
-    if (settings) {
-      applyLoadedProfileSettings(settings);
-    }
-  }
+  const settings = settingsResult.ok ? coerceStoredSettings(settingsResult.value) : null;
+  if (settings || identityChanged) applyLoadedProfileSettings(settings ?? createDefaultSettings());
   if (historyResult.ok) {
     const merged = mergeArcadeRunHistories(
       arcadeHistory,
@@ -3848,6 +3712,8 @@ async function syncArcadeHistoryWithProfile(
   accountId: string,
   sourceSettings?: Record<string, unknown> | null,
 ): Promise<void> {
+  const generation = scopedPersistenceGeneration;
+  if (sessionAccountId !== accountId) return;
   const remoteSettings = sourceSettings ?? profileSettingsCache ?? {};
   const remoteHistory = sanitiseArcadeRunHistory((remoteSettings as { arcadeHistory?: unknown }).arcadeHistory);
   const mergedHistory = mergeArcadeRunHistories(arcadeHistory, remoteHistory, MAX_ARCADE_HISTORY_ENTRIES);
@@ -3865,6 +3731,7 @@ async function syncArcadeHistoryWithProfile(
   const savedProfile = await platform.profile.saveProfile(accountId, {
     settings: buildHistorySyncProfileSettingsPayload(remoteSettings, mergedHistory),
   });
+  if (sessionAccountId !== accountId || generation !== scopedPersistenceGeneration) return;
   const savedSettings = asRecord(savedProfile.settings) ?? {};
   profileSettingsCache = savedSettings;
   const savedHistory = sanitiseArcadeRunHistory(savedSettings.arcadeHistory);
@@ -3955,7 +3822,9 @@ async function bootstrapPlatformProfile(): Promise<void> {
   }
 
   try {
+    const profileGeneration = scopedPersistenceGeneration;
     const profile = await platform.profile.getProfile(session.accountId);
+    if (sessionAccountId !== session.accountId || profileGeneration !== scopedPersistenceGeneration) return;
     const remoteSettings = asRecord(profile.settings) ?? {};
     profileSettingsCache = remoteSettings;
     if (session.isAuthenticated && profile.displayName) {
@@ -3980,6 +3849,8 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
   }
 
   let session: PlatformAuthSession | null = null;
+  // Leave using the old identity before sign-in/out replaces its credentials.
+  await rankedQueueClient.cancel();
   if (action === 'signout') {
     session = await auth.signOut();
   } else if (action === 'signin') {
@@ -4032,7 +3903,9 @@ async function openWebAuthFlow(action: WebAuthMenuAction, request?: WebAuthMenuR
   }
   if (session.accountId) {
     try {
+      const profileGeneration = scopedPersistenceGeneration;
       const profile = await platform.profile.getProfile(session.accountId);
+      if (sessionAccountId !== session.accountId || profileGeneration !== scopedPersistenceGeneration) return;
       const remoteSettings = asRecord(profile.settings) ?? {};
       profileSettingsCache = remoteSettings;
       if (session.isAuthenticated && profile.displayName) {
@@ -4651,42 +4524,10 @@ function clearOnlineBootstrapState(): void {
 
 function leaveActiveOnlineSessionBeforeTeardown(): void {
   const context = onlineMatchContext;
-  const interruptScreenCanLeave = appPhase === 'match_over'
-    && context !== null
-    && context.finalOutcome === null
-    && context.sessionCompletionStatus !== 'completed';
-  if (
-    appPhase !== 'online_bootstrap'
-    && appPhase !== 'playing'
-    && appPhase !== 'round_transition'
-    && !interruptScreenCanLeave
-  ) {
-    return;
-  }
-
-  const queueTicketId = context?.queueTicketId ?? onlineBootstrapState?.queueTicketId ?? null;
-  const accountId = context?.localAccountId ?? onlineBootstrapState?.localAccountId ?? null;
-  if (!queueTicketId || !accountId) {
-    return;
-  }
-  if (playerRankedTicket?.ticketId === queueTicketId) {
-    playerRankedSession = null;
-  }
-  void requestOnlineJson<QueueTicketView>(
-    'POST',
-    '/matchmaking/queue/leave',
-    accountId,
-    { ticketId: queueTicketId },
-    { keepalive: true },
-  ).then((ticket) => {
-    if (playerRankedTicket?.ticketId === queueTicketId) {
-      playerRankedTicket = ticket;
-      playerRankedSession = null;
-    }
-  }).catch((error) => {
-    if (runtimeConfig.features.debugToolsEnabled) {
-      console.warn('[online] intentional leave notice failed', error);
-    }
+  // A completed match may still be settling; leaving it would report a forfeit.
+  const completed = context && (context.finalOutcome !== null || context.sessionCompletionStatus === 'completed');
+  void rankedQueueClient.cancel(!completed).catch((error: unknown) => {
+    console.warn('[online] intentional leave notice failed', error);
   });
 }
 
@@ -6931,9 +6772,7 @@ function tick(nowMs: number): void {
               simulationFrame,
               onlineMatchContext.localPlayerId,
             )
-            : cloneOnlinePlayerInput(
-              onlineMatchContext.localPlayerId === 'P1' ? frameInputRaw.p1 : frameInputRaw.p2,
-            );
+            : getOnlineLocalInput(frameInputRaw);
           onlineMatchContext.inputPump.enqueueLocalInput(simulationFrame, localInput);
         } catch (error) {
           interruptOnlineMatch(

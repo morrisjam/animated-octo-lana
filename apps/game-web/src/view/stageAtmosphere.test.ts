@@ -71,11 +71,11 @@ describe('stage atmosphere registry', () => {
     expect(previousPreset.tokens.backgroundModelId).toBeNull();
     expect(alphaPreset.tokens.backgroundModelId).toBeNull();
     expect(alphaPreset.tokens.arenaMouthOpacity).toBeGreaterThan(0);
-    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(30);
-    expect(alphaPreset.tokens.arenaRimOpacity).toBe(0);
+    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(18);
+    expect(alphaPreset.tokens.arenaRimOpacity).toBeGreaterThan(0);
     expect(alphaPreset.tokens.backgroundEffectId).toBe('wormhole_luminous_v2');
     expect(alphaPreset.tokens.backgroundEffectCoreOpacity).toBe(0.46);
-    expect(alphaPreset.tokens.backgroundEffectFarFade).toBe(0.18);
+    expect(alphaPreset.tokens.backgroundEffectFarFade).toBe(0.55);
     const funnelCandidate = resolveStageAtmosphere('wormhole_funnel_v6_candidate');
     expect(funnelCandidate.tokens.backgroundModelId).toBe('wormhole_arena_funnel_v3');
     expect(funnelCandidate.tokens.backgroundEffectCoreOpacity).toBe(0);
@@ -88,7 +88,7 @@ describe('stage atmosphere registry', () => {
     expect(riftCandidate.tokens.ringOpacity).toBe(0);
     expect(riftCandidate.tokens.cameraPitchDegrees).toBe(24);
     expect(riftCandidate.tokens.cameraPitchDegrees).toBeLessThan(funnelCandidate.tokens.cameraPitchDegrees);
-    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(30);
+    expect(alphaPreset.tokens.cameraPitchDegrees).toBe(18);
   });
 
   test('offers a luminous procedural vortex without the mechanical background model', () => {
@@ -96,8 +96,9 @@ describe('stage atmosphere registry', () => {
     expect(luminous.tokens.backgroundModelId).toBeNull();
     expect(luminous.tokens.backgroundEffectId).toBe('wormhole_luminous_v2');
     expect(luminous.tokens.backgroundEffectCoreOpacity).toBeGreaterThan(0.4);
-    expect(luminous.tokens.arenaRimOpacity).toBe(0);
-    expect(luminous.tokens.arenaDepthTickOpacity).toBe(0);
+    expect(luminous.tokens.arenaRimOpacity).toBeGreaterThan(0);
+    expect(luminous.tokens.arenaDepthTickOpacity).toBeGreaterThan(0);
+    expect(luminous.tokens.backgroundEffectOpacity).toBeLessThan(0.7);
     expect(luminous.tokens.backgroundEffectSpeed).toBeLessThan(
       resolveStageAtmosphere('wormhole_depths_v1').tokens.backgroundEffectSpeed,
     );

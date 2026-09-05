@@ -107,7 +107,8 @@ function neutralInput(): PlayerFrameInput {
 }
 
 function hasAttackCommitment(player: PlayerState): boolean {
-  return player.launchStartup > 0
+  return player.parryStartup > 0
+    || player.launchStartup > 0
     || player.launchActive > 0
     || player.dunkStartup > 0
     || player.dunkActive > 0
@@ -231,10 +232,8 @@ export function tickAiControllerWithRole(
       selectedReason = useCenterDirection
         ? 'scripted_escape_super_boost_inward'
         : 'scripted_escape_super_boost';
-    } else if (distance < 32) {
-      input.boost = true;
-      selectedReason = useCenterDirection ? 'scripted_escape_boost_inward' : 'scripted_escape_boost';
     } else {
+      // Ordinary boost locks onto the pursuer, even when movement requests retreat.
       selectedReason = useCenterDirection ? 'scripted_escape_steer_inward' : 'scripted_escape_retreat';
     }
   } else if (roleId === 'evasive') {

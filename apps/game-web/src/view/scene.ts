@@ -110,6 +110,8 @@ function createGravityWellMaterial(): THREE.ShaderMaterial {
       uColorA: { value: new THREE.Color('#27388e') },
       uColorB: { value: new THREE.Color('#5b1fcf') },
       uHighlight: { value: new THREE.Color('#61d9ff') },
+      uSecondary: { value: new THREE.Color('#465580') },
+      uCoreStrength: { value: 0.46 },
       uStyle: { value: 0 },
     },
     vertexShader: `
@@ -136,6 +138,8 @@ function createGravityWellMaterial(): THREE.ShaderMaterial {
       uniform vec3 uColorA;
       uniform vec3 uColorB;
       uniform vec3 uHighlight;
+      uniform vec3 uSecondary;
+      uniform float uCoreStrength;
       uniform float uStyle;
       varying vec2 vUv;
       varying vec3 vPosition;
@@ -197,9 +201,9 @@ function createGravityWellMaterial(): THREE.ShaderMaterial {
             -flowAngle * 10.0 - depth * 67.0 + sin(flowAngle * 2.0) * 1.8,
             18.0
           );
-          float throatGlow = pow(smoothstep(0.42, 1.0, depth), 1.35);
+          float throatGlow = pow(smoothstep(0.42, 1.0, depth), 1.35) * uCoreStrength;
           float mouthFade = smoothstep(0.015, 0.115, depth);
-          float farRestraint = 1.0 - smoothstep(0.9, 1.0, depth) * uFarFade * 0.12;
+          float farRestraint = 1.0 - smoothstep(0.82, 1.0, depth) * uFarFade;
 
           vec3 deepColor = mix(
             uColorA,
@@ -207,24 +211,25 @@ function createGravityWellMaterial(): THREE.ShaderMaterial {
             0.18 + broadFlow * 0.26 + cloudNoise * 0.14 + depth * 0.12
           ) * (0.58 + cloudNoise * 0.24);
           vec3 flowingColor = mix(
-            uColorB,
+            mix(uColorB, uSecondary, cloudNoise * 0.35),
             uHighlight,
             clamp(foldedFlow * 0.34 + brightStreak * 0.52 + throatGlow * 0.28, 0.0, 1.0)
           );
           vec3 color = deepColor + flowingColor * (
-            0.11
-            + broadFlow * 0.32
-            + foldedFlow * 0.16
+            0.05
+            + broadFlow * 0.14
+            + foldedFlow * 0.1
             + brightStreak * 0.3
           );
           color = mix(
             color,
             vec3(0.94, 0.97, 1.0),
-            throatGlow * (0.12 + brightStreak * 0.34)
+            throatGlow * (0.06 + brightStreak * 0.18)
           );
           float alpha = uOpacity
             * mouthFade
             * farRestraint
+            * (1.0 - smoothstep(0.96, 1.0, depth))
             * (
               0.4
               + cloudNoise * 0.1
@@ -503,8 +508,8 @@ function addStars(scene: THREE.Scene): THREE.Points {
     new THREE.PointsMaterial({ color: '#99a8ff', size: 0.46, transparent: true, opacity: 0.9 }),
   );
   const points: number[] = [];
-  for (let i = 0; i < 1500; i += 1) {
-    points.push((Math.random() - 0.5) * 300, (Math.random() - 0.5) * 300, -10 - Math.random() * 120);
+  for (let i = 0; i < 800; i += 1) {
+    points.push((Math.random() - 0.5) * 420, (Math.random() - 0.5) * 420, -50 - Math.random() * 160);
   }
   stars.geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
   scene.add(stars);
@@ -931,17 +936,22 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
     arenaLipShelfMaterial.uniforms.uInnerColor.value.set(tokens.backgroundEffectSecondaryTint);
     arenaLipShelfMaterial.uniforms.uOpacity.value = clampOpacity(tokens.arenaRimOpacity * 0.9);
   }
-  context.arenaLipShelf.visible = tokens.arenaRimOpacity > 0;
+  const authoredNebula = tokens.backgroundModelId === 'wormhole_nebula_v5';
+  context.arenaLipShelf.visible = tokens.arenaRimOpacity > 0 && !authoredNebula;
 
   const arenaLipDepthMaterial = context.arenaLipDepth.material as THREE.LineBasicMaterial;
   arenaLipDepthMaterial.color.set(tokens.backgroundEffectTint);
   arenaLipDepthMaterial.opacity = clampOpacity(tokens.arenaRimOpacity * 0.72);
-  context.arenaLipDepth.visible = arenaLipDepthMaterial.opacity > 0;
+  context.arenaLipDepth.visible = arenaLipDepthMaterial.opacity > 0 && !authoredNebula;
 
   const arenaDepthTickMaterial = context.arenaDepthTicks.material as THREE.LineBasicMaterial;
   arenaDepthTickMaterial.color.set(tokens.ringColor);
   arenaDepthTickMaterial.opacity = clampOpacity(tokens.arenaDepthTickOpacity);
   context.arenaDepthTicks.visible = arenaDepthTickMaterial.opacity > 0;
+  // The first 64 pairs are boundary ticks. Interior calibration contours make
+  // the luminous stage read as a wireframe rather than an open pit.
+  context.arenaDepthTicks.geometry.setDrawRange(0,
+    tokens.backgroundEffectId === LUMINOUS_WORMHOLE_EFFECT_ID ? 128 : Infinity);
 
   const gravityWellMaterial = context.gravityWell.material;
   if (gravityWellMaterial instanceof THREE.ShaderMaterial) {
@@ -949,6 +959,8 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
     gravityWellMaterial.uniforms.uColorA.value.set(tokens.gravityWellColor);
     gravityWellMaterial.uniforms.uColorB.value.set(tokens.gravityWellEmissive);
     gravityWellMaterial.uniforms.uHighlight.value.set(tokens.backgroundEffectTint);
+    gravityWellMaterial.uniforms.uSecondary.value.set(tokens.backgroundEffectSecondaryTint);
+    gravityWellMaterial.uniforms.uCoreStrength.value = clampOpacity(tokens.backgroundEffectCoreOpacity);
     gravityWellMaterial.uniforms.uOpacity.value = clampOpacity(tokens.backgroundEffectOpacity)
       * (luminousWormhole ? 0.72 : 0.5);
     gravityWellMaterial.uniforms.uFarFade.value = THREE.MathUtils.clamp(
@@ -957,6 +969,10 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
       1,
     );
     gravityWellMaterial.uniforms.uStyle.value = luminousWormhole ? 1 : 0;
+    // Scale depth around the mouth, never the gameplay boundary radius.
+    const depthScale = luminousWormhole ? THREE.MathUtils.clamp(tokens.backgroundEffectScale, 0.25, 3) : 1;
+    context.gravityWell.scale.y = depthScale;
+    context.gravityWell.position.z = 2 - 110 * depthScale;
   }
 
   const ringMaterial = context.ring.material as THREE.MeshBasicMaterial;
@@ -968,7 +984,7 @@ export function applyStageAtmospherePreset(context: SceneContext, atmosphereId: 
   const starsMaterial = context.stars.material as THREE.PointsMaterial;
   starsMaterial.color.set(tokens.starsColor);
   starsMaterial.size = tokens.starsSize * 1.5;
-  starsMaterial.opacity = 0.92;
+  starsMaterial.opacity = 0.48;
   context.stars.userData.baseSize = starsMaterial.size;
   context.stars.userData.baseOpacity = starsMaterial.opacity;
 

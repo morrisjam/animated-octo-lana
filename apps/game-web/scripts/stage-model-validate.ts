@@ -14,6 +14,11 @@ interface AuthoredStageModelDefinition {
 
 const AUTHORED_STAGE_MODELS: AuthoredStageModelDefinition[] = [
   {
+    assetId: 'wormhole_nebula_v5',
+    source: '/assets/stages/wormhole/wormhole-nebula-v5.glb',
+    metricsFile: 'wormhole_nebula_v5.metrics.json',
+  },
+  {
     assetId: 'wormhole_arena_lip_v1',
     source: '/assets/stages/wormhole/wormhole-arena-lip-v1.glb',
     metricsFile: 'wormhole_arena_lip_v1.metrics.json',

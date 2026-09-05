@@ -86,9 +86,15 @@ export function resolveSpriteClip(
   snapshot: PlayerRenderSnapshot,
 ): SpriteClipId {
   const state = `${snapshot.presentationAction}.${snapshot.presentationPhase}` as CharacterPresentationStateKey;
+  // Old snapshots used recover for end-lag too. Never show downed art for an
+  // attacker's recovery, even when loading an older presentation package.
+  if (state === 'attack_recovery.recovery' || (state === 'recover.recovery' && snapshot.recovering <= 0)) {
+    return animationSet.stateClips['attack_recovery.recovery']
+      ?? animationSet.stateClips['idle.none']
+      ?? 'idle';
+  }
   // Early dunk recovery reads as "just got hit": prefer an optional crumple
-  // clip before handing off to the shared recover clip. Guarding on
-  // snapshot.recovering keeps ordinary attack end-lag on the recover clip.
+  // clip before handing off to the get-up clip.
   if (
     state === 'recover.recovery'
     && snapshot.recovering > 0
@@ -100,6 +106,28 @@ export function resolveSpriteClip(
   return animationSet.stateClips[state]
     ?? animationSet.stateClips['idle.none']
     ?? 'idle';
+}
+
+export function resolveSpriteElapsedSeconds(
+  animationSet: SpriteAnimationSet,
+  snapshot: PlayerRenderSnapshot,
+  clipId: SpriteClipId,
+  fallbackElapsedSeconds: number,
+): number {
+  const authoritativeElapsed = snapshot.presentationElapsedSeconds;
+  let elapsed = authoritativeElapsed !== undefined && Number.isFinite(authoritativeElapsed)
+    ? Math.max(0, authoritativeElapsed)
+    : Math.max(0, fallbackElapsedSeconds);
+  if (snapshot.presentationAction === 'recover' && snapshot.recovering > 0) {
+    const progress = Math.max(0, Math.min(1, snapshot.recoveryProgress));
+    const duration = progress < 1 ? snapshot.recovering / (1 - progress) : 0;
+    // Recovery progress also supports older snapshots without phase metadata.
+    if (authoritativeElapsed === undefined && duration > 0) elapsed = duration * progress;
+    if (animationSet.clips.dunked && clipId !== 'dunked') {
+      elapsed = Math.max(0, elapsed - duration * 0.45);
+    }
+  }
+  return elapsed;
 }
 
 export function resolveSpriteSheet(
@@ -122,7 +150,7 @@ export function resolveSpriteFrameIndex(
   elapsedSeconds: number,
   phase = 0,
 ): number {
-  const rawIndex = Math.max(0, Math.floor((Math.max(0, elapsedSeconds) + phase) * clip.fps));
+  const rawIndex = Math.max(0, Math.floor((Math.max(0, elapsedSeconds) + (clip.loop ? phase : 0)) * clip.fps));
   return clip.loop
     ? rawIndex % clip.frames.length
     : Math.min(rawIndex, clip.frames.length - 1);
@@ -138,7 +166,15 @@ export function resolveSpriteFrame(
   if (!clip) {
     return 0;
   }
-  return clip.frames[resolveSpriteFrameIndex(clip, elapsedSeconds, phase)];
+  return clip.frames[resolveSpriteFrameIndex(clip, elapsedSeconds, decorativePhase(animationSet, clipId, phase))];
+}
+
+// Looping guards and specials are still combat tells, not decorative cycles.
+function decorativePhase(animationSet: SpriteAnimationSet, clipId: SpriteClipId, phase: number): number {
+  const states = Object.entries(animationSet.stateClips).filter(([, id]) => id === clipId);
+  return states.length > 0 && states.every(([state]) => state === 'idle.none' || state === 'boost.sustain')
+    ? phase
+    : 0;
 }
 
 export function resolveSpriteFrameSelection(
@@ -155,7 +191,7 @@ export function resolveSpriteFrameSelection(
   if (!sheet) {
     return null;
   }
-  const frameIndex = resolveSpriteFrameIndex(clip, elapsedSeconds, phase);
+  const frameIndex = resolveSpriteFrameIndex(clip, elapsedSeconds, decorativePhase(animationSet, clipId, phase));
   return {
     clipId,
     clip,

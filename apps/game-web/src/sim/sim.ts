@@ -18,7 +18,7 @@ import {
   type CharacterBalanceConfig,
   type CharacterBalanceOverrides,
 } from './characterBalance';
-import { framesToSeconds, SIMULATION_FRAME_RATE_HZ } from './moveData';
+import { decrementSimulationTimer, framesToSeconds, SIMULATION_FRAME_RATE_HZ } from './moveData';
 import { nextRngState, rngStateToUnitFloat, sanitiseSeed } from './rng';
 import { createDefaultTuning } from './tuning';
 import type {
@@ -195,8 +195,10 @@ function resetChain(player: PlayerState): void {
   player.chainTimer = 0;
 }
 
-function setStunned(player: PlayerState, duration: number): void {
+function setStunned(state: GameState, player: PlayerState, duration: number): void {
+  finishSuperBoost(state, player);
   player.stunned = duration;
+  player.parryStartup = 0;
   clearLaunchAttempt(player);
   clearDunkAttempt(player);
   clearSpecialAttempt(player);
@@ -227,6 +229,7 @@ function createPlayer(
     stunned: 0,
     helpless: 0,
     parry: 0,
+    parryStartup: 0,
     endLag: 0,
     chain: 0,
     chainTimer: 0,
@@ -349,6 +352,7 @@ function clonePlayerState(player: PlayerState): PlayerState {
     stunned: player.stunned,
     helpless: player.helpless,
     parry: player.parry,
+    parryStartup: player.parryStartup ?? 0,
     endLag: player.endLag,
     chain: player.chain,
     chainTimer: player.chainTimer,
@@ -465,8 +469,8 @@ function assertSnapshotRootShape(snapshot: unknown): asserts snapshot is GameSta
   }
 }
 
-export const STATE_SNAPSHOT_VERSION = 5;
-const LEGACY_STATE_SNAPSHOT_VERSIONS = [1, 2, 3, 4] as const;
+export const STATE_SNAPSHOT_VERSION = 6;
+const LEGACY_STATE_SNAPSHOT_VERSIONS = [1, 2, 3, 4, 5] as const;
 
 interface GameStateSnapshotEnvelope {
   version: number;
@@ -532,7 +536,7 @@ export function deserialiseState(serialised: string): GameState {
       !Number.isFinite(version)
       || (
         version !== STATE_SNAPSHOT_VERSION
-        && !LEGACY_STATE_SNAPSHOT_VERSIONS.includes(version as 1 | 2 | 3 | 4)
+        && !LEGACY_STATE_SNAPSHOT_VERSIONS.includes(version as 1 | 2 | 3 | 4 | 5)
       )
     ) {
       throw new Error(
@@ -560,12 +564,13 @@ function resolveLaunchConnection(
   const deltaY = target.pos.y - attacker.pos.y;
 
   if (target.parry > 0) {
-    setStunned(attacker, framesToSeconds(targetMoves.parry.counterStunFrames));
+    setStunned(state, attacker, framesToSeconds(targetMoves.parry.counterStunFrames));
     target.parry = 0;
     applyDefensiveReset(state, target, attacker);
     return false;
   }
 
+  finishSuperBoost(state, target);
   const dir = normalise(
     deltaX + targetInput.moveX * tuning.launchInputInfluence,
     deltaY + targetInput.moveY * tuning.launchInputInfluence,
@@ -582,6 +587,7 @@ function resolveLaunchConnection(
   target.vel.y = dir.y * scaledLaunchPower;
   target.helpless = tuning.launchHelplessSeconds * targetStats.launchDurationTakenMultiplier;
   target.stunned = 0;
+  target.parryStartup = 0;
   target.lastLaunchedBy = attacker.id;
   if (tuning.postControlCounterLaunchClashGraceSeconds > 0) {
     clearPostControlCounterState(target);
@@ -652,6 +658,7 @@ function startLaunchAttempt(state: GameState, player: PlayerState): boolean {
   const launchFrameData = getCharacterMoves(state, player).launch;
   if (
     player.cool.launch > 0
+    || player.parryStartup > 0
     || player.endLag > 0
     || player.launchStartup > 0
     || player.launchActive > 0
@@ -677,7 +684,8 @@ function startLaunchAttempt(state: GameState, player: PlayerState): boolean {
 }
 
 function hasAttackCommitment(player: PlayerState): boolean {
-  return player.launchStartup > 0
+  return player.parryStartup > 0
+    || player.launchStartup > 0
     || player.launchActive > 0
     || player.dunkStartup > 0
     || player.dunkActive > 0
@@ -706,12 +714,34 @@ function startParryAttempt(
     return false;
   }
   const parryMove = getCharacterMoves(state, player).parry;
-  player.parry = framesToSeconds(parryMove.activeFrames);
+  player.parryStartup = framesToSeconds(parryMove.startupFrames);
+  if (player.parryStartup <= 0) {
+    activateParry(state, player);
+  }
   player.parryFlash = PARRY_FLASH_SECONDS;
-  player.endLag = Math.max(player.endLag, framesToSeconds(parryMove.recoveryFrames));
   recordAcceptedActionStart(state, playerId, 'parry', observer);
   armCombatBoostLock(state, player, combatBoostStepState);
   return true;
+}
+
+function activateParry(state: GameState, player: PlayerState): void {
+  const move = getCharacterMoves(state, player).parry;
+  player.parry = framesToSeconds(move.activeFrames);
+  player.endLag = Math.max(player.endLag, framesToSeconds(move.recoveryFrames));
+}
+
+function advanceParryStartup(state: GameState, player: PlayerState, dt: number): void {
+  if (player.parryStartup <= 0) {
+    return;
+  }
+  if (player.stunned > 0 || player.helpless > 0 || player.recovering > 0) {
+    player.parryStartup = 0;
+    return;
+  }
+  player.parryStartup = decrementSimulationTimer(player.parryStartup, dt);
+  if (player.parryStartup <= 0) {
+    activateParry(state, player);
+  }
 }
 
 function advanceLaunchAttempt(
@@ -726,7 +756,7 @@ function advanceLaunchAttempt(
   const launchFrameData = getCharacterMoves(state, attacker).launch;
 
   if (attacker.launchStartup > 0) {
-    attacker.launchStartup = Math.max(0, attacker.launchStartup - dt);
+    attacker.launchStartup = decrementSimulationTimer(attacker.launchStartup, dt);
     if (attacker.launchStartup <= 0) {
       attacker.launchActive = framesToSeconds(launchFrameData.activeFrames);
       attacker.launchDidConnect = false;
@@ -755,14 +785,14 @@ function advanceLaunchAttempt(
     } else if (
       state.tuning.startupClashGraceSeconds > 0
       && targetFrameStart.startup > 0
-      && targetFrameStart.startup <= state.tuning.startupClashGraceSeconds
+      && decrementSimulationTimer(targetFrameStart.startup, state.tuning.startupClashGraceSeconds) === 0
     ) {
       clashCause = 'global_startup_grace';
     } else if (
       state.tuning.postControlCounterLaunchClashGraceSeconds > 0
       && target.postControlCounterLaunchEligible
       && targetFrameStart.startup > 0
-      && targetFrameStart.startup <= state.tuning.postControlCounterLaunchClashGraceSeconds
+      && decrementSimulationTimer(targetFrameStart.startup, state.tuning.postControlCounterLaunchClashGraceSeconds) === 0
       && attacker.launchAttemptSerial > target.postControlCounterOpponentLaunchSerialAtReturn
     ) {
       clashCause = 'post_control_counter_launch';
@@ -781,7 +811,7 @@ function advanceLaunchAttempt(
     return;
   }
 
-  attacker.launchActive = Math.max(0, attacker.launchActive - dt);
+  attacker.launchActive = decrementSimulationTimer(attacker.launchActive, dt);
   if (attacker.launchActive <= 0) {
     const whiffRecoverySeconds = framesToSeconds(launchFrameData.recoveryOnWhiffFrames);
     attacker.endLag = Math.max(attacker.endLag, whiffRecoverySeconds);
@@ -793,6 +823,7 @@ function advanceLaunchAttempt(
 function startDunkRecovery(state: GameState, attacker: PlayerState, target: PlayerState): void {
   const tuning = state.tuning;
   const targetStats = getCharacterStats(state, target);
+  finishSuperBoost(state, target);
   if (target.fuel <= 0) {
     if (state.rules.allowDunkWin) {
       state.winner = attacker.id;
@@ -817,8 +848,8 @@ function startDunkRecovery(state: GameState, attacker: PlayerState, target: Play
   target.helpless = 0;
   target.stunned = 0;
   target.parry = 0;
+  target.parryStartup = 0;
   target.endLag = 0;
-  target.superBoost = 0;
   clearBoostState(target);
   target.vel.x = recoveryDir.x * tuning.dunkRecoveryMoveSpeed;
   target.vel.y = recoveryDir.y * tuning.dunkRecoveryMoveSpeed;
@@ -843,6 +874,7 @@ function startDunkAttempt(state: GameState, player: PlayerState): boolean {
   const dunkFrameData = getCharacterMoves(state, player).dunk;
   if (
     player.cool.dunk > 0
+    || player.parryStartup > 0
     || player.endLag > 0
     || player.dunkStartup > 0
     || player.dunkActive > 0
@@ -872,7 +904,7 @@ function advanceDunkAttempt(
   const dunkFrameData = getCharacterMoves(state, attacker).dunk;
 
   if (attacker.dunkStartup > 0) {
-    attacker.dunkStartup = Math.max(0, attacker.dunkStartup - dt);
+    attacker.dunkStartup = decrementSimulationTimer(attacker.dunkStartup, dt);
     if (attacker.dunkStartup <= 0) {
       attacker.dunkActive = framesToSeconds(dunkFrameData.activeFrames);
       attacker.dunkDidConnect = false;
@@ -900,7 +932,7 @@ function advanceDunkAttempt(
     return;
   }
 
-  attacker.dunkActive = Math.max(0, attacker.dunkActive - dt);
+  attacker.dunkActive = decrementSimulationTimer(attacker.dunkActive, dt);
   if (attacker.dunkActive <= 0) {
     const whiffRecoverySeconds = framesToSeconds(dunkFrameData.recoveryOnWhiffFrames);
     attacker.endLag = Math.max(attacker.endLag, whiffRecoverySeconds);
@@ -951,7 +983,7 @@ function executeSpecial(
       if (!inRange || !specialMove.commandGrab) {
         return false;
       }
-      setStunned(target, framesToSeconds(specialMove.commandGrab.stunFrames));
+      setStunned(state, target, framesToSeconds(specialMove.commandGrab.stunFrames));
       return true;
     }
     case 'special.movement_dash.v1': {
@@ -989,6 +1021,7 @@ function startSpecialAttempt(
   const specialMove = getCharacterMoves(state, player).special;
   if (
     player.cool.special > 0
+    || player.parryStartup > 0
     || player.endLag > 0
     || player.specialStartup > 0
     || player.specialActive > 0
@@ -1034,7 +1067,7 @@ function advanceSpecialAttempt(
   const specialMove = getCharacterMoves(state, attacker).special;
 
   if (attacker.specialStartup > 0) {
-    attacker.specialStartup = Math.max(0, attacker.specialStartup - dt);
+    attacker.specialStartup = decrementSimulationTimer(attacker.specialStartup, dt);
     if (attacker.specialStartup <= 0) {
       attacker.specialActive = framesToSeconds(specialMove.timing.activeFrames);
       attacker.specialDidResolve = false;
@@ -1056,7 +1089,7 @@ function advanceSpecialAttempt(
     attacker.specialDidResolve = true;
   }
 
-  attacker.specialActive = Math.max(0, attacker.specialActive - dt);
+  attacker.specialActive = decrementSimulationTimer(attacker.specialActive, dt);
   if (attacker.specialActive <= 0) {
     const recoverySeconds = framesToSeconds(specialMove.timing.recoveryFrames);
     attacker.endLag = Math.max(attacker.endLag, recoverySeconds);
@@ -1268,7 +1301,7 @@ function startSuperBoost(state: GameState, player: PlayerState, playerInput: Pla
   const tuning = state.tuning;
   const playerStats = getCharacterStats(state, player);
   const superBoostMove = getCharacterMoves(state, player).superBoost;
-  if (player.superBoost > 0 || player.helpless > 0 || player.endLag > 0) {
+  if (player.superBoost > 0 || player.helpless > 0 || player.endLag > 0 || player.parryStartup > 0) {
     return false;
   }
   const inputLengthSq = playerInput.moveX * playerInput.moveX + playerInput.moveY * playerInput.moveY;
@@ -1321,7 +1354,7 @@ function tryLaunchBreak(
   player.launchBreaks -= 1;
   player.helpless = 0;
   player.breakFlash = BREAK_FLASH_SECONDS;
-  setStunned(player, framesToSeconds(breakMove.recoveryFrames));
+  setStunned(state, player, framesToSeconds(breakMove.recoveryFrames));
   player.vel.x *= breakMove.velocityRetain;
   player.vel.y *= breakMove.velocityRetain;
   if (player.lastLaunchedBy) {
@@ -1609,36 +1642,33 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): PlayerI
   const hadPostControlCounterWindow = player.postControlCounterWindow > 0;
 
   if (player.recovering > 0) {
-    player.recovering = Math.max(0, player.recovering - dt);
+    player.recovering = decrementSimulationTimer(player.recovering, dt);
   }
 
-  player.stunned = Math.max(0, player.stunned - dt);
-  player.helpless = Math.max(0, player.helpless - dt);
-  player.parry = Math.max(0, player.parry - dt);
+  player.stunned = decrementSimulationTimer(player.stunned, dt);
+  player.helpless = decrementSimulationTimer(player.helpless, dt);
+  player.parry = decrementSimulationTimer(player.parry, dt);
   player.parryFlash = Math.max(0, player.parryFlash - dt);
   player.launchFlash = Math.max(0, player.launchFlash - dt);
   player.specialFlash = Math.max(0, player.specialFlash - dt);
   player.breakFlash = Math.max(0, player.breakFlash - dt);
   player.dunkFlash = Math.max(0, player.dunkFlash - dt);
-  player.endLag = Math.max(0, player.endLag - dt);
+  player.endLag = decrementSimulationTimer(player.endLag, dt);
   if (hadPostControlCounterWindow) {
-    player.postControlCounterWindow = Math.max(0, player.postControlCounterWindow - dt);
+    player.postControlCounterWindow = decrementSimulationTimer(player.postControlCounterWindow, dt);
     if (player.postControlCounterWindow <= 0) {
       player.postControlCounterOpponentLaunchSerialAtReturn = 0;
     }
   }
 
-  player.cool.special = Math.max(0, player.cool.special - dt);
-  player.cool.launch = Math.max(0, player.cool.launch - dt);
-  player.cool.dunk = Math.max(0, player.cool.dunk - dt);
-  player.cool.boost = Math.max(0, player.cool.boost - dt);
+  player.cool.special = decrementSimulationTimer(player.cool.special, dt);
+  player.cool.launch = decrementSimulationTimer(player.cool.launch, dt);
+  player.cool.dunk = decrementSimulationTimer(player.cool.dunk, dt);
+  player.cool.boost = decrementSimulationTimer(player.cool.boost, dt);
   if (tuning.combatBoostReacquireDelaySeconds <= 0) {
     player.combatBoostLockRemaining = 0;
   } else if (!combatBoostLockPaused) {
-    player.combatBoostLockRemaining = Math.max(
-      0,
-      player.combatBoostLockRemaining - dt,
-    );
+    player.combatBoostLockRemaining = decrementSimulationTimer(player.combatBoostLockRemaining, dt);
   }
 
   if (player.helpless > 0 || player.recovering > 0 || player.stunned > 0) {
@@ -1660,7 +1690,7 @@ function updatePlayer(state: GameState, playerId: PlayerId, dt: number): PlayerI
   }
 
   if (player.chain > 0) {
-    player.chainTimer = Math.max(0, player.chainTimer - dt);
+    player.chainTimer = decrementSimulationTimer(player.chainTimer, dt);
     if (player.chainTimer <= 0) {
       resetChain(player);
     }
@@ -1727,14 +1757,14 @@ function resolveCloseRangeSeparation(state: GameState): void {
   if (p1.helpless > 0 || p2.helpless > 0) {
     return;
   }
-  const p1InCommit = p1.parry > 0
+  const p1InCommit = p1.parryStartup > 0 || p1.parry > 0
     || p1.launchStartup > 0
     || p1.launchActive > 0
     || p1.dunkStartup > 0
     || p1.dunkActive > 0
     || p1.specialStartup > 0
     || p1.specialActive > 0;
-  const p2InCommit = p2.parry > 0
+  const p2InCommit = p2.parryStartup > 0 || p2.parry > 0
     || p2.launchStartup > 0
     || p2.launchActive > 0
     || p2.dunkStartup > 0
@@ -1868,13 +1898,13 @@ function resolveNaturalControlReturns(
 function updateProjectiles(state: GameState, dt: number): void {
   for (let i = state.projectiles.length - 1; i >= 0; i -= 1) {
     const projectile = state.projectiles[i];
-    projectile.life -= dt;
+    projectile.life = decrementSimulationTimer(projectile.life, dt);
     projectile.pos.x += projectile.vel.x * dt;
     projectile.pos.y += projectile.vel.y * dt;
 
     const target = state.players[OPPONENT_BY_ID[projectile.ownerId]];
     if (distanceVec2(projectile.pos, target.pos) < target.radius + projectile.hitRadius && target.parry <= 0) {
-      setStunned(target, projectile.stunSeconds);
+      setStunned(state, target, projectile.stunSeconds);
       if (target.helpless <= 0) {
         target.fuel = Math.max(0, target.fuel - projectile.fuelDamage);
       }
@@ -1904,6 +1934,8 @@ export function step(
       P1: { cancelledActiveBoost: false },
       P2: { cancelledActiveBoost: false },
     };
+    advanceParryStartup(state, state.players.P1, dt);
+    advanceParryStartup(state, state.players.P2, dt);
     startParryAttempt(state, 'P1', input.p1, combatBoostStepState.P1, observer);
     startParryAttempt(state, 'P2', input.p2, combatBoostStepState.P2, observer);
     const launchFrameStart: PlayersById<LaunchAttemptFrameState> = {
@@ -1966,6 +1998,12 @@ export function step(
   resolveCloseRangeSeparation(state);
   updateProjectiles(state, dt);
 
+  // Well captures happen after movement; settle both fighters even on that exit.
+  if (state.winner) {
+    finishSuperBoost(state, state.players.P1);
+    finishSuperBoost(state, state.players.P2);
+  }
+
   return state;
 }
 
@@ -2010,16 +2048,54 @@ function getPlayerPresentationState(player: PlayerState): {
   if (player.parry > 0) {
     return { presentationAction: 'parry', presentationPhase: 'active' };
   }
+  if (player.parryStartup > 0) {
+    return { presentationAction: 'parry', presentationPhase: 'startup' };
+  }
   if (player.breakFlash > 0) {
     return { presentationAction: 'break', presentationPhase: 'active' };
   }
   if (player.endLag > 0) {
-    return { presentationAction: 'recover', presentationPhase: 'recovery' };
+    return { presentationAction: 'attack_recovery', presentationPhase: 'recovery' };
   }
   if (player.superBoost > 0 || player.boostActive) {
     return { presentationAction: 'boost', presentationPhase: 'sustain' };
   }
   return { presentationAction: 'idle', presentationPhase: 'none' };
+}
+
+function getPlayerPresentation(state: GameState, player: PlayerState) {
+  const presentation = getPlayerPresentationState(player);
+  const moves = getCharacterMoves(state, player);
+  let elapsed: number | undefined;
+  const { presentationAction: action, presentationPhase: phase } = presentation;
+  if (action === 'launch' || action === 'dunk') {
+    elapsed = phase === 'startup'
+      ? framesToSeconds(moves[action].startupFrames) - player[`${action}Startup`]
+      : framesToSeconds(moves[action].activeFrames) - player[`${action}Active`];
+  } else if (action === 'special') {
+    elapsed = phase === 'startup'
+      ? framesToSeconds(moves.special.timing.startupFrames) - player.specialStartup
+      : framesToSeconds(moves.special.timing.activeFrames) - player.specialActive;
+  } else if (action === 'parry') {
+    if (phase === 'startup') {
+      elapsed = framesToSeconds(moves.parry.startupFrames) - player.parryStartup;
+    } else if (!moves.special.block) {
+      elapsed = framesToSeconds(moves.parry.activeFrames) - player.parry;
+    }
+  } else if (action === 'recover') {
+    elapsed = player.recoveryDuration - player.recovering;
+  } else if (action === 'break') {
+    elapsed = BREAK_FLASH_SECONDS - player.breakFlash;
+  } else if (action === 'helpless') {
+    elapsed = state.tuning.launchHelplessSeconds
+      * getCharacterStats(state, player).launchDurationTakenMultiplier - player.helpless;
+  } else if (action === 'boost') {
+    elapsed = player.superBoost > 0 ? player.superTime : player.boostHeldTime;
+  }
+  // End-lag and block guard do not retain their originating phase duration.
+  return elapsed === undefined
+    ? presentation
+    : { ...presentation, presentationElapsedSeconds: Math.max(0, elapsed) };
 }
 
 export function getRenderSnapshot(state: GameState): RenderSnapshot {
@@ -2053,7 +2129,7 @@ export function getRenderSnapshot(state: GameState): RenderSnapshot {
         dunkFlash: state.players.P1.dunkFlash,
         recovering: state.players.P1.recovering,
         recoveryProgress: p1RecoveryProgress,
-        ...getPlayerPresentationState(state.players.P1),
+        ...getPlayerPresentation(state, state.players.P1),
       },
       P2: {
         id: 'P2',
@@ -2073,7 +2149,7 @@ export function getRenderSnapshot(state: GameState): RenderSnapshot {
         dunkFlash: state.players.P2.dunkFlash,
         recovering: state.players.P2.recovering,
         recoveryProgress: p2RecoveryProgress,
-        ...getPlayerPresentationState(state.players.P2),
+        ...getPlayerPresentation(state, state.players.P2),
       },
     },
     projectiles: state.projectiles.map((projectile) => ({

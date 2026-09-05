@@ -1,4 +1,5 @@
-import { createAiController, tickAiController } from '../../game-web/src/sim/ai';
+import { resolveBalanceProfile } from '../../game-web/src/sim/balanceProfiles';
+import { resolveCharacterBalanceConfig } from '../../game-web/src/sim/characterBalance';
 import { computeStateChecksum } from '../../game-web/src/sim/checksum';
 import {
   deriveRankedInputCommitmentChainDigest,
@@ -16,7 +17,7 @@ import {
   type RankedMatchProof,
 } from '../../game-web/src/sim/rankedProof';
 import { createInitialState, step } from '../../game-web/src/sim/sim';
-import type { PlayerFrameInput } from '../../game-web/src/sim/types';
+import type { GameState, PlayerFrameInput } from '../../game-web/src/sim/types';
 import type { PlayerId } from '../../game-web/src/sim/types';
 
 export interface RankedProofFixtureOptions {
@@ -38,9 +39,29 @@ const PASSIVE_PLAYER_INPUT: PlayerFrameInput = {
   breakLaunch: false,
 };
 
+function fixtureAttackerInput(state: GameState): PlayerFrameInput {
+  const attacker = state.players.P1;
+  const target = state.players.P2;
+  if (target.recovering > 0) {
+    return { ...PASSIVE_PLAYER_INPUT };
+  }
+  const distance = Math.hypot(target.pos.x - attacker.pos.x, target.pos.y - attacker.pos.y);
+  const dunkRange = resolveCharacterBalanceConfig(
+    attacker.characterId,
+    state.characterBalanceOverrides,
+  ).moves.dunk.hitRange;
+  // Test proof plumbing, not AI strategy: approach, dunk, wait for recovery, repeat.
+  return {
+    ...PASSIVE_PLAYER_INPUT,
+    boost: distance > dunkRange * 0.75,
+    dunk: distance < dunkRange + 2,
+  };
+}
+
 export function createRankedProofFixture(options: RankedProofFixtureOptions): RankedMatchProof {
   const seed = rankedSeedFromSessionId(options.sessionId);
   const loadout = { P1: 'vanguard', P2: 'duelist' } as const;
+  const balanceProfile = resolveBalanceProfile(options.balanceProfileId ?? 'default');
   const recorder = new RankedMatchProofRecorder({
     sessionId: options.sessionId,
     matchId: options.sessionId,
@@ -57,15 +78,14 @@ export function createRankedProofFixture(options: RankedProofFixtureOptions): Ra
       loadout,
       rules: { allowDunkWin: true },
     });
-    let p1Controller = createAiController({ seed: 101, profileId: 'ace' });
+    state.tuning = { ...balanceProfile.tuning };
     recorder.startRound(epoch);
     let finalized = false;
     for (let frame = 0; frame < RANKED_MAX_FRAMES_PER_ROUND; frame += 1) {
-      const p1Tick = tickAiController(state, 'P1', p1Controller);
-      p1Controller = p1Tick.next;
-      recorder.recordInput(epoch, frame, 'P1', p1Tick.input);
+      const p1Input = fixtureAttackerInput(state);
+      recorder.recordInput(epoch, frame, 'P1', p1Input);
       recorder.recordInput(epoch, frame, 'P2', PASSIVE_PLAYER_INPUT);
-      step(state, { p1: p1Tick.input, p2: PASSIVE_PLAYER_INPUT }, RANKED_FIXED_DT);
+      step(state, { p1: p1Input, p2: PASSIVE_PLAYER_INPUT }, RANKED_FIXED_DT);
       if (!state.winner) {
         continue;
       }

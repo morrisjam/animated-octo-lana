@@ -3,6 +3,7 @@ import type {
   AudioBusId,
   AudioDiagnostics,
   AudioEvent,
+  AudioEventType,
   AudioRoute,
   AudioRouteTable,
   AudioSampleLibrary,
@@ -11,7 +12,7 @@ import type {
 } from './types';
 import type { WebAudioEventSinkOptions } from './webAudioSink';
 
-const DEFAULT_ROUTE_TABLE: AudioRouteTable = {
+const DEFAULT_ROUTE_TABLE: Record<AudioEventType, AudioRoute> = {
   'combat.boost': {
     bus: 'sfx',
     cue: { waveform: 'sawtooth', frequencyHz: 260, durationSeconds: 0.09, gain: 0.018 },
@@ -19,6 +20,22 @@ const DEFAULT_ROUTE_TABLE: AudioRouteTable = {
   'combat.launch': {
     bus: 'sfx',
     cue: { waveform: 'triangle', frequencyHz: 380, durationSeconds: 0.12, gain: 0.026 },
+  },
+  'combat.super_boost': {
+    bus: 'sfx',
+    cue: { waveform: 'sawtooth', frequencyHz: 310, durationSeconds: 0.14, gain: 0.02 },
+  },
+  'combat.clash': {
+    bus: 'sfx',
+    cue: { waveform: 'square', frequencyHz: 180, durationSeconds: 0.08, gain: 0.018 },
+  },
+  'combat.special': {
+    bus: 'sfx',
+    cue: { waveform: 'sine', frequencyHz: 660, durationSeconds: 0.16, gain: 0.022 },
+  },
+  'combat.break': {
+    bus: 'sfx',
+    cue: { waveform: 'triangle', frequencyHz: 740, durationSeconds: 0.07, gain: 0.022 },
   },
   'combat.parry': {
     bus: 'sfx',

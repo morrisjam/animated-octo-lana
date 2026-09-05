@@ -250,6 +250,12 @@ export function framesToSeconds(frames: number): number {
   return Math.max(0, frames) / SIMULATION_FRAME_RATE_HZ;
 }
 
+export function decrementSimulationTimer(remaining: number, dt: number): number {
+  const next = remaining - dt;
+  // Repeated fractional-frame subtraction must not leave a phantom active tick.
+  return next <= 1e-9 ? 0 : next;
+}
+
 export function secondsToFrames(seconds: number): number {
   if (!Number.isFinite(seconds)) {
     return 0;

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Nebula Well / Stage Study</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/assetWorkshop/nebulaStyles.css" />
+  </head>
+  <body>
+    <canvas id="stage" aria-label="Animated wormhole model preview"></canvas>
+    <header>
+      <p>GRAVITY WELL / BLENDER STUDY 05</p>
+      <h1>Nebula Well</h1>
+      <p id="status" role="status">Loading local model...</p>
+    </header>
+    <section class="controls" aria-label="Stage comparison controls">
+      <label>Stage <select id="preset"><option value="wormhole_nebula_v9_candidate">Nebula Well (Blender)</option><option value="wormhole_luminous_v8_candidate">Previous Gravity Well</option></select></label>
+      <label>Tilt <input id="tilt" type="range" min="0" max="60" value="18" /><output id="tiltValue">18 degrees</output></label>
+      <label>Distance <input id="distance" type="range" min="100" max="300" value="205" /></label>
+      <button id="motion" type="button" aria-pressed="false">Pause motion</button>
+      <a href="/">Return to game</a>
+    </section>
+    <p class="note">Blue and pink markers show fighter scale. Geometry stays fixed; light flows inward. Prototype, not final art.</p>
+    <script type="module" src="/src/assetWorkshop/nebulaMain.ts"></script>
+  </body>
+</html>

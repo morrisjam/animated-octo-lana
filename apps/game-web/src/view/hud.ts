@@ -1,4 +1,5 @@
 import type { RenderSnapshot } from '../sim/types';
+import { fingerprintCharacterBalanceOverrides, type CharacterBalanceOverrides } from '../sim/characterBalance';
 import type { MatchTelemetrySummary } from '../sim/matchTelemetry';
 import { buildTrainingFrameDataModel } from './trainingFrameData';
 import type { InputHistoryView } from './inputHistory';
@@ -125,7 +126,9 @@ function getRequiredElement<T extends Element>(selector: string): T {
   return element;
 }
 
-export function createHud(): HudController {
+export function createHud(options: {
+  getActiveCharacterBalanceOverrides?(): CharacterBalanceOverrides;
+} = {}): HudController {
   const root = getRequiredElement<HTMLDivElement>('#hud');
   const p1InputHistory = document.createElement('div');
   p1InputHistory.className = 'input-history-panel p1';
@@ -235,12 +238,13 @@ export function createHud(): HudController {
   }
 
   function renderTrainingFrameData(snapshot: RenderSnapshot): void {
-    const signature = `${snapshot.players.P1.characterId}|${snapshot.players.P2.characterId}`;
+    const overrides = options.getActiveCharacterBalanceOverrides?.();
+    const signature = `${snapshot.players.P1.characterId}|${snapshot.players.P2.characterId}|${fingerprintCharacterBalanceOverrides(overrides)}`;
     if (signature === frameDataCharacterSignature) {
       return;
     }
 
-    const model = buildTrainingFrameDataModel(snapshot.players.P1.characterId, snapshot.players.P2.characterId);
+    const model = buildTrainingFrameDataModel(snapshot.players.P1.characterId, snapshot.players.P2.characterId, overrides);
     const rowsHtml = model.rows.map((row) => `<div class="row">${row}</div>`).join('');
     elements.frameData.innerHTML = `
       <div class="title">${model.title}</div>

@@ -1,4 +1,6 @@
 import { createDefaultTuning, sanitiseTuning } from '../sim/tuning';
+import { detectGamepadFamily } from '../input/controllerGlyphs';
+import { ControllerNavigationRepeater, resolveControllerNavigationSample } from './controllerUi/navigation';
 import {
   AI_DECISION_CANDIDATES,
   createDefaultAiBehaviorTuning,
@@ -66,6 +68,8 @@ import type { MatchTelemetrySummary } from '../sim/matchTelemetry';
 import {
   attachBalanceReplayCandidate,
   createBalanceReplayComparison,
+  describeBalanceReplayTiming,
+  getBalanceReplayOutcome,
   type BalanceReplayComparison,
 } from '../sim/balanceReplayComparison';
 import type { ReplayPayload } from '../sim/replay';
@@ -126,6 +130,7 @@ export function formatOrdinaryBoostCounterplay(
 }
 
 export interface PauseMenuOptions {
+  onReturnToMenu?(): void;
   getTuning(): GameTuning;
   setTuning(tuning: GameTuning): void;
   getAudioSettings(): AudioSettings;
@@ -629,6 +634,54 @@ interface BalanceLabPendingState {
 }
 
 export class PauseMenu {
+  private menuNavigationRaf: number | null = null;
+  private menuNavigationReady = false;
+  private readonly menuNavigationRepeater = new ControllerNavigationRepeater();
+
+  private readonly pollMenuNavigation = (): void => {
+    this.menuNavigationRaf = null;
+    if (!this.paused) return;
+    const gamepad = this.getAssignedGamepad('P1');
+    if (gamepad) {
+      const sample = resolveControllerNavigationSample(gamepad, detectGamepadFamily(gamepad.id));
+      // Do not treat a held gameplay button as a fresh menu confirmation.
+      if (!this.menuNavigationReady && !Object.values(sample).some(Boolean)) {
+        this.menuNavigationReady = true;
+      }
+      const actions = this.menuNavigationRepeater.poll(sample, performance.now());
+      if (this.menuNavigationReady && !this.bindingCapture) {
+        for (const action of actions) {
+          if (!this.paused) break;
+          const targets = Array.from(this.root.querySelectorAll<HTMLElement>('button, summary, input, select, textarea'))
+            .filter((element) => !element.matches(':disabled') && element.checkVisibility());
+          const current = targets.indexOf(document.activeElement as HTMLElement);
+          if (action === 'up' || action === 'down') {
+            const direction = action === 'up' ? -1 : 1;
+            const next = current < 0 ? 0 : (current + direction + targets.length) % targets.length;
+            targets[next]?.focus();
+          } else if (action === 'confirm') {
+            const target = targets[current] ?? targets[0];
+            target?.focus();
+            target?.click();
+          } else if (action === 'back') {
+            const confirmation = this.root.querySelector<HTMLDetailsElement>('.pause-return-menu[open]');
+            if (confirmation) {
+              confirmation.open = false;
+              confirmation.querySelector('summary')?.focus();
+            } else if (this.activeTab !== 'pause') {
+              this.setActiveTab('pause');
+            } else {
+              this.setPaused(false);
+            }
+          }
+        }
+      }
+    } else {
+      this.menuNavigationReady = false;
+      this.menuNavigationRepeater.reset();
+    }
+    if (this.paused) this.menuNavigationRaf = window.requestAnimationFrame(this.pollMenuNavigation);
+  };
   private readonly root: HTMLDivElement;
   private copyStatus: HTMLDivElement | null = null;
   private readonly tabButtons: Record<PauseTabId, HTMLButtonElement>;
@@ -844,6 +897,13 @@ export class PauseMenu {
   setPaused(paused: boolean): void {
     this.paused = paused;
     this.root.hidden = !paused;
+    const returnConfirmation = this.root.querySelector<HTMLDetailsElement>('.pause-return-menu');
+    if (returnConfirmation) returnConfirmation.open = false;
+    if (this.menuNavigationRaf !== null) window.cancelAnimationFrame(this.menuNavigationRaf);
+    this.menuNavigationRaf = null;
+    this.menuNavigationRepeater.reset();
+    this.menuNavigationReady = false;
+    if (paused) this.menuNavigationRaf = window.requestAnimationFrame(this.pollMenuNavigation);
     if (paused) {
       this.setActiveTab('pause');
       this.syncInputsFromTuning();
@@ -851,6 +911,7 @@ export class PauseMenu {
       this.refreshExportControls();
       this.reviewAiRoundButton.hidden = !(this.options.canReviewAiRound?.() ?? false);
       this.syncBalanceLab();
+      this.tabPanels.pause.querySelector<HTMLButtonElement>('button')?.focus();
       if (this.copyStatus) {
         this.copyStatus.textContent = '';
       }
@@ -930,6 +991,34 @@ export class PauseMenu {
     resume.textContent = 'Resume';
     resume.addEventListener('click', () => this.setPaused(false));
 
+    const returnToMenu = document.createElement('details');
+    returnToMenu.className = 'pause-return-menu';
+    returnToMenu.hidden = !this.options.onReturnToMenu;
+    const returnSummary = document.createElement('summary');
+    returnSummary.className = 'pause-action';
+    returnSummary.textContent = 'Return to Menu';
+    const returnHint = document.createElement('p');
+    returnHint.textContent = 'Leave this match? The current round will end.';
+    const cancelReturn = document.createElement('button');
+    cancelReturn.type = 'button';
+    cancelReturn.className = 'pause-action';
+    cancelReturn.textContent = 'Keep Playing';
+    cancelReturn.addEventListener('click', () => {
+      returnToMenu.open = false;
+      returnSummary.focus();
+    });
+    const confirmReturn = document.createElement('button');
+    confirmReturn.type = 'button';
+    confirmReturn.className = 'pause-action';
+    confirmReturn.textContent = 'Leave Match';
+    confirmReturn.addEventListener('click', () => {
+      if (!this.paused || !returnToMenu.open) return;
+      returnToMenu.open = false;
+      this.options.onReturnToMenu?.();
+      this.setPaused(false);
+    });
+    returnToMenu.append(returnSummary, returnHint, cancelReturn, confirmReturn);
+
     const toAudio = document.createElement('button');
     toAudio.type = 'button';
     toAudio.className = 'pause-action';
@@ -1000,6 +1089,7 @@ export class PauseMenu {
       toAudio,
       toBindings,
       toDebug,
+      returnToMenu,
       exportSupportBundle,
       supportStatus,
     );
@@ -1833,7 +1923,6 @@ export class PauseMenu {
     const globalHeading = document.createElement('h4');
     globalHeading.className = 'balance-lab-section-heading';
     globalHeading.textContent = 'Global rules';
-    tab.appendChild(globalHeading);
 
     const globalGroups = document.createElement('div');
     globalGroups.className = 'balance-global-groups';
@@ -1872,14 +1961,14 @@ export class PauseMenu {
       details.append(summary, grid);
       globalGroups.appendChild(details);
     }
-    tab.appendChild(globalGroups);
+    tab.appendChild(this.createBalanceDisclosure('Advanced global rules', globalHeading, globalGroups));
 
     const aiBehaviorEditor = this.createAiBehaviorEditor();
-    tab.appendChild(aiBehaviorEditor);
+    tab.appendChild(this.createBalanceDisclosure('Advanced AI behavior', aiBehaviorEditor));
     this.aiBehaviorEditor = aiBehaviorEditor;
 
     const characterEditor = this.createCharacterBalanceEditor();
-    tab.appendChild(characterEditor);
+    tab.appendChild(this.createBalanceDisclosure('Advanced fighter tuning', characterEditor));
     this.characterBalanceEditor = characterEditor;
 
     const pendingChangesPanel = document.createElement('section');
@@ -2014,8 +2103,10 @@ export class PauseMenu {
     if (matchedBalanceLabButton) {
       actions.append(matchedBalanceLabButton);
     }
-    actions.append(
-      discardDraftButton,
+    actions.append(discardDraftButton);
+    const draftActions = document.createElement('div');
+    draftActions.className = actions.className;
+    draftActions.append(
       resetButton,
       saveDraftButton,
       loadDraftButton,
@@ -2025,12 +2116,13 @@ export class PauseMenu {
       downloadButton,
     );
     if (exportTrainingTelemetryButton) {
-      actions.append(exportTrainingTelemetryButton);
+      draftActions.append(exportTrainingTelemetryButton);
     }
     if (exportAiMatchTelemetryButton) {
-      actions.append(exportAiMatchTelemetryButton);
+      draftActions.append(exportAiMatchTelemetryButton);
     }
     tab.appendChild(actions);
+    tab.appendChild(this.createBalanceDisclosure('Drafts and exports', draftActions));
     this.exportTrainingTelemetryButton = exportTrainingTelemetryButton;
     this.exportAiMatchTelemetryButton = exportAiMatchTelemetryButton;
     this.restartBalanceLabButton = restartBalanceLabButton;
@@ -2290,6 +2382,7 @@ export class PauseMenu {
     const canTune = this.options.canTuneAiBehavior?.() ?? false;
     if (this.aiBehaviorEditor) {
       this.aiBehaviorEditor.hidden = !canTune;
+      this.aiBehaviorEditor.closest<HTMLElement>('.balance-advanced-section')!.hidden = !canTune;
     }
     const tuning = sanitiseAiBehaviorTuning(
       this.options.getAiBehaviorTuning?.() ?? createDefaultAiBehaviorTuning(),
@@ -2393,13 +2486,11 @@ export class PauseMenu {
     const replay = this.options.getAiRoundReplay?.();
     if (
       !telemetry
-      || telemetry.framesSimulated !== baseline.framesSimulated
       || !replay
-      || replay.inputTimeline.length !== baseline.framesSimulated
+      || replay.inputTimeline.length !== telemetry.framesSimulated
     ) {
       return;
     }
-
     const activeTuning = sanitiseTuning(
       this.options.getActiveBalanceTuning?.() ?? this.options.getTuning(),
     );
@@ -2423,6 +2514,10 @@ export class PauseMenu {
     );
 
     try {
+      if (replay.inputTimeline.length < baseline.framesSimulated
+        && getBalanceReplayOutcome(replay).winner === null) {
+        return;
+      }
       this.balanceReplayComparison = attachBalanceReplayCandidate(
         this.balanceReplayComparison ?? existing,
         replay,
@@ -2656,7 +2751,7 @@ export class PauseMenu {
         this.balanceReplayPairingStatus.textContent = this.balanceReplayCandidateError
           ? `Candidate replay pairing failed: ${this.balanceReplayCandidateError}`
           : candidateReady
-            ? 'Matched replay pair ready. Review the incident and switch with B/C.'
+            ? `${describeBalanceReplayTiming(this.balanceReplayComparison!)} Review the incident and switch with B/C.`
             : 'Baseline replay ready. Run the matched candidate to unlock synchronized A/B review.';
       }
     }
@@ -4124,9 +4219,12 @@ export class PauseMenu {
   }
 
   private focusTuningInput(input: HTMLInputElement): void {
-    const group = input.closest('details');
-    if (group instanceof HTMLDetailsElement) {
-      group.open = true;
+    let ancestor = input.parentElement;
+    while (ancestor) {
+      if (ancestor instanceof HTMLDetailsElement) {
+        ancestor.open = true;
+      }
+      ancestor = ancestor.parentElement;
     }
     const row = input.closest('.tuning-row');
     if (row instanceof HTMLElement) {
@@ -4137,6 +4235,16 @@ export class PauseMenu {
       row.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
     input.focus({ preventScroll: true });
+  }
+
+  private createBalanceDisclosure(label: string, ...content: HTMLElement[]): HTMLDetailsElement {
+    const details = document.createElement('details');
+    details.className = 'balance-advanced-section';
+    const summary = document.createElement('summary');
+    summary.textContent = label;
+    details.append(summary, ...content);
+    details.hidden = content.every((element) => element.hidden);
+    return details;
   }
 
   private readBalancePlaytestReview(

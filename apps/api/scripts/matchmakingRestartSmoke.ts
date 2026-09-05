@@ -75,8 +75,8 @@ interface ManagedApi {
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const ADMIN_KEY = 'local-restart-smoke-admin-key-0123456789';
-const SMOKE_BUILD_VERSION = 'prototype-2026.02';
-const SMOKE_RULESET_VERSION = 'prototype-2026.02';
+const SMOKE_BUILD_VERSION = 'prototype-2026.09';
+const SMOKE_RULESET_VERSION = 'prototype-2026.09';
 const SMOKE_BALANCE_PROFILE_ID = 'default';
 const AUTH_SECRET = 'local-restart-smoke-auth-secret-0123456789-abcdefghijklmnopqrstuvwxyz';
 const AUTH_RATE_LIMIT_SECRET = randomBytes(32).toString('hex');

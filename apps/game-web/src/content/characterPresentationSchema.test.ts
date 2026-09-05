@@ -4,6 +4,7 @@ import {
   CharacterPresentationValidationError,
   parseCharacterPresentationManifest,
   REQUIRED_CHARACTER_PRESENTATION_STATES,
+  OPTIONAL_CHARACTER_PRESENTATION_STATES,
 } from './characterPresentationSchema';
 
 function makeValidPresentation(): Record<string, unknown> {
@@ -68,6 +69,23 @@ function getValidationError(payload: unknown): CharacterPresentationValidationEr
 }
 
 describe('character presentation schema', () => {
+  test('accepts optional recovery/startup mappings without requiring them in older packages', () => {
+    const payload = makeValidPresentation();
+    expect(() => parseCharacterPresentationManifest(payload)).not.toThrow();
+    const animationSet = payload.animationSet as Record<string, unknown>;
+    const stateClips = animationSet.stateClips as Record<string, unknown>;
+    for (const state of OPTIONAL_CHARACTER_PRESENTATION_STATES) stateClips[state] = 'idle';
+    const parsed = parseCharacterPresentationManifest(payload);
+    for (const state of OPTIONAL_CHARACTER_PRESENTATION_STATES) {
+      expect(parsed.animationSet.stateClips[state]).toBe('idle');
+      stateClips[state] = 'missing_clip';
+      expect(getValidationError(payload).issues).toContainEqual({
+        path: `animationSet.stateClips.${state}`,
+        message: 'must reference a declared clip id.',
+      });
+      stateClips[state] = 'idle';
+    }
+  });
   test('parses a complete presentation manifest', () => {
     const parsed = parseCharacterPresentationManifest(makeValidPresentation());
 

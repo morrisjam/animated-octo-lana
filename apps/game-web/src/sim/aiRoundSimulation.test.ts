@@ -281,6 +281,8 @@ describe('AI round simulation', () => {
     };
     const options = {
       ...BASE_OPTIONS,
+      // This encounter exercises actual repeat-dash selection with tick-safe timing.
+      setSeed: 44_521_056,
       maxFrames: 5_400,
       behaviorTuning,
     };

@@ -1,14 +1,20 @@
 import { CHARACTER_BY_ID, type CharacterId } from '../sim/characters';
+import {
+  fingerprintCharacterBalanceOverrides,
+  resolveCharacterBalanceConfig,
+  type CharacterBalanceOverrides,
+} from '../sim/characterBalance';
 
 export interface TrainingFrameDataModel {
   title: string;
   hint: string;
   rows: string[];
+  fingerprint: string;
 }
 
-function describeCharacterMoveRows(characterId: CharacterId, playerLabel: 'P1' | 'P2'): string[] {
+function describeCharacterMoveRows(characterId: CharacterId, playerLabel: 'P1' | 'P2', overrides?: CharacterBalanceOverrides): string[] {
   const character = CHARACTER_BY_ID[characterId];
-  const moves = character.moves;
+  const { moves } = resolveCharacterBalanceConfig(characterId, overrides);
   return [
     `${playerLabel} ${character.displayName}`,
     `Launch: ${moves.launch.startupFrames}f startup, ${moves.launch.activeFrames}f active, ${moves.launch.recoveryOnHitFrames}f hit recover, ${moves.launch.recoveryOnWhiffFrames}f whiff recover`,
@@ -22,13 +28,16 @@ function describeCharacterMoveRows(characterId: CharacterId, playerLabel: 'P1' |
 export function buildTrainingFrameDataModel(
   p1CharacterId: CharacterId,
   p2CharacterId: CharacterId,
+  activeOverrides?: CharacterBalanceOverrides,
 ): TrainingFrameDataModel {
+  const fingerprint = fingerprintCharacterBalanceOverrides(activeOverrides);
   return {
     title: 'Training Frame Data',
-    hint: 'Toggle: F1 keyboard or View/Back controller',
+    hint: `Toggle: F1 keyboard or View/Back controller | Active tuning: ${fingerprint}`,
+    fingerprint,
     rows: [
-      ...describeCharacterMoveRows(p1CharacterId, 'P1'),
-      ...describeCharacterMoveRows(p2CharacterId, 'P2'),
+      ...describeCharacterMoveRows(p1CharacterId, 'P1', activeOverrides),
+      ...describeCharacterMoveRows(p2CharacterId, 'P2', activeOverrides),
     ],
   };
 }

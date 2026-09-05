@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import type { AssetFileEntry } from './assets/types';
-import { parseStaticStageGlb } from './assets/staticGlbRuntime';
 
 export type StageModelLoadStatus = 'idle' | 'loading' | 'ready' | 'failed' | 'disposed';
 
@@ -68,6 +67,8 @@ function clampOpacity(value: number): number {
 }
 
 function readMaterialColor(material: THREE.Material, property: 'color' | 'emissive'): THREE.Color | null {
+  if (property === 'color' && material instanceof THREE.ShaderMaterial
+    && material.uniforms.uTint?.value instanceof THREE.Color) return material.uniforms.uTint.value;
   const value = (material as THREE.Material & Record<'color' | 'emissive', unknown>)[property];
   return value instanceof THREE.Color ? value : null;
 }
@@ -238,7 +239,18 @@ async function defaultLoadEntry(entry: AssetFileEntry, fetchImpl: typeof fetch):
     );
   }
   const body = await response.arrayBuffer();
-  return parseStaticStageGlb(body, { expectedAssetId: entry.id });
+  const { parseStaticStageGlb } = await import('./assets/staticGlbRuntime');
+  const object = parseStaticStageGlb(body, { expectedAssetId: entry.id });
+  if (entry.id === 'wormhole_nebula_v5') {
+    try {
+      const { applyNebulaStageMaterial } = await import('./nebulaStageMaterial');
+      applyNebulaStageMaterial(object);
+    } catch (error) {
+      disposeObject(object);
+      throw error;
+    }
+  }
+  return object;
 }
 
 export function createStageModelRuntime(

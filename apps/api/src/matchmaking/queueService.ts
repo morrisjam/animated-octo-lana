@@ -740,6 +740,7 @@ export class MatchmakingQueueService {
     if (existingTicketId) {
       const existingTicket = this.ticketsById.get(existingTicketId);
       if (existingTicket && existingTicket.status !== 'closed') {
+        this.tryMatchFromTicket(existingTicket.ticketId, nowMs);
         return this.toTicketView(existingTicket);
       }
       this.activeTicketByAccountQueue.delete(accountQueueKey);
@@ -778,6 +779,8 @@ export class MatchmakingQueueService {
     if (!ticket || ticket.accountId !== accountId) {
       return null;
     }
+    // The route holds the runtime lease and persists this bounded matching attempt.
+    this.tryMatchFromTicket(ticket.ticketId, nowMs);
     return this.toTicketView(ticket);
   }
 

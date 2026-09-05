@@ -5,13 +5,43 @@ import {
   attachBalanceReplayCandidate,
   createBalanceReplayComparison,
   describeBalanceReplayComparison,
+  describeBalanceReplayTiming,
+  getBalanceReplayOutcome,
   selectBalanceReplaySample,
 } from './balanceReplayComparison';
 import type { BalanceLabRuleChange } from './balanceLab';
 import type { ReplayPayload } from './replay';
 import type { FrameInput, GameTuning } from './types';
+import { createAiController } from './ai';
+import { tickAiControllerWithRole } from './aiControllerRoles';
+import { applyBalanceScenario } from './balanceScenarios';
+import { createCharacterBalanceConfig } from './characterBalance';
+import { LocalRoundReplayRecorder } from './localRoundReplayRecorder';
 
 const FIXED_DT = 1 / 60;
+
+function recordFinish(dunkStartupFrames: number): ReplayPayload {
+  const vanguard = createCharacterBalanceConfig('vanguard');
+  vanguard.moves.dunk.startupFrames = dunkStartupFrames;
+  const state = createInitialState({ seed: 42, loadout: { P1: 'vanguard', P2: 'duelist' }, characterBalanceOverrides: { vanguard } });
+  applyBalanceScenario(state, 'zero_fuel_chase');
+  const recorder = new LocalRoundReplayRecorder({
+    rulesetVersion: 'test-rules', simBuildHash: 'test-build', roundNumber: 1,
+    seed: state.seed, loadout: state.loadout, fixedDt: FIXED_DT,
+    rules: state.rules, tuning: state.tuning, characterBalanceOverrides: state.characterBalanceOverrides,
+    startingSituationId: 'zero_fuel_chase', sourceLabel: 'Finish reliability',
+  });
+  let controller = createAiController({ seed: 42, profileId: 'veteran' });
+  for (let frame = 0; frame < 1800 && !state.winner; frame += 1) {
+    const tick = tickAiControllerWithRole(state, 'P1', controller, 'adaptive');
+    controller = tick.next;
+    const input = { p1: tick.input, p2: tickAiControllerWithRole(state, 'P2', controller, 'passive').input };
+    step(state, input, FIXED_DT);
+    recorder.recordFrame(input, state);
+  }
+  expect(state.winner).toBe('P1');
+  return recorder.buildPayload()!;
+}
 
 function createReplay(options: {
   frames?: number;
@@ -62,6 +92,48 @@ function createReplay(options: {
 }
 
 describe('balance replay comparison', () => {
+  it('pairs unequal terminal recordings and retains their full tails and finish outcomes', () => {
+    const baseline = recordFinish(1);
+    const candidate = recordFinish(60);
+    expect(candidate.inputTimeline.length).toBeLessThan(baseline.inputTimeline.length);
+    const comparison = attachBalanceReplayCandidate(createBalanceReplayComparison(baseline), candidate, [{
+      scope: 'character', characterId: 'vanguard', path: 'moves.dunk.startupFrames',
+      baselineValue: 1, candidateValue: 60, delta: 59,
+    }]);
+    expect(comparison.baseline.payload.inputTimeline).toHaveLength(baseline.inputTimeline.length);
+    expect(comparison.candidate?.payload.inputTimeline).toHaveLength(candidate.inputTimeline.length);
+    expect(getBalanceReplayOutcome(comparison.candidate!.payload).winner).toBe('P1');
+    expect(describeBalanceReplayTiming(comparison)).toContain(`(${Math.min(baseline.inputTimeline.length, candidate.inputTimeline.length)} frames)`);
+    expect(describeBalanceReplayTiming(comparison)).toContain('Finish delta (candidate - baseline):');
+    const finishDelta = (candidate.inputTimeline.length - baseline.inputTimeline.length) * FIXED_DT;
+    expect(describeBalanceReplayTiming(comparison)).toContain(`${finishDelta.toFixed(2)}s`);
+    expect(getBalanceReplayOutcome(comparison.candidate!.payload)).toEqual({
+      winner: 'P1',
+      finishFrame: candidate.inputTimeline.length - 1,
+      finishSeconds: candidate.inputTimeline.length * FIXED_DT,
+    });
+    expect(selectBalanceReplaySample(comparison, 'candidate', 99999).frameIndex).toBe(candidate.inputTimeline.length - 1);
+    expect(() => attachBalanceReplayCandidate(createBalanceReplayComparison(candidate), baseline, [])).not.toThrow();
+  });
+
+  it('allows an unfinished longer run, but rejects an unfinished shorter capture', () => {
+    const terminal = recordFinish(60);
+    const longer = recordFinish(1);
+    const truncate = (payload: ReplayPayload, frames: number): ReplayPayload => ({
+      ...payload,
+      inputTimeline: payload.inputTimeline.slice(0, frames),
+      expectedChecksums: payload.expectedChecksums!.slice(0, frames),
+      rounds: payload.rounds?.map((round) => ({ ...round, endFrame: frames - 1 })),
+    });
+    const unfinishedLonger = truncate(longer, terminal.inputTimeline.length + 1);
+    const comparison = attachBalanceReplayCandidate(createBalanceReplayComparison(terminal), unfinishedLonger, []);
+    expect(getBalanceReplayOutcome(comparison.candidate!.payload).winner).toBeNull();
+    expect(describeBalanceReplayTiming(comparison)).toContain('Candidate: unfinished at capture');
+    expect(describeBalanceReplayTiming(comparison)).toContain('Finish delta unavailable');
+    expect(() => attachBalanceReplayCandidate(
+      createBalanceReplayComparison(longer), truncate(terminal, terminal.inputTimeline.length - 1), [],
+    )).toThrow('shorter replay to reach a terminal outcome');
+  });
   it('captures a checksum-verified baseline and clamps its incident focus', () => {
     const baseline = createReplay();
     baseline.header.reviewFocus = {

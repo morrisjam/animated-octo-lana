@@ -784,7 +784,7 @@ async function joinRunnerQueue(
       queueType: 'ranked',
       regionPreferences: ['eu-west'],
       buildVersion,
-      rulesetVersion: 'prototype-2026.02',
+      rulesetVersion: 'prototype-2026.09',
       balanceProfileId: 'default',
       platform: 'web',
       characterId,

@@ -210,7 +210,7 @@ describe('player-order symmetry', () => {
       ).toEqual(canonicalSymmetryState(direct));
     }
 
-    expect(acceptedActions).toEqual(new Set(['boost', 'super_boost', 'special', 'dunk']));
+    expect(acceptedActions).toEqual(new Set(['boost', 'super_boost', 'special', 'dunk', 'parry']));
   });
 });
 
@@ -1775,7 +1775,7 @@ describe('state snapshot and restore', () => {
     state.players.P1.helpless = 0;
     state.players.P1.endLag = 0.2;
     expect(getRenderSnapshot(state).players.P1).toMatchObject({
-      presentationAction: 'recover',
+      presentationAction: 'attack_recovery',
       presentationPhase: 'recovery',
     });
   });

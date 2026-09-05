@@ -109,7 +109,7 @@ jobs:
           VITE_PROFILE_API_BASE: http://127.0.0.1:8787
           VITE_MATCHMAKING_API_BASE: http://127.0.0.1:8787
           VITE_APP_BUILD: ${{ github.sha }}
-          VITE_RULESET_VERSION: prototype-2026.02
+          VITE_RULESET_VERSION: prototype-2026.09
           VITE_BALANCE_PROFILE_ID: default
           CF_PAGES: "1"
           CF_PAGES_COMMIT_SHA: ${{ github.sha }}
@@ -130,7 +130,7 @@ jobs:
           VITE_PROFILE_API_BASE: http://127.0.0.1:8787
           VITE_MATCHMAKING_API_BASE: http://127.0.0.1:8787
           VITE_APP_BUILD: ${{ github.sha }}
-          VITE_RULESET_VERSION: prototype-2026.02
+          VITE_RULESET_VERSION: prototype-2026.09
           VITE_BALANCE_PROFILE_ID: default
           VITE_LOCAL_RANKED_ROOT_SMOKE: "true"
 
@@ -328,7 +328,7 @@ jobs:
           API_BASE_URL: http://127.0.0.1:8787
           RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS: "180000"
           RANKED_ROOT_EXPECT_BUILD_ID: ${{ github.sha }}
-          RANKED_ROOT_EXPECT_RULESET_VERSION: prototype-2026.02
+          RANKED_ROOT_EXPECT_RULESET_VERSION: prototype-2026.09
           RANKED_ROOT_EXPECT_BALANCE_PROFILE_ID: default
           RANKED_ROOT_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-ranked-root.json
           RANKED_ROOT_BROWSER_SMOKE_FAILURE_SCREENSHOT: build-artifacts/ranked-root-browser-smoke-failure.png
@@ -340,7 +340,7 @@ jobs:
           API_BASE_URL: http://127.0.0.1:8787
           RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS: "180000"
           RANKED_ROOT_EXPECT_BUILD_ID: ${{ github.sha }}
-          RANKED_ROOT_EXPECT_RULESET_VERSION: prototype-2026.02
+          RANKED_ROOT_EXPECT_RULESET_VERSION: prototype-2026.09
           RANKED_ROOT_EXPECT_BALANCE_PROFILE_ID: default
           RANKED_ROOT_BROWSER_SMOKE_FORCE_RELAY: "1"
           RANKED_ROOT_BROWSER_SMOKE_REPORT_PATH: build-artifacts/ci-ranked-root-relay.json
@@ -457,7 +457,7 @@ jobs:
       VITE_PLATFORM: steam
       VITE_PROFILE_API_BASE: https://api.gravitywell.space
       VITE_MATCHMAKING_API_BASE: https://api.gravitywell.space
-      VITE_RULESET_VERSION: prototype-2026.02
+      VITE_RULESET_VERSION: prototype-2026.09
       VITE_BALANCE_PROFILE_ID: default
       VITE_STEAM_WEB_API_IDENTITY: gravity-well-api
       VITE_STEAM_ENTITLEMENT_MODE: require_auth

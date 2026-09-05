@@ -5,6 +5,13 @@ import type { AssetManifest } from './types';
 export const DEFAULT_ASSET_MANIFEST: AssetManifest = {
   models: [
     {
+      id: 'wormhole_nebula_v5',
+      src: '/assets/stages/wormhole/wormhole-nebula-v5.glb',
+      contentTypes: ['model/gltf-binary'],
+      readiness: 'prototype',
+      budget: { estimatedBytes: 256 * 1024, estimatedTriangles: 11_000, estimatedVertices: 6_000 },
+    },
+    {
       id: 'wormhole_arena_lip_v1',
       src: '/assets/stages/wormhole/wormhole-arena-lip-v1.glb',
       contentTypes: ['model/gltf-binary'],

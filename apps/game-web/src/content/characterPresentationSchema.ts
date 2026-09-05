@@ -21,8 +21,16 @@ export const REQUIRED_CHARACTER_PRESENTATION_STATES = [
   'recover.recovery',
 ] as const;
 
+export const OPTIONAL_CHARACTER_PRESENTATION_STATES = [
+  'attack_recovery.recovery',
+  'parry.startup',
+] as const;
+
 export type CharacterPresentationStateKey = `${PlayerPresentationAction}.${PlayerPresentationPhase}`;
 export type RequiredCharacterPresentationStateKey = (typeof REQUIRED_CHARACTER_PRESENTATION_STATES)[number];
+type OptionalCharacterPresentationStateKey = (typeof OPTIONAL_CHARACTER_PRESENTATION_STATES)[number];
+type CharacterPresentationStateClips = Record<RequiredCharacterPresentationStateKey, string>
+  & Partial<Record<OptionalCharacterPresentationStateKey, string>>;
 
 export interface SpriteAnimationClip {
   frames: number[];
@@ -59,7 +67,7 @@ export interface CharacterPresentationAnimationSet {
   atlas: CharacterPresentationAtlas;
   sheets: Record<string, CharacterPresentationAtlas>;
   clips: Record<string, SpriteAnimationClip>;
-  stateClips: Record<RequiredCharacterPresentationStateKey, string>;
+  stateClips: CharacterPresentationStateClips;
 }
 
 export interface CharacterPresentationManifestV1 {
@@ -89,7 +97,10 @@ const ID_PATTERN = /^[a-z0-9_]{2,120}$/;
 const CLIP_ID_PATTERN = /^[a-z0-9_.-]{2,80}$/;
 const ASSET_PATH_PATTERN = /^\/assets\/characters\/[a-z0-9_/-]+\.(?:avif|gif|jpe?g|png|svg|webp)(?:\?[a-zA-Z0-9._=&-]+)?$/;
 const READINESS = new Set<AssetReadiness>(['prototype', 'alpha', 'production']);
-const REQUIRED_STATE_SET = new Set<string>(REQUIRED_CHARACTER_PRESENTATION_STATES);
+const SUPPORTED_STATE_SET = new Set<string>([
+  ...REQUIRED_CHARACTER_PRESENTATION_STATES,
+  ...OPTIONAL_CHARACTER_PRESENTATION_STATES,
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -398,14 +409,14 @@ function parseStateClips(
   value: unknown,
   clips: Record<string, SpriteAnimationClip>,
   issues: CharacterPresentationValidationIssue[],
-): Record<RequiredCharacterPresentationStateKey, string> | null {
+): CharacterPresentationStateClips | null {
   if (!isRecord(value)) {
     issue(issues, 'animationSet.stateClips', 'must be an object.');
     return null;
   }
-  const stateClips: Partial<Record<RequiredCharacterPresentationStateKey, string>> = {};
+  const stateClips: Partial<CharacterPresentationStateClips> = {};
   for (const [state, clipValue] of Object.entries(value).sort(([first], [second]) => first.localeCompare(second))) {
-    if (!REQUIRED_STATE_SET.has(state)) {
+    if (!SUPPORTED_STATE_SET.has(state)) {
       issue(issues, `animationSet.stateClips.${state}`, 'is not a supported presentation state.');
       continue;
     }
@@ -413,15 +424,15 @@ function parseStateClips(
       issue(issues, `animationSet.stateClips.${state}`, 'must reference a declared clip id.');
       continue;
     }
-    stateClips[state as RequiredCharacterPresentationStateKey] = clipValue;
+    stateClips[state as keyof CharacterPresentationStateClips] = clipValue;
   }
   for (const state of REQUIRED_CHARACTER_PRESENTATION_STATES) {
     if (!stateClips[state]) {
       issue(issues, `animationSet.stateClips.${state}`, 'is required.');
     }
   }
-  return Object.keys(stateClips).length === REQUIRED_CHARACTER_PRESENTATION_STATES.length
-    ? stateClips as Record<RequiredCharacterPresentationStateKey, string>
+  return REQUIRED_CHARACTER_PRESENTATION_STATES.every((state) => Boolean(stateClips[state]))
+    ? stateClips as CharacterPresentationStateClips
     : null;
 }
 

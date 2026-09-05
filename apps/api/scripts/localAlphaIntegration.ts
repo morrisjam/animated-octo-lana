@@ -627,7 +627,7 @@ async function run(): Promise<void> {
         VITE_PROFILE_API_BASE: apiBaseUrl,
         VITE_MATCHMAKING_API_BASE: apiBaseUrl,
         VITE_APP_BUILD: releaseSha,
-        VITE_RULESET_VERSION: 'prototype-2026.02',
+        VITE_RULESET_VERSION: 'prototype-2026.09',
         VITE_BALANCE_PROFILE_ID: 'default',
         VITE_LOCAL_RANKED_ROOT_SMOKE: 'false',
         CF_PAGES: '1',
@@ -911,7 +911,7 @@ async function run(): Promise<void> {
           RANKED_ROOT_SMOKE_URL: `${webBaseUrl}/`,
           RANKED_ROOT_BROWSER_SMOKE_TIMEOUT_MS: '180000',
           RANKED_ROOT_EXPECT_BUILD_ID: releaseSha,
-          RANKED_ROOT_EXPECT_RULESET_VERSION: 'prototype-2026.02',
+          RANKED_ROOT_EXPECT_RULESET_VERSION: 'prototype-2026.09',
           RANKED_ROOT_EXPECT_BALANCE_PROFILE_ID: 'default',
           RANKED_ROOT_BROWSER_SMOKE_REPORT_PATH: path.join(
             artifactDir,

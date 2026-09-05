@@ -1,0 +1,17 @@
+:root { color-scheme: dark; font-family: 'Trebuchet MS', sans-serif; color: #c3d5de; background: #01030a; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; }
+canvas { display: block; width: 100vw; height: 100svh; }
+header { position: absolute; top: 30px; left: 36px; pointer-events: none; }
+header p { font-size: 11px; letter-spacing: .12em; }
+h1 { font-family: Georgia, serif; font-weight: normal; font-size: clamp(30px, 4vw, 54px); margin: 10px 0; color: #edf1ed; }
+#status { letter-spacing: 0; color: #9ab4c1; }
+.controls { position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 22px; padding: 16px 24px; background: #040c15ed; border-top: 1px solid #284451; max-width: calc(100vw - 32px); }
+label { display: grid; gap: 7px; font-size: 12px; }
+select, button { background: #10212d; color: #d3e8ef; border: 1px solid #355462; padding: 8px; font: inherit; }
+button, a { white-space: nowrap; font-size: 12px; cursor: pointer; }
+input { accent-color: #86c8d5; max-width: 130px; }
+output { font-size: 10px; color: #89a6b5; }
+a { color: #b9d9e2; }
+.note { position: absolute; bottom: 12px; width: 100%; text-align: center; font-size: 11px; color: #8aa1af; padding: 0 16px; }
+@media (max-width: 700px) { header { top: 10px; left: 16px; } .controls { width: calc(100vw - 24px); gap: 12px; flex-wrap: wrap; padding: 12px; bottom: 65px; } .controls label:first-child { width: 100%; } .note { bottom: 4px; } }

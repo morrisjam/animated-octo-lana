@@ -25,6 +25,81 @@ function rankedMetadata(rating: number, mrPoints: number | null = null): { ranke
   };
 }
 
+function waitingRankedPair(ticketTtlSeconds = 120) {
+  let nowMs = 1_000_000;
+  const queue = createMatchmakingQueueService({
+    now: () => nowMs,
+    ticketTtlSeconds,
+    rankedRatingInitialGap: 100,
+    rankedRatingExpansionPerSecond: 10,
+    rankedRatingMaxGap: 400,
+  });
+  const join = (accountId: string, rating: number) => queue.join({
+    accountId, queueType: 'ranked', regionPreferences: ['eu-west'], playerMetadata: rankedMetadata(rating),
+  });
+  const first = join(ACCOUNT_1, 1200);
+  const second = join(ACCOUNT_2, 1500);
+  assert.equal(first.status, 'queued');
+  assert.equal(second.status, 'queued');
+  return { queue, first, second, join, advance: (ms: number) => { nowMs += ms; } };
+}
+
+test('polling matches waiting ranked tickets when their rating window widens without another join', () => {
+  const { queue, first, second, advance } = waitingRankedPair();
+  advance(19_000);
+  assert.equal(queue.getTicketForAccount(first.ticketId, ACCOUNT_1)?.status, 'queued');
+  advance(1_000);
+  const match = expectMatched(queue.getTicketForAccount(first.ticketId, ACCOUNT_1)!);
+  const peer = expectMatched(queue.getTicketForAccount(second.ticketId, ACCOUNT_2)!);
+  assert.equal(match.matchStart.sessionId, peer.matchStart.sessionId);
+  assert.equal(match.matchStart.diagnostics.matchedGap, 300);
+  assert.equal(queue.getRuntimeSummary().activeSessions, 1);
+});
+
+test('rejoining an existing waiting ticket reevaluates the widened window idempotently', () => {
+  const { queue, first, advance, join } = waitingRankedPair();
+  advance(20_000);
+  const match = expectMatched(join(ACCOUNT_1, 1200));
+  assert.equal(match.ticketId, first.ticketId);
+  assert.equal(join(ACCOUNT_1, 1200).matchStart?.sessionId, match.matchStart.sessionId);
+  assert.equal(queue.getRuntimeSummary().residentTickets, 2);
+  assert.equal(queue.getRuntimeSummary().activeSessions, 1);
+});
+
+test('polling expires tickets before attempting a widened match', () => {
+  const { queue, first, second, advance } = waitingRankedPair(10);
+  advance(20_000);
+  assert.equal(queue.getTicketForAccount(first.ticketId, ACCOUNT_1)?.status, 'closed');
+  assert.equal(queue.getTicketForAccount(second.ticketId, ACCOUNT_2)?.status, 'closed');
+  assert.equal(queue.getRuntimeSummary().activeSessions, 0);
+});
+
+test('a different account cannot trigger matching by polling someone else\'s ticket', () => {
+  const { queue, first, advance } = waitingRankedPair();
+  advance(20_000);
+  assert.equal(queue.getTicketForAccount(first.ticketId, ACCOUNT_3), null);
+  assert.equal(queue.getRuntimeSummary().activeSessions, 0);
+});
+
+test('concurrent polls create exactly one session and the matched snapshot survives restore', async () => {
+  const { queue, first, second, advance } = waitingRankedPair();
+  advance(20_000);
+  // The service mutation is synchronous; route leases serialize restore/mutate/persist across processes.
+  const polls = await Promise.all(Array.from({ length: 40 }, (_, index) => Promise.resolve().then(() => (
+    index % 2 === 0
+      ? queue.getTicketForAccount(first.ticketId, ACCOUNT_1)
+      : queue.getTicketForAccount(second.ticketId, ACCOUNT_2)
+  ))));
+  const sessionIds = new Set(polls.map((ticket) => expectMatched(ticket!).matchStart.sessionId));
+  assert.equal(sessionIds.size, 1);
+  assert.equal(queue.getRuntimeSummary().activeSessions, 1);
+  const restored = createMatchmakingQueueService({ now: () => 1_020_000 });
+  restored.restoreSnapshot(queue.exportSnapshot());
+  assert.equal(restored.getTicketForAccount(first.ticketId, ACCOUNT_1)?.matchStart?.sessionId, [...sessionIds][0]);
+  assert.equal(restored.getTicketForAccount(second.ticketId, ACCOUNT_2)?.matchStart?.sessionId, [...sessionIds][0]);
+  assert.equal(restored.getRuntimeSummary().activeSessions, 1);
+});
+
 test('matches only within same queue type', () => {
   const queue = createMatchmakingQueueService();
 

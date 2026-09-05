@@ -10,6 +10,7 @@
     "theme:contrast-check": "tsx scripts/menu-theme-contrast-check.ts",
     "stage:validate": "tsx scripts/stage-atmosphere-validate.ts",
     "stage:model-validate": "tsx scripts/stage-model-validate.ts",
+    "stage:nebula-smoke": "tsx scripts/nebula-stage-smoke.ts",
     "balance:patch-notes": "tsx scripts/balance-patch-notes.ts",
     "character:new": "tsx scripts/character-package-new.ts",
     "character:validate": "tsx scripts/character-package-validate.ts",

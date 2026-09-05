@@ -4,8 +4,8 @@ import { deriveLivenessResolutionTimeoutMs } from '../src/ops/authoritativeForfe
 import { createRankedProofFixture } from './rankedProofFixture';
 import { assertSafeSmokeTarget } from './smokeTargetGuard';
 
-const BUILD_VERSION = 'prototype-2026.02';
-const RULESET_VERSION = 'prototype-2026.02';
+const BUILD_VERSION = 'prototype-2026.09';
+const RULESET_VERSION = 'prototype-2026.09';
 const BALANCE_PROFILE_ID = 'default';
 
 interface AccountResponse {

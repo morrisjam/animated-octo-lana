@@ -172,7 +172,7 @@ async function joinQueue(
       queueType: 'ranked',
       regionPreferences: ['eu-west'],
       buildVersion: 'webrtc-local-smoke-v1',
-      rulesetVersion: 'prototype-2026.02',
+      rulesetVersion: 'prototype-2026.09',
       balanceProfileId: 'default',
       platform: 'web',
       characterId,

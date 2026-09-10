@@ -28,6 +28,7 @@
     "smoke:local-alpha-turn-integration": "tsx scripts/localAlphaIntegration.ts --with-coturn",
     "deploy:drain-gate": "tsx scripts/deploymentDrainGate.ts",
     "deploy:health-gate": "tsx scripts/deploymentHealthGate.ts",
+    "release:public-check": "tsx scripts/publicReleaseCheck.ts",
     "alpha:config-audit": "tsx scripts/alphaProviderConfigAudit.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test --import tsx \"src/**/*.test.ts\""

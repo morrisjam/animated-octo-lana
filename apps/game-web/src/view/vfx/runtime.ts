@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { resolveCombatVfxPreset } from './presets';
+import { createReadabilityFlashGeometry } from './readabilityGeometry';
+import { COMBAT_READABILITY_PRIORITY } from './readabilityPresets';
 import type {
   CombatVfxEvent,
   VfxFlashPreset,
@@ -14,6 +16,8 @@ const EPSILON = 1e-6;
 type VfxRenderObject = THREE.Mesh | THREE.Line;
 
 interface ActiveCombatVfx {
+  readabilityCue?: CombatVfxEvent['readabilityCue'];
+  playerId?: CombatVfxEvent['playerId'];
   node: VfxRenderObject;
   material: THREE.Material;
   geometry: THREE.BufferGeometry;
@@ -145,17 +149,17 @@ function createTrailNode(event: CombatVfxEvent, preset: VfxTrailPreset): ActiveC
 }
 
 function createFlashNode(event: CombatVfxEvent, preset: VfxFlashPreset): ActiveCombatVfx {
-  const geometry = new THREE.RingGeometry(
-    Math.max(0.05, preset.radius - preset.thickness),
-    Math.max(0.06, preset.radius + preset.thickness),
-    36,
-  );
+  const geometry = createReadabilityFlashGeometry(preset);
   const material = createEffectMaterial(preset.color, preset.startOpacity);
+  if (event.readabilityCue) material.blending = THREE.NormalBlending;
   const node = new THREE.Mesh(geometry, material);
   node.position.set(event.position.x, event.position.y, 0.19);
   node.scale.setScalar(preset.startScale);
+  if (preset.alignToDirection) node.rotation.z = Math.atan2(event.direction.y, event.direction.x);
 
   return {
+    readabilityCue: event.readabilityCue,
+    playerId: event.playerId,
     node,
     material,
     geometry,
@@ -263,6 +267,21 @@ export function emitCombatVfxEvents(
     const preset = resolveCombatVfxPreset(event);
     if (!preset) {
       continue;
+    }
+
+    const existingCue = runtime.active.find((effect) => effect.playerId === event.playerId && effect.readabilityCue);
+    if (event.readabilityCue && existingCue
+      && gameTimeSeconds - existingCue.startTimeSeconds <= 1 / 30
+      && COMBAT_READABILITY_PRIORITY[existingCue.readabilityCue!] > COMBAT_READABILITY_PRIORITY[event.readabilityCue]) {
+      continue;
+    }
+    // A fighter gets one short readability cue, not a stack of overlapping symbols.
+    for (let index = runtime.active.length - 1; index >= 0; index -= 1) {
+      const effect = runtime.active[index];
+      if (event.readabilityCue && effect.playerId === event.playerId && effect.readabilityCue) {
+        disposeEffect(runtime, effect);
+        runtime.active.splice(index, 1);
+      }
     }
 
     if (preset.particles) {

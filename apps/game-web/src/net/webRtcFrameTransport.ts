@@ -689,6 +689,8 @@ export class WebRtcFrameTransport implements OnlineFrameTransport {
     this.channel = channel;
     this.recoverableDisconnectReason = null;
     this.sentConfirmedThroughByEpoch.clear();
+    // The replacement must advertise its own confirmed prefix, not the old channel's.
+    this.peerConfirmedThroughByEpoch.clear();
     this.attachChannelListeners();
   }
 

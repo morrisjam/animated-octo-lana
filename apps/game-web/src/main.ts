@@ -3,6 +3,8 @@ import { createEmptyPlayerInput } from './input/frame';
 import { getOnlineLocalInput } from './net/onlineLocalInput';
 import { createLazyRankedQueueClient } from './net/lazyRankedQueueClient';
 import { toCombatAudioEventType } from './audio/combatEventMapping';
+import { createCombatReadabilityTracker } from './view/vfx/readabilityTracker';
+import { clearCombatVfxRuntime, emitCombatVfxEvents } from './view/vfx/runtime';
 import { createLazyGameplayInput } from './input/lazyGameplay';
 import type { BrowserControllerRuntime } from './view/controllerUi/browserRuntime';
 import type { BrowserPerformanceRuntime } from './view/performance/browserRuntime';
@@ -419,12 +421,12 @@ const sceneContext = createScene(canvas, {
     });
     const calloutEvent = event.type === 'launch'
       ? 'launch_hit'
-      : event.type === 'parry'
+      : event.type === 'parry' && event.readabilityCue === 'parry_success'
         ? 'parry_success'
         : event.type === 'dunk'
           ? 'dunk_hit'
           : null;
-    if (calloutEvent) {
+    if (calloutEvent && !onlineMatchContext && !rollbackSession) {
       const callout = voiceCalloutSystem.trigger({
         playerId: event.playerId,
         characterId: event.characterId,
@@ -4101,7 +4103,16 @@ function buildOfflineAiControllersForCurrentMode(): Partial<Record<PlayerId, AiC
   };
 }
 
+const combatReadabilityTracker = createCombatReadabilityTracker();
+
+function resetCombatPresentation(): void {
+  combatReadabilityTracker.reset();
+  clearCombatVfxRuntime(sceneContext.combatVfxRuntime);
+  sceneContext.lastRenderSnapshot = null;
+}
+
 function resetRoundState(options: { advanceOfflineRound?: boolean } = {}): void {
+  resetCombatPresentation();
   const completedAiRoundReplay = liveAiRoundReplayRecorder?.buildPayload() ?? null;
   if (completedAiRoundReplay) {
     latestAiRoundReplayPayload = completedAiRoundReplay;
@@ -4358,6 +4369,7 @@ function beginMode(
 }
 
 function returnToHome(): void {
+  resetCombatPresentation();
   startupMenuGuardArmed = false;
   balanceLabSampleTargetFrames = null;
   persistRollbackDiagnostics('return_home');
@@ -5846,6 +5858,7 @@ function beginReplayReview(
   returnPhase: ReplayReturnPhase = 'home',
   comparisonSession: ReplayComparisonReviewSession | null = null,
 ): void {
+  resetCombatPresentation();
   replayReviewData = review;
   replayReviewSourceLabel = sourceLabel;
   replayComparisonReviewSession = comparisonSession;
@@ -5977,6 +5990,7 @@ function selectReplayComparisonVariant(variant: BalanceReplayVariant): void {
     return;
   }
   session.activeVariant = variant;
+  resetCombatPresentation();
   replayReviewData = sample.data;
   replayReviewSourceLabel = sample.sourceLabel;
   replayFrameIndex = Math.max(
@@ -6008,6 +6022,7 @@ function exitReplayReview(): void {
     return;
   }
   const returnPhase = replayReturnPhase;
+  resetCombatPresentation();
   replayViewer.hide();
   replayReviewData = null;
   replayFrameIndex = 0;
@@ -6055,6 +6070,7 @@ function setReplayFrameIndex(frameIndex: number): void {
     return;
   }
   const clamped = Math.max(0, Math.min(replayReviewData.totalFrames - 1, Math.floor(frameIndex)));
+  if (clamped !== replayFrameIndex) resetCombatPresentation();
   replayFrameIndex = clamped;
   replayViewer.updatePlayback(replayFrameIndex, replayPaused, replaySpeedOptions[replaySpeedIndex]);
 }
@@ -6630,6 +6646,7 @@ function updateOnlineRoundResolution(
       return true;
     }
     recordOnlineRollbackEvidence(context, remoteInputBatch.rollbackFrames);
+    if (remoteInputBatch.rollbackFrames > 0) resetCombatPresentation();
     state = rollbackSession.getStateSnapshot();
     try {
       recordSynchronizedOnlineReplayFrames(context, rollbackSession);
@@ -6755,6 +6772,7 @@ function tick(nowMs: number): void {
   const simulationElapsedSeconds = localRankedRootSmokeConfig.enabled && onlineMatchContext
     ? elapsedSeconds * localRankedRootSmokeConfig.simulationRate
     : elapsedSeconds;
+  if (onlineMatchContext || rollbackSession) combatReadabilityTracker.reset();
   if (!pauseMenu.isPaused() && appPhase === 'playing' && !onlineSimulationPaused) {
     accumulator = Math.min(accumulator + simulationElapsedSeconds, maxAccumulatedTime);
   } else {
@@ -6848,6 +6866,7 @@ function tick(nowMs: number): void {
             });
           }
           if (rollbackFrames > 0) {
+            resetCombatPresentation();
             recordRuntimeDiagnosticEvent('rollback_applied', simulationFrame, null, rollbackFrames);
           }
           if (runtimeConfig.features.debugToolsEnabled) {
@@ -6936,6 +6955,7 @@ function tick(nowMs: number): void {
             });
           }
           if (rollbackResult.rollbackFrames > 0) {
+            resetCombatPresentation();
             recordRuntimeDiagnosticEvent(
               'rollback_applied',
               simulationFrame,
@@ -6954,12 +6974,19 @@ function tick(nowMs: number): void {
           acceptedActionStarts = [];
           launchClashes = [];
           controlReturnResets = [];
+          // Only local, non-rollback simulation steps can announce exact outcome cues.
+          combatReadabilityTracker.recordFrame(state);
           step(state, frameInput, fixedDt, {
             onActionStart: (event) => acceptedActionStarts?.push(event),
             onLaunchClash: (event) => launchClashes?.push(event),
             onControlReturnReset: (event) => controlReturnResets?.push(event),
           });
           recordRuntimeActionStarts(acceptedActionStarts ?? []);
+          emitCombatVfxEvents(
+            sceneContext.combatVfxRuntime,
+            combatReadabilityTracker.recordFrame(state, acceptedActionStarts),
+            state.gameTime,
+          );
         }
         aiDecisionTelemetry.recordFrame(simulationFrame, aiDecisions);
         matchTelemetry.recordFrame(

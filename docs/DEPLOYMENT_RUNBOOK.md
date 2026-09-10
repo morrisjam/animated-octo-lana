@@ -1,6 +1,20 @@
 # Deployment Runbook
 
-Last updated: 2026-07-13
+Last updated: 2026-09-05
+
+## Low-cost public release check
+
+Before attempting a hosted match, compare the public client and API identities with the intended commit:
+
+```powershell
+npm.cmd run release:public-check -- --expected-sha <full-40-character-commit-sha>
+```
+
+Use `npm` instead of `npm.cmd` on macOS/Linux. This command makes only two unauthenticated GET requests: web `/release.json` and API `/health`. It never calls database readiness, accounts, matchmaking, or admin routes. The current API health implementation is database-free. Each request is bounded, redirects are rejected, and web metadata must use `Cache-Control: no-store`. Optional `--web-origin` and `--api-origin` values must be HTTPS origins, except explicit loopback targets may use HTTP. The report is written to `apps/api/build-artifacts/public-release-check/report.json`.
+
+A plain `{"ok":true}` API response is liveness only: an absent release SHA is an unverified deployment, not a pass. Even matching SHAs do not prove ruleset environment compatibility, database readiness, or online alpha readiness. The authenticated deployment gate below is still required before opening matchmaking.
+
+The September candidate uses `prototype-2026.09`. The environment examples below describe the intended coordinated release configuration, not a claim that the hosted dashboards already contain these values. Update client and server overrides together during a gated promotion; do not expose the new client against an unverified older API.
 
 ## Live stack inventory
 
@@ -45,7 +59,7 @@ VITE_APP_ENV=production
 VITE_PLATFORM=web
 VITE_PROFILE_API_BASE=https://api.gravitywell.space
 VITE_MATCHMAKING_API_BASE=https://api.gravitywell.space
-VITE_RULESET_VERSION=prototype-2026.02
+VITE_RULESET_VERSION=prototype-2026.09
 VITE_BALANCE_PROFILE_ID=default
 VITE_FEATURE_ONLINE=true
 VITE_FEATURE_RANKED=true
@@ -123,7 +137,7 @@ MATCHMAKING_ACCESS_MODE=allowlist
 MATCHMAKING_ALPHA_ACCOUNT_IDS=<comma_separated_alpha_account_uuids>
 MATCHMAKING_ALPHA_BUILD_VERSIONS=<exact_release_sha>,<known_good_rollback_sha>
 MATCHMAKING_MAX_RESIDENT_TICKETS=64
-RANKED_SUPPORTED_RULESET_VERSIONS=prototype-2026.02
+RANKED_SUPPORTED_RULESET_VERSIONS=prototype-2026.09
 MATCHMAKING_SNAPSHOT_INTERVAL_MS=5000
 MATCHMAKING_RUNTIME_NAMESPACE=<canary_or_production_matching_deployment_environment>
 MATCHMAKING_RUNTIME_LOCK_TIMEOUT_MS=5000

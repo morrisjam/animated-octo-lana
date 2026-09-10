@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { PlayerFrameInput } from '../sim/types';
 import {
   RecoverableWebRtcTransport,
@@ -97,6 +97,43 @@ function input(): PlayerFrameInput {
 }
 
 describe('RecoverableWebRtcTransport', () => {
+  test.each([
+    ['prepare', false], ['prepare', true], ['connect', false], ['connect', true], ['validate', false], ['validate', true],
+  ] as const)('closing during %s suppresses late recovery (reject=%s)', async (boundary, rejectLate) => {
+    let resolve!: (value?: any) => void;
+    let reject!: (error: Error) => void;
+    const gate = new Promise<any>((yes, no) => { resolve = yes; reject = no; });
+    const initial = session();
+    const replacement = session();
+    const prepareRecovery = vi.fn(() => boundary === 'prepare' ? gate : Promise.resolve());
+    const connect = vi.fn(() => boundary === 'connect' ? gate : Promise.resolve(replacement));
+    const validateReplacement = vi.fn(() => boundary === 'validate' ? gate : Promise.resolve());
+    const onRecovered = vi.fn();
+    const onTerminalFailure = vi.fn();
+    const wait = vi.fn(async () => {});
+    const transport = new RecoverableWebRtcTransport({
+      initialSession: initial, localAccountId: 'A', remoteAccountId: 'B',
+      prepareRecovery, connect, validateReplacement, onRecovered, onTerminalFailure, wait, maxAttempts: 2,
+    });
+    transport.requestRecovery(new Error('connection lost'));
+    const atBoundary = { prepare: prepareRecovery, connect, validate: validateReplacement }[boundary];
+    await vi.waitFor(() => expect(atBoundary).toHaveBeenCalledTimes(1));
+    transport.close();
+    const closed = transport.getSnapshot();
+    if (rejectLate) reject(new Error('obsolete failure'));
+    else resolve(boundary === 'connect' ? replacement : undefined);
+    await transport.waitForRecovery();
+    expect(transport.getSnapshot()).toEqual(closed);
+    expect(onRecovered).not.toHaveBeenCalled();
+    expect(onTerminalFailure).not.toHaveBeenCalled();
+    expect(wait).not.toHaveBeenCalled();
+    if (boundary === 'prepare') expect(connect).not.toHaveBeenCalled();
+    if (boundary === 'validate' || (boundary === 'connect' && !rejectLate)) expect(replacement.closeCalls).toBe(1);
+    await expect(transport.pollFrames(0, -1)).rejects.toBeInstanceOf(WebRtcFrameTransportClosedError);
+    transport.close();
+    expect(initial.closeCalls).toBe(1);
+  });
+
   test('automatically replaces a closed channel and resumes on preserved transport state', async () => {
     const initialChannel = new FakeChannel();
     const replacementChannel = new FakeChannel();

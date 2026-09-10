@@ -258,6 +258,7 @@ export class RecoverableWebRtcTransport implements OnlineFrameTransport {
       } catch (error) {
         preparedChannel?.discard();
         nextSession?.close();
+        if (!this.isCurrentRecovery(generation)) return;
         finalError = error instanceof Error ? error : new Error(String(error));
         this.lastError = finalError;
         if (attempt < this.maxAttempts && this.isCurrentRecovery(generation)) {

@@ -24,9 +24,48 @@ export interface ResolvedActionReadability {
 }
 
 export interface PlayerActivityReadability {
-  id: ActionReadabilityId | 'helpless' | 'recover' | 'idle';
+  id: ActionReadabilityId | 'helpless' | 'recover' | 'attack_recovery' | 'idle';
   label: string;
   color: string;
+}
+
+export type PlayerIndicatorId = ActionReadabilityId | 'vulnerability';
+
+export interface PlayerIndicatorPresentation {
+  indicatorId: PlayerIndicatorId;
+  phase: PlayerPresentationPhase;
+  color: string;
+  opacity: number;
+  scale: number;
+}
+
+/** Phase-local presentation only: global time must not restart or pulse combat tells. */
+export function resolvePlayerIndicatorPresentation(
+  player: PlayerRenderSnapshot,
+  _gameTime = 0,
+): PlayerIndicatorPresentation | null {
+  if (player.helpless > 0 || player.presentationAction === 'helpless') {
+    return { indicatorId: 'vulnerability', phase: 'sustain', color: '#ff9b7a', opacity: 0.68, scale: 1.08 };
+  }
+  if (player.recovering > 0 || player.presentationAction === 'recover'
+    || player.presentationAction === 'attack_recovery') {
+    return { indicatorId: 'vulnerability', phase: 'recovery', color: '#a8b4ca', opacity: 0.46, scale: 1.04 };
+  }
+  const action = resolvePlayerActionReadability(player);
+  if (!action) return null;
+  const phase = action.phase;
+  const elapsed = Number.isFinite(player.presentationElapsedSeconds)
+    ? Math.max(0, player.presentationElapsedSeconds!) : 0.08;
+  const settle = Math.min(1, elapsed / 0.08);
+  const opacity = phase === 'startup' ? 0.58 + 0.14 * settle
+    : phase === 'recovery' ? 0.42 : phase === 'sustain' ? 0.64 : 0.84;
+  return {
+    indicatorId: action.definition.id,
+    phase,
+    color: action.definition.color,
+    opacity,
+    scale: phase === 'startup' ? 0.94 + 0.04 * settle : phase === 'recovery' ? 1.04 : 1,
+  };
 }
 
 export const ACTION_READABILITY_DEFINITIONS: readonly ActionReadabilityDefinition[] = [
@@ -58,7 +97,7 @@ export function resolvePlayerActionReadability(
 ): ResolvedActionReadability | null {
   switch (player.presentationAction) {
     case 'break':
-      return resolveAction('launch_break', 'active');
+      return resolveAction('launch_break', player.presentationPhase);
     case 'parry':
       return resolveAction('parry', player.presentationPhase);
     case 'dunk':
@@ -73,6 +112,7 @@ export function resolvePlayerActionReadability(
         : resolveAction('boost', 'sustain');
     case 'helpless':
     case 'recover':
+    case 'attack_recovery':
       return null;
     case 'idle':
     default:
@@ -126,6 +166,9 @@ export function resolvePlayerActivityReadability(
   }
   if (player.presentationAction === 'recover' || player.recovering > 0) {
     return { id: 'recover', label: 'Recovery', color: '#a8b4ca' };
+  }
+  if (player.presentationAction === 'attack_recovery') {
+    return { id: 'attack_recovery', label: 'Attack recovery / VULNERABLE', color: '#a8b4ca' };
   }
   return { id: 'idle', label: 'Idle', color: '#73829f' };
 }

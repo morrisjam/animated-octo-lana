@@ -117,10 +117,11 @@ export class RankedQueueClient<T extends RankedQueueTicket, S> {
     if (!sessionId) this.freshMatch = null;
     if (sessionId && sessionId === this.deliveredSessionId) return;
     this.options.onState(ticket, null);
-    if (!sessionId) return;
+    if (!sessionId || generation !== this.generation) return;
     const session = await this.options.readSession(sessionId, ticket.accountId);
     if (generation !== this.generation) return;
     this.options.onState(ticket, session);
+    if (generation !== this.generation) return;
     const fresh = this.freshMatch?.sessionId === sessionId ? this.freshMatch : null;
     this.options.onMatched(ticket, session, {
       previousTicket: fresh?.previousTicket ?? previous,

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import {
   decideMatchedTicketBootstrap,
   installOnlineSessionLifecycleListeners,
@@ -77,6 +77,41 @@ function createTarget(sessionId = 'session-1'): OnlineSessionLifecycleTarget {
 }
 
 describe('OnlineSessionLifecycleController', () => {
+  test.each([false, true])('a rematch ignores the old reconnect completion (reject=%s)', async (rejectOld) => {
+    const loops: FakeHeartbeatLoop[] = [];
+    let release!: () => void;
+    let reject!: (error: Error) => void;
+    const oldReconnect = new Promise<void>((yes, no) => { release = yes; reject = no; });
+    const reconnect = vi.fn(() => oldReconnect);
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+    const controller = new OnlineSessionLifecycleController({
+      heartbeat: async () => {}, disconnect: async () => {}, reconnect, onEvent, onError,
+      isDisconnectedError: () => false,
+      createHeartbeatLoop: (options) => {
+        const loop = new FakeHeartbeatLoop(options);
+        loops.push(loop);
+        return loop;
+      },
+    });
+    controller.start(createTarget('old-match'));
+    await controller.suspend('pagehide');
+    const resuming = controller.resume('visibility_visible');
+    await vi.waitFor(() => expect(reconnect).toHaveBeenCalledTimes(1));
+    controller.start(createTarget('rematch'));
+    onEvent.mockClear();
+    if (rejectOld) reject(new Error('old reconnect failed'));
+    else release();
+    await resuming;
+    expect(controller.getSnapshot()).toMatchObject({ sessionId: 'rematch', phase: 'active', heartbeatRunning: true });
+    expect(loops[0].isRunning()).toBe(false);
+    expect(loops[1].isRunning()).toBe(true);
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    controller.clear();
+    expect(loops.every((loop) => !loop.isRunning())).toBe(true);
+  });
+
   test('deduplicates suspend/resume events and restarts heartbeat after reconnect', async () => {
     let heartbeatCalls = 0;
     let disconnectCalls = 0;

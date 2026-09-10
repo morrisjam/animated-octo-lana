@@ -32,6 +32,7 @@ function addPlayerEvent(
   playerId: PlayerId,
   snapshot: RenderSnapshot,
   direction: Vec2,
+  readabilityCue?: CombatVfxEvent['readabilityCue'],
 ): void {
   const player = snapshot.players[playerId];
   events.push({
@@ -40,6 +41,7 @@ function addPlayerEvent(
     characterId: player.characterId,
     position: { x: player.pos.x, y: player.pos.y },
     direction,
+    ...(readabilityCue ? { readabilityCue } : {}),
   });
 }
 
@@ -53,6 +55,20 @@ function collectPlayerEvents(previous: RenderSnapshot, current: RenderSnapshot, 
     const currentOpponent = current.players[opponentId];
     const moveDelta = subtractVec2(currentPlayer.pos, previousPlayer.pos);
     const direction = normaliseDirection(moveDelta);
+    const towardOpponent = normaliseDirection(subtractVec2(currentOpponent.pos, currentPlayer.pos));
+
+    if (current.winner === null && currentPlayer.presentationAction === 'launch'
+      && currentPlayer.presentationPhase === 'startup'
+      && (previousPlayer.presentationAction !== 'launch' || previousPlayer.presentationPhase !== 'startup')) {
+      addPlayerEvent(events, 'launch', playerId, current, towardOpponent, 'launch_startup');
+    }
+    if (current.winner === null && currentPlayer.presentationAction === 'attack_recovery'
+      && previousPlayer.presentationAction !== 'attack_recovery'
+      && (previousPlayer.presentationAction === 'launch' || previousPlayer.presentationAction === 'dunk'
+        || previousPlayer.presentationAction === 'special')) {
+      // Recovery is observable; a miss is not. Exact whiffs use the fixed-step evidence tracker.
+      addPlayerEvent(events, previousPlayer.presentationAction, playerId, current, towardOpponent, 'attack_recovery');
+    }
 
     const launchTriggered = hasFlashRise(previousPlayer.launchFlash, currentPlayer.launchFlash);
     const opponentLaunchTriggered = hasFlashRise(previousOpponent.launchFlash, currentOpponent.launchFlash);
@@ -69,12 +85,13 @@ function collectPlayerEvents(previous: RenderSnapshot, current: RenderSnapshot, 
         normaliseDirection(subtractVec2(currentPlayer.pos, currentOpponent.pos)),
       );
     } else if (launchTriggered) {
-      addPlayerEvent(events, 'launch', playerId, current, direction);
+      addPlayerEvent(events, 'launch', playerId, current, direction,
+        currentPlayer.helpless > 0 ? 'launched_vulnerable' : undefined);
     }
 
     const parryTriggered = hasFlashRise(previousPlayer.parryFlash, currentPlayer.parryFlash);
     if (parryTriggered) {
-      addPlayerEvent(events, 'parry', playerId, current, direction);
+      addPlayerEvent(events, 'parry', playerId, current, towardOpponent, 'parry_attempt');
     }
 
     const dunkTriggered = hasFlashRise(previousPlayer.dunkFlash, currentPlayer.dunkFlash);
@@ -88,7 +105,7 @@ function collectPlayerEvents(previous: RenderSnapshot, current: RenderSnapshot, 
     }
     const breakTriggered = hasFlashRise(previousPlayer.breakFlash, currentPlayer.breakFlash);
     if (breakTriggered) {
-      addPlayerEvent(events, 'break', playerId, current, direction);
+      addPlayerEvent(events, 'break', playerId, current, direction, 'break_spent');
     }
     const combatActionResolved = launchTriggered || clashTriggered || parryTriggered || dunkTriggered || specialTriggered || breakTriggered;
     const inBoostEligibleState = currentPlayer.helpless <= 0 && currentPlayer.recovering <= 0 && currentPlayer.parry <= 0;
@@ -133,7 +150,7 @@ export function extractCombatVfxEvents(previous: RenderSnapshot | null, current:
   if (!previous) {
     return [];
   }
-  if (current.gameTime + EPSILON < previous.gameTime) {
+  if (current.gameTime <= previous.gameTime + EPSILON) {
     return [];
   }
 

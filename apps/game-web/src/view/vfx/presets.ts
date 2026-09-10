@@ -1,4 +1,5 @@
 import { CHARACTER_BY_ID } from '../../sim/characters';
+import { COMBAT_READABILITY_PRESETS } from './readabilityPresets';
 import type { CombatVfxEvent, CombatVfxEventType, CombatVfxPresetMap } from './types';
 
 const ACTION_BURST_FLIPBOOK = {
@@ -469,12 +470,14 @@ export function hasCharacterVfxProfile(profileId: string): boolean {
 }
 
 export function resolveCombatVfxPresetId(event: CombatVfxEvent): string {
+  if (event.readabilityCue) return `readability.${event.readabilityCue}`;
   const profileId = CHARACTER_BY_ID[event.characterId]?.visuals.vfxProfileId;
   const profileOverride = profileId ? CHARACTER_VFX_EVENT_OVERRIDES[profileId]?.[event.type] : undefined;
   return profileOverride ?? COMBAT_VFX_EVENT_BINDINGS[event.type];
 }
 
 export function resolveCombatVfxPreset(event: CombatVfxEvent) {
+  if (event.readabilityCue) return COMBAT_READABILITY_PRESETS[event.readabilityCue];
   const presetId = resolveCombatVfxPresetId(event);
   return COMBAT_VFX_PRESET_LIBRARY[presetId] ?? COMBAT_VFX_PRESET_LIBRARY[COMBAT_VFX_EVENT_BINDINGS[event.type]];
 }

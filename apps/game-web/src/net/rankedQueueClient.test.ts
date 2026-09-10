@@ -38,6 +38,41 @@ function bootstrapDecision(options: ReturnType<typeof fixture>['options']) {
 }
 
 describe('ranked queue lifecycle', () => {
+  test.each(['ticket', 'session'] as const)('cancellation from the %s state observer prevents match bootstrap', async (boundary) => {
+    const { client, options } = fixture();
+    await client.join('A');
+    let leaving: Promise<void> | undefined;
+    options.onState.mockImplementation((ticket, session) => {
+      if (ticket?.status === 'matched' && (boundary === 'ticket' || session)) leaving = client.cancel();
+    });
+    await client.refresh('A');
+    await leaving;
+    expect(options.onMatched).not.toHaveBeenCalled();
+    if (boundary === 'ticket') expect(options.readSession).not.toHaveBeenCalled();
+    expect(options.onState).toHaveBeenLastCalledWith(null, null);
+    expect(options.leave).toHaveBeenCalledExactlyOnceWith('ticket-a', 'A');
+  });
+
+  test.each(['readTicket', 'readSession'] as const)('a cancelled delayed match at %s cannot poison the next queue generation', async (boundary) => {
+    const { client, options } = fixture();
+    await client.join('A');
+    const delayed = deferred<any>();
+    options[boundary].mockReturnValueOnce(delayed.promise);
+    const oldRefresh = client.refresh('A');
+    await vi.waitFor(() => expect(options[boundary]).toHaveBeenCalled());
+    const leaving = client.cancel();
+    const nextTicket = { ...matched, ticketId: 'ticket-b', matchStart: { sessionId: 'session-b' }, joinDisposition: 'created' as const };
+    options.join.mockResolvedValueOnce(nextTicket);
+    options.readSession.mockResolvedValueOnce({ ...session, sessionId: 'session-b' });
+    const rematch = client.join('A');
+    delayed.resolve(boundary === 'readTicket' ? matched : session);
+    await Promise.all([oldRefresh, leaving, rematch]);
+    expect(options.onMatched).toHaveBeenCalledTimes(1);
+    expect(options.onMatched.mock.lastCall?.[0]).toEqual(nextTicket);
+    expect(bootstrapDecision(options)).toBe('start_fresh');
+    expect(options.leave).toHaveBeenCalledExactlyOnceWith('ticket-a', 'A');
+  });
+
   test.each(['refresh', 'join'] as const)('retries failed session lookup through %s without losing fresh-match evidence', async (retry) => {
     const { client, options } = fixture();
     await client.join('A');

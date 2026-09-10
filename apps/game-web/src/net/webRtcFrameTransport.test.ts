@@ -592,6 +592,31 @@ describe('WebRtcFrameTransport', () => {
     })]);
   });
 
+  test('replacement channels require fresh peer confirmation without losing received input', async () => {
+    const { alice, bob, aliceChannel, bobChannel } = transportPair({
+      alice: { recoverOnChannelFailure: true }, bob: { recoverOnChannelFailure: true },
+    });
+    await deliverBatchAndAck(bob.submitFrames([frame(0, 0, 0.5)]), bobChannel, aliceChannel);
+    await bob.confirmFrames(0, 12);
+    bobChannel.deliverNext();
+    expect((await alice.pollFrames(0, -1)).peerConfirmedThrough).toBe(12);
+    // Keep one old-channel confirmation queued until after replacement.
+    await bob.confirmFrames(0, 13);
+    aliceChannel.close();
+    const [nextAlice, nextBob] = linkedChannels();
+    alice.replaceChannel(nextAlice);
+    bob.replaceChannel(nextBob);
+    bobChannel.deliverNext();
+    const recovered = await alice.pollFrames(0, -1);
+    expect(recovered.frames).toHaveLength(1);
+    expect(recovered.peerConfirmedThrough).toBe(-1);
+    await bob.confirmFrames(0, 0);
+    nextBob.deliverNext();
+    expect((await alice.pollFrames(0, -1)).peerConfirmedThrough).toBe(0);
+    alice.close();
+    bob.close();
+  });
+
   test('rejects explicitly unordered or unreliable channel adapters', () => {
     const [unordered] = linkedChannels();
     unordered.ordered = false;

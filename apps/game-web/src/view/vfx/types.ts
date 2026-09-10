@@ -19,7 +19,14 @@ export interface CombatVfxEvent {
   position: Vec2;
   direction: Vec2;
   projectileVisualId?: string;
+  readabilityCue?: CombatReadabilityCueId;
 }
+
+export type CombatReadabilityCueId = 'launch_startup' | 'launched_vulnerable'
+  | 'attack_recovery' | 'attack_whiff' | 'parry_attempt' | 'parry_success'
+  | 'break_spent' | 'break_ready';
+
+export type VfxFlashShape = 'ring' | 'arc' | 'chevron' | 'brackets' | 'diamond' | 'broken_ring' | 'ticks';
 
 export interface VfxParticlePreset {
   color: string;
@@ -51,6 +58,8 @@ export interface VfxTrailPreset {
 
 export interface VfxFlashPreset {
   color: string;
+  shape?: VfxFlashShape;
+  alignToDirection?: boolean;
   radius: number;
   thickness: number;
   lifetimeSeconds: number;

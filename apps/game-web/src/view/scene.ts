@@ -5,6 +5,8 @@ import { DEFAULT_CHARACTER_LOADOUT } from '../sim/characters';
 import { createCharacterVisualHandle, type CharacterVisualHandle } from './characterVisual';
 import { createCombatVfxRuntime, type CombatVfxRuntime } from './vfx/runtime';
 import type { CombatVfxEvent, VfxSoundCuePreset } from './vfx/types';
+import { createReadabilityFlashGeometry } from './vfx/readabilityGeometry';
+import { COMBAT_READABILITY_PRESETS } from './vfx/readabilityPresets';
 import {
   DEFAULT_STAGE_ATMOSPHERE_ID,
   resolveStageAtmosphere,
@@ -31,6 +33,7 @@ import {
   ACTION_READABILITY_BY_ID,
   ACTION_READABILITY_DEFINITIONS,
   type ActionReadabilityId,
+  type PlayerIndicatorId,
 } from './actionReadability';
 
 const MIN_RENDER_PIXEL_RATIO = 0.25;
@@ -38,7 +41,7 @@ const MAX_RENDER_PIXEL_RATIO = 2;
 const CLASSIC_WORMHOLE_EFFECT_ID = 'wormhole_v1';
 const LUMINOUS_WORMHOLE_EFFECT_ID = 'wormhole_luminous_v2';
 
-type PlayerIndicatorMeshes = Record<ActionReadabilityId, THREE.Group>;
+type PlayerIndicatorMeshes = Record<PlayerIndicatorId, THREE.Group>;
 
 interface WormholeBackdrop {
   group: THREE.Group;
@@ -773,13 +776,25 @@ function createIndicator(scene: THREE.Scene, id: ActionReadabilityId): THREE.Gro
   return group;
 }
 
-function createPlayerIndicatorSet(scene: THREE.Scene): PlayerIndicatorMeshes {
-  return Object.fromEntries(
+export function createPlayerIndicatorSet(scene: THREE.Scene): PlayerIndicatorMeshes {
+  const indicators = Object.fromEntries(
     ACTION_READABILITY_DEFINITIONS.map((definition) => [
       definition.id,
       createIndicator(scene, definition.id),
     ]),
   ) as PlayerIndicatorMeshes;
+  const vulnerability = new THREE.Group();
+  vulnerability.name = 'action-indicator-vulnerability';
+  vulnerability.visible = false;
+  vulnerability.userData.motion = [0, 0];
+  const material = createIndicatorMaterial('#ff9b7a');
+  material.blending = THREE.NormalBlending;
+  vulnerability.add(new THREE.Mesh(createReadabilityFlashGeometry({
+    ...COMBAT_READABILITY_PRESETS.launched_vulnerable.flash!, radius: 4.45, thickness: 0.12,
+  }), material));
+  scene.add(vulnerability);
+  indicators.vulnerability = vulnerability;
+  return indicators;
 }
 
 function createPlayerIndicators(scene: THREE.Scene): PlayersById<PlayerIndicatorMeshes> {

@@ -2,6 +2,7 @@ import type { RenderSnapshot } from '../sim/types';
 import { fingerprintCharacterBalanceOverrides, type CharacterBalanceOverrides } from '../sim/characterBalance';
 import type { MatchTelemetrySummary } from '../sim/matchTelemetry';
 import { buildTrainingFrameDataModel } from './trainingFrameData';
+import { COMBAT_READABILITY_LEGEND, COMBAT_READABILITY_PRESETS } from './vfx/readabilityPresets';
 import type { InputHistoryView } from './inputHistory';
 import {
   ACTION_READABILITY_DEFINITIONS,
@@ -147,7 +148,7 @@ export function createHud(options: {
 
   const actionLegend = document.createElement('div');
   actionLegend.className = 'action-readability-panel';
-  actionLegend.setAttribute('aria-label', 'Action halo key and live fighter actions');
+  actionLegend.setAttribute('aria-label', 'Action colors, outcome shapes, and live fighter actions');
   actionLegend.hidden = true;
   actionLegend.innerHTML = `
     <div class="action-readability-title">Action halo key</div>
@@ -159,6 +160,14 @@ export function createHud(options: {
       ${ACTION_READABILITY_DEFINITIONS.map((definition) => `
         <span class="action-readability-key-item" data-action="${definition.id}" style="--action-color:${definition.color}">
           <span class="action-readability-swatch" aria-hidden="true"></span><span>${definition.label}</span>
+        </span>
+      `).join('')}
+    </div>
+    <div class="action-readability-title">Short cue shapes</div>
+    <div class="action-readability-key">
+      ${COMBAT_READABILITY_LEGEND.map((item) => `
+        <span class="action-readability-key-item" data-cue="${item.cue}">
+          <svg width="16" height="16" viewBox="-5 -5 10 10" fill="none" stroke="${COMBAT_READABILITY_PRESETS[item.cue].flash!.color}" stroke-width="0.8" aria-hidden="true"><path d="${item.path}"/></svg><span>${item.label}</span>
         </span>
       `).join('')}
     </div>

@@ -1,8 +1,6 @@
 import * as THREE from 'three';
 import type {
   PlayerId,
-  PlayerPresentationPhase,
-  PlayerRenderSnapshot,
   RenderSnapshot,
 } from '../sim/types';
 import type { SceneContext } from './scene';
@@ -28,8 +26,7 @@ import {
 } from './stagePresentation';
 import { disposeStageModelRuntime } from './stageModelRuntime';
 import {
-  resolvePlayerActionReadability,
-  type ActionReadabilityId,
+  resolvePlayerIndicatorPresentation,
 } from './actionReadability';
 import { cameraDampingAlpha, fitCombatCameraDistance, syncCameraTrackToWorld } from './cameraTracking';
 
@@ -168,6 +165,7 @@ function setIndicatorState(
   opacity: number,
   scale: number,
   rotation: number,
+  color: string,
 ): void {
   const visible = opacity > 0.01;
   indicator.visible = visible;
@@ -181,58 +179,12 @@ function setIndicatorState(
   indicator.traverse((child) => {
     if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshBasicMaterial) {
       child.material.opacity = THREE.MathUtils.clamp(opacity, 0, 1);
+      child.material.color.set(color);
     }
   });
 }
 
-function resolveIndicatorPulse(
-  phase: PlayerPresentationPhase,
-  gameTime: number,
-): { opacity: number; scale: number } {
-  switch (phase) {
-    case 'startup': {
-      const pulse = 0.5 + Math.sin(gameTime * 18) * 0.5;
-      return { opacity: 0.68 + pulse * 0.24, scale: 0.92 + pulse * 0.12 };
-    }
-    case 'active': {
-      const pulse = 0.5 + Math.sin(gameTime * 11) * 0.5;
-      return { opacity: 0.84 + pulse * 0.12, scale: 1 + pulse * 0.05 };
-    }
-    case 'sustain': {
-      const pulse = 0.5 + Math.sin(gameTime * 6) * 0.5;
-      return { opacity: 0.58 + pulse * 0.2, scale: 0.98 + pulse * 0.06 };
-    }
-    case 'recovery':
-      return { opacity: 0.42, scale: 1.04 };
-    case 'none':
-    default:
-      return { opacity: 0.7, scale: 1 };
-  }
-}
-
-function resolveIndicatorFlash(
-  player: PlayerRenderSnapshot,
-  id: ActionReadabilityId,
-): number {
-  switch (id) {
-    case 'launch':
-      return THREE.MathUtils.clamp(player.launchFlash / 0.24, 0, 1);
-    case 'special':
-      return THREE.MathUtils.clamp(player.specialFlash / 0.16, 0, 1);
-    case 'launch_break':
-      return THREE.MathUtils.clamp(player.breakFlash / 0.28, 0, 1);
-    case 'dunk':
-      return THREE.MathUtils.clamp(player.dunkFlash / 0.24, 0, 1);
-    case 'parry':
-      return THREE.MathUtils.clamp(player.parryFlash / 0.2, 0, 1);
-    case 'boost':
-    case 'super_boost':
-    default:
-      return 0;
-  }
-}
-
-function updatePlayerIndicators(context: SceneContext, snapshot: RenderSnapshot): void {
+export function updatePlayerIndicators(context: Pick<SceneContext, 'playerIndicators'>, snapshot: RenderSnapshot): void {
   const playerIds: PlayerId[] = ['P1', 'P2'];
   for (const playerId of playerIds) {
     const player = snapshot.players[playerId];
@@ -241,23 +193,22 @@ function updatePlayerIndicators(context: SceneContext, snapshot: RenderSnapshot)
       indicator.visible = false;
     }
 
-    const action = resolvePlayerActionReadability(player);
-    if (!action) {
+    const presentation = resolvePlayerIndicatorPresentation(player, snapshot.gameTime);
+    if (!presentation) {
       continue;
     }
 
-    const id = action.definition.id;
+    const id = presentation.indicatorId;
     const indicator = indicators[id];
-    const pulse = resolveIndicatorPulse(action.phase, snapshot.gameTime);
-    const flash = resolveIndicatorFlash(player, id);
-    const [baseRotation, rotationSpeed] = indicator.userData.motion as [number, number];
+    const [baseRotation] = indicator.userData.motion as [number, number];
     setIndicatorState(
       indicator,
       player.pos.x,
       player.pos.y,
-      pulse.opacity + flash * 0.08,
-      pulse.scale + flash * 0.12,
-      baseRotation + snapshot.gameTime * rotationSpeed,
+      presentation.opacity,
+      presentation.scale,
+      baseRotation,
+      presentation.color,
     );
   }
 }

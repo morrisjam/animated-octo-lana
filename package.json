@@ -72,6 +72,7 @@
     "alpha:local-turn-integration": "npm run smoke:local-alpha-turn-integration --workspace @gravity-well/api",
     "api:deploy:drain-gate": "npm run deploy:drain-gate --workspace @gravity-well/api",
     "api:deploy:health-gate": "npm run deploy:health-gate --workspace @gravity-well/api",
+    "release:public-check": "npm run release:public-check --workspace @gravity-well/api --",
     "alpha:config-audit": "npm run alpha:config-audit --workspace @gravity-well/api --",
     "db:up": "docker compose up -d postgres redis",
     "db:down": "docker compose down",

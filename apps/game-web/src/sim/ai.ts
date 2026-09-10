@@ -1,4 +1,5 @@
 import { resolveCharacterBalanceConfig } from './characterBalance';
+import { canInterceptFinish, finishChaseInput } from './aiFinish';
 import { ARENA_RADIUS } from './constants';
 import { fingerprintDeterministicValue } from './fingerprint';
 import { framesToSeconds, secondsToFrames } from './moveData';
@@ -7,7 +8,7 @@ import type { FrameInput, GameState, PlayerFrameInput, PlayerId, PlayerState } f
 
 export type AiDifficultyId = 'rookie' | 'cadet' | 'veteran' | 'ace';
 
-export const AI_POLICY_REVISION = 'flow-v25';
+export const AI_POLICY_REVISION = 'flow-v26';
 export const AI_RECOVERY_POLICY_IDS = ['legacy', 'spacing', 'evasive'] as const;
 export type AiRecoveryPolicyId = (typeof AI_RECOVERY_POLICY_IDS)[number];
 export const DEFAULT_AI_RECOVERY_POLICY: AiRecoveryPolicyId = 'legacy';
@@ -53,6 +54,7 @@ export interface AiBehaviorTuning {
   postRecoveryDefensiveSpecialChance: number;
   postRecoveryThreatParryChance: number;
   committedLaunchGuardChance: number;
+  /** @deprecated Retained for replay/draft compatibility; flow-v26 uses a timing forecast. */
   finishPursuitReachScale: number;
   repositionWeightScale: number;
   exchangeRepositionWeightScale: number;
@@ -883,7 +885,11 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     packagePostControlSpacingFrames,
   );
   const opponentNearDepleted = opponent.fuel <= opponent.maxFuel * 0.08;
-  const finishOpportunity = opponent.helpless > 0 && opponent.fuel <= 0;
+  const finishOpportunity = opponent.fuel <= 0 && (
+    opponent.helpless > 0
+    || Math.max(opponent.endLag, opponent.stunned)
+      >= framesToSeconds(playerMoves.dunk.startupFrames + 1)
+  );
   const targetSpeed = Math.hypot(opponent.vel.x, opponent.vel.y);
   const separationSpeed = distance > 0.001
     ? ((opponent.vel.x - player.vel.x) * deltaX + (opponent.vel.y - player.vel.y) * deltaY) / distance
@@ -893,13 +899,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   const dunkStartupSeconds = framesToSeconds(playerMoves.dunk.startupFrames);
   const authoredPursuitReach = playerMoves.dunk.startupPursuitSpeed * dunkStartupSeconds;
   const standardPursuitReach = Math.min(8, authoredPursuitReach * 0.25);
-  const finishPursuitReach = behaviorTuning.finishPursuitReachScale >= 0.25
-    ? standardPursuitReach
-      + authoredPursuitReach * (behaviorTuning.finishPursuitReachScale - 0.25)
-    : standardPursuitReach * (behaviorTuning.finishPursuitReachScale / 0.25);
-  const dunkCommitRange = playerMoves.dunk.hitRange + 0.8 + (
-    finishOpportunity ? finishPursuitReach : standardPursuitReach
-  );
+  const dunkCommitRange = playerMoves.dunk.hitRange + 0.8 + standardPursuitReach;
   const playerHasControl = player.helpless <= 0
     && player.stunned <= 0
     && player.recovering <= 0
@@ -907,10 +907,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
   const canChooseTacticalAction = playerHasControl
     && player.endLag <= 0
     && !hasAttackCommitment(player);
-  const dunkCommitReady = canChooseTacticalAction
+  let dunkCommitReady = canChooseTacticalAction
     && player.cool.dunk <= 0
-    && opponent.helpless > 0
-    && distance < dunkCommitRange
+    && (opponent.helpless > 0 || finishOpportunity)
+    && (finishOpportunity || distance < dunkCommitRange)
     && (
       finishOpportunity
       || (
@@ -1429,11 +1429,18 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && playerHasControl
     && opponent.helpless <= 0
     && opponent.recovering <= 0;
+  // The automatic defensive read starts once recovery permits effective steering.
+  if (effectivePostControlSteeringFrames === 0 && playerHasControl && player.endLag > 0) {
+    postControlSteeringFramesRemaining = controller.postControlSteeringFramesRemaining ?? 0;
+  }
   const postControlSteeringActive = postControlSteeringFramesRemaining > 0
     && !postRecoveryDecisionActive
     && playerHasControl
     && opponent.helpless <= 0
     && opponent.recovering <= 0
+    && (effectivePostControlSteeringFrames > 0 || (
+      !finishOpportunity && (!opponentOpen || distance > pressureDistance + profile.riskAppetite * 1.4)
+    ))
     && !state.winner;
   const tacticalRepositionActive = tacticalRepositionFramesRemaining > 0
     && playerHasNeutralControl
@@ -1511,7 +1518,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     const centerBias = centerDistance > ARENA_RADIUS * 0.72 ? 0.72 : 0;
     input.moveX = clampAxis(dirX * rangeBias + tangentX * 0.94 + toCenterX * centerBias);
     input.moveY = clampAxis(dirY * rangeBias + tangentY * 0.94 + toCenterY * centerBias);
-  } else if (opponent.helpless > 0) {
+  } else if (opponent.helpless > 0 || finishOpportunity) {
     movementIntent = 'finish_chase';
     input.moveX = clampAxis(chaseDirX * 0.96 + toCenterX * 0.08);
     input.moveY = clampAxis(chaseDirY * 0.96 + toCenterY * 0.08);
@@ -1633,6 +1640,26 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     input.boost = false;
     input.superBoost = false;
   }
+
+  if (playerHasControl && opponent.fuel <= 0 && (
+    (finishOpportunity && movementIntent === 'finish_chase')
+    || player.dunkStartup > 0 || player.dunkActive > 0
+  )) {
+    movementIntent = 'finish_chase';
+    Object.assign(input, finishChaseInput(state, playerId,
+      superBoostRecommitFrames <= 0 && superBoostStartsSinceTacticalAction < 2));
+  }
+  if (dunkCommitReady && finishOpportunity) {
+    dunkCommitReady = canInterceptFinish(state, playerId, input);
+  }
+  const unsafePostControlDash = postControlFirstChoiceFramesRemaining > 0
+    && distance <= 24
+    && ((opponentHasNeutralControl && opponent.cool.launch <= 0) || opponentLaunchCommitted)
+    && opponent.endLag <= 0 && opponent.stunned <= 0
+    && !finishOpportunity
+    && input.moveX * dirX + input.moveY * dirY > 0.05
+    && specialMove.behaviorId === 'special.movement_dash.v1'
+    && player.cool.special <= 0 && player.fuel >= specialFuelCost;
 
   let naturalRecoveryImminent = false;
   let urgentBreak = false;
@@ -1805,6 +1832,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       && (!postControlSteeringActive || opponentLaunchThreatening);
     const movementDashSuppressed = (
       postControlSteeringActive
+      || unsafePostControlDash
       || postControlChaseLockActive
       || postControlCounterstepDecisionWindow
     ) && specialMove.behaviorId === 'special.movement_dash.v1';
@@ -1907,6 +1935,13 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
         + parryWeight
         + repositionWeight
         + exchangeRepositionPassWeight;
+
+      // A safety veto must not reroll the following reaction/error decisions.
+      // The dash would otherwise consume this choice sample even as the sole candidate.
+      if (totalWeight <= 0 && unsafePostControlDash && profile.actionWeights.special > 0
+        && (!postControlRepeatDashPending || behaviorTuning.postControlRepeatDashWeightScale > 0)) {
+        rngState = nextAiRoll(rngState).rngState;
+      }
 
       if (totalWeight > 0) {
         const pickSample = nextAiRoll(rngState);
@@ -2146,6 +2181,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && !(
       (
         postControlSteeringActive
+        || unsafePostControlDash
         || postControlChaseLockActive
         || postControlCounterstepDecisionWindow
       )
@@ -2182,6 +2218,7 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
       ? 'insufficient_fuel'
       : (
         postControlSteeringActive
+        || unsafePostControlDash
         || postControlChaseLockActive
         || postControlCounterstepDecisionWindow
       )
@@ -2190,12 +2227,16 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
           ? 'post_control_chase_lock_dash_suppressed'
           : postControlCounterstepDecisionWindow
             ? 'post_control_counterstep_dash_suppressed'
-            : 'post_control_dash_suppressed'
+            : postControlSteeringActive
+              ? 'post_control_dash_suppressed'
+              : 'post_control_unsafe_inward_dash'
       : 'unsupported_context';
   const dunkUnavailableReason = player.cool.dunk > 0
     ? 'cooldown'
     : opponent.helpless <= 0
       ? 'target_not_helpless'
+      : finishOpportunity
+        ? 'no_safe_intercept'
       : distance >= dunkCommitRange
         ? 'out_of_range'
         : 'target_moving_too_fast';
@@ -2251,6 +2292,10 @@ export function tickAiController(state: GameState, playerId: PlayerId, controlle
     && selectedAction === 'special'
     && specialMove.behaviorId === 'special.movement_dash.v1';
   if (postControlFirstChoiceFramesRemaining > 0 && selectedAction !== null) {
+    if (unsafePostControlDash && selectedAction === 'parry') {
+      postControlSteeringFramesRemaining = playerMoves.parry.activeFrames
+        + playerMoves.parry.counterStunFrames + profile.reactionDelayFrames;
+    }
     lastPostControlFirstChoiceWasDash = selectedAction === 'special'
       && specialMove.behaviorId === 'special.movement_dash.v1';
     postControlFirstChoiceFramesRemaining = 0;

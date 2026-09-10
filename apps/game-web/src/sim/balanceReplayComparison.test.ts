@@ -95,7 +95,7 @@ describe('balance replay comparison', () => {
   it('pairs unequal terminal recordings and retains their full tails and finish outcomes', () => {
     const baseline = recordFinish(1);
     const candidate = recordFinish(60);
-    expect(candidate.inputTimeline.length).toBeLessThan(baseline.inputTimeline.length);
+    expect(candidate.inputTimeline.length).not.toBe(baseline.inputTimeline.length);
     const comparison = attachBalanceReplayCandidate(createBalanceReplayComparison(baseline), candidate, [{
       scope: 'character', characterId: 'vanguard', path: 'moves.dunk.startupFrames',
       baselineValue: 1, candidateValue: 60, delta: 59,
@@ -117,8 +117,11 @@ describe('balance replay comparison', () => {
   });
 
   it('allows an unfinished longer run, but rejects an unfinished shorter capture', () => {
-    const terminal = recordFinish(60);
-    const longer = recordFinish(1);
+    // Startup changes also change AI commitment timing; compare recorded lengths,
+    // not an assumed ordering of two adaptive policies.
+    const [terminal, longer] = [recordFinish(60), recordFinish(1)]
+      .sort((a, b) => a.inputTimeline.length - b.inputTimeline.length);
+    expect(longer.inputTimeline.length).toBeGreaterThan(terminal.inputTimeline.length + 1);
     const truncate = (payload: ReplayPayload, frames: number): ReplayPayload => ({
       ...payload,
       inputTimeline: payload.inputTimeline.slice(0, frames),

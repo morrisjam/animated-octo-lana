@@ -260,7 +260,6 @@ export const AI_BEHAVIOR_TUNING_FIELDS: readonly AiBehaviorTuningField[] = [
   { key: 'postRecoveryDefensiveSpecialChance', section: 'Commitment and defense', label: 'Post-Control Defensive Special Chance', step: 0.05, min: 0, max: 1 },
   { key: 'postRecoveryThreatParryChance', section: 'Commitment and defense', label: 'Post-Control Threat Parry Chance', step: 0.05, min: 0, max: 1 },
   { key: 'committedLaunchGuardChance', section: 'Commitment and defense', label: 'Committed Launch Guard Chance', step: 0.05, min: 0, max: 1 },
-  { key: 'finishPursuitReachScale', section: 'Pursuit and spacing', label: 'Finish Dunk Pursuit Reach Scale', step: 0.05, min: 0, max: 2 },
   { key: 'repositionWeightScale', section: 'Pursuit and spacing', label: 'Tactical Reposition Weight', step: 0.05, min: 0, max: 4 },
   { key: 'exchangeRepositionWeightScale', section: 'Pursuit and spacing', label: 'Between-Exchange Reposition Weight', step: 0.05, min: 0, max: 4 },
   { key: 'launchWeightScale', section: 'Commitment and defense', label: 'Launch Commitment Weight', step: 0.05, min: 0, max: 4 },
@@ -2147,7 +2146,7 @@ export class PauseMenu {
 
     const intro = document.createElement('p');
     intro.className = 'balance-lab-intro';
-    intro.textContent = 'Stage local AI-vs-AI or Balance Sparring pursuit, spacing, and commitment changes. The values shown on a clean draft are the shipped neutral behavior; experimental controls may default to zero.';
+    intro.textContent = 'Stage local AI-vs-AI or Balance Sparring pursuit, spacing, and commitment changes. The values shown on a clean draft are the shipped neutral behavior; experimental controls may default to zero. Finish pursuit now uses authored move timing; the legacy finish-reach multiplier is preserved in imports but has no effect.';
 
     const groups = document.createElement('div');
     groups.className = 'balance-global-groups';

@@ -1,9 +1,10 @@
 import { createInputBindingStore } from './input/bindings';
 import { createEmptyPlayerInput } from './input/frame';
 import { getOnlineLocalInput } from './net/onlineLocalInput';
+import { canAdvanceOnlineSimulation } from './net/onlinePredictionWindow';
 import { createLazyRankedQueueClient } from './net/lazyRankedQueueClient';
 import { toCombatAudioEventType } from './audio/combatEventMapping';
-import { createCombatReadabilityTracker } from './view/vfx/readabilityTracker';
+import { createLazyCombatReadabilityTracker } from './view/vfx/lazyReadabilityTracker';
 import { clearCombatVfxRuntime, emitCombatVfxEvents } from './view/vfx/runtime';
 import { createLazyGameplayInput } from './input/lazyGameplay';
 import type { BrowserControllerRuntime } from './view/controllerUi/browserRuntime';
@@ -4103,7 +4104,7 @@ function buildOfflineAiControllersForCurrentMode(): Partial<Record<PlayerId, AiC
   };
 }
 
-const combatReadabilityTracker = createCombatReadabilityTracker();
+const combatReadabilityTracker = createLazyCombatReadabilityTracker();
 
 function resetCombatPresentation(): void {
   combatReadabilityTracker.reset();
@@ -6781,6 +6782,14 @@ function tick(nowMs: number): void {
 
   if (!pauseMenu.isPaused() && appPhase === 'playing' && !onlineSimulationPaused) {
     while (accumulator >= fixedDt) {
+      if (onlineMatchContext && !canAdvanceOnlineSimulation(
+        simulationFrame, onlineMatchContext.inputPump.getMutuallyConfirmedThrough(),
+      )) {
+        // Network polling and acknowledgements continue while simulation waits.
+        // Do not build an unbounded speculative tail or later replay it in a burst.
+        accumulator = 0;
+        break;
+      }
       const frameInputRaw = input.getFrameInput();
       if (onlineMatchContext) {
         let localInput: PlayerFrameInput;
@@ -6816,6 +6825,7 @@ function tick(nowMs: number): void {
             onlineMatchContext.roundEpoch,
             simulationFrame,
             localInput,
+            onlineMatchContext.replayRecorder.currentRoundFrameCount - 1,
           );
         } catch (error) {
           interruptOnlineMatch(
@@ -7140,7 +7150,11 @@ function tick(nowMs: number): void {
   hud.setMatchTelemetryVisible(showMatchTelemetry);
   hud.updateInputHistory(showInputHistory ? buildInputHistoryView(inputTimeline, 10) : null);
   hud.updateMatchTelemetry(showMatchTelemetry ? matchTelemetry.toSummary() : null);
-  hud.update(snapshot);
+  const waitingForPeerInput = appPhase === 'playing' && onlineMatchContext
+    && !canAdvanceOnlineSimulation(simulationFrame, onlineMatchContext.inputPump.getMutuallyConfirmedThrough());
+  hud.update(waitingForPeerInput
+    ? { ...snapshot, statusText: 'Waiting for peer inputs. Simulation paused; connection recovery remains active.' }
+    : snapshot);
   updateMatchInfo();
   updateOnlineDiagnosticsOverlay();
   renderOnlineBootstrapPanel();

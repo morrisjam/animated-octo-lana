@@ -822,7 +822,7 @@ describe('sim AI behaviour framework', () => {
     expect(tick.next.postControlChaseLockFramesRemaining).toBe(0);
   });
 
-  test('scales only a repeated packaged movement dash after close control return', () => {
+  test('vetoes an unsafe dash before applying its repeat-choice weight', () => {
     const state = createInitialState({
       seed: 127,
       loadout: { P1: 'duelist', P2: 'vanguard' },
@@ -851,13 +851,13 @@ describe('sim AI behaviour framework', () => {
     expect(tick.input.special).toBe(false);
     expect(tick.input.moveX).toBeGreaterThan(0);
     expect(tick.decision.candidates.special).toMatchObject({
-      eligible: true,
+      eligible: false,
       weight: 0,
-      reason: 'ready',
+      reason: 'post_control_unsafe_inward_dash',
     });
     expect(tick.diagnostics).toMatchObject({
       postControlRepeatDashPending: true,
-      postControlRepeatDashWeightApplied: true,
+      postControlRepeatDashWeightApplied: false,
       postControlRepeatDashConsumed: true,
       postControlRepeatDashSelected: false,
     });
@@ -865,13 +865,14 @@ describe('sim AI behaviour framework', () => {
     expect(tick.next.lastPostControlFirstChoiceWasDash).toBe(false);
   });
 
-  test('leaves a first movement-dash choice and the neutral scale behavior-compatible', () => {
+  test('preserves a genuine punish dash regardless of repeat-choice history', () => {
     const state = createInitialState({
       seed: 128,
       loadout: { P1: 'duelist', P2: 'vanguard' },
     });
     state.players.P1.pos = { x: -4, y: 0 };
     state.players.P2.pos = { x: 4, y: 0 };
+    state.players.P2.endLag = framesToSeconds(30);
     const firstChoiceTuning = {
       ...createDefaultAiBehaviorTuning(),
       errorRateScale: 0,
@@ -958,7 +959,7 @@ describe('sim AI behaviour framework', () => {
       decisionLockFrames: 0,
     });
     expect(ready.input.launch).toBe(true);
-    expect(ready.diagnostics.postControlRepeatDashWeightApplied).toBe(true);
+    expect(ready.diagnostics.postControlRepeatDashWeightApplied).toBe(false);
     expect(ready.diagnostics.postControlRepeatDashConsumed).toBe(true);
   });
 
@@ -992,7 +993,7 @@ describe('sim AI behaviour framework', () => {
     expect(tick.input.special).toBe(false);
     expect(tick.diagnostics).toMatchObject({
       postControlRepeatDashPending: true,
-      postControlRepeatDashWeightApplied: true,
+      postControlRepeatDashWeightApplied: false,
       postControlRepeatDashConsumed: true,
       postControlRepeatDashSelected: false,
     });
@@ -1703,8 +1704,11 @@ describe('sim AI behaviour framework', () => {
 
     state.players.P2.pos = { x: 6, y: 0 };
     state.players.P2.vel = { x: 0, y: 0 };
-    const finish = tickAiController(state, 'P1', chase.next);
-    expect(finish.input.dunk).toBe(true);
+    const finish = tickAiController(state, 'P1', {
+      ...chase.next, reactionFramesRemaining: 0, decisionLockFrames: 0,
+    });
+    expect(finish.input.dunk).toBe(false);
+    expect(finish.decision.candidates.dunk.reason).toBe('no_safe_intercept');
     expect(finish.input.launch).toBe(false);
     expect(finish.input.special).toBe(false);
   });
@@ -1726,7 +1730,7 @@ describe('sim AI behaviour framework', () => {
     expect(tick.input.launch).toBe(false);
   });
 
-  test('AI uses authored startup pursuit reach to commit before raw dunk hit range', () => {
+  test('AI rejects a stationary target that releases before authored startup', () => {
     const state = createInitialState({ seed: 454 });
     state.players.P1.pos = { x: 0, y: 0 };
     state.players.P2.pos = { x: 14, y: 0 };
@@ -1741,12 +1745,13 @@ describe('sim AI behaviour framework', () => {
 
     const tick = tickAiController(state, 'P1', controller);
 
-    expect(tick.input.dunk).toBe(true);
+    expect(tick.input.dunk).toBe(false);
+    expect(tick.decision.candidates.dunk.reason).toBe('no_safe_intercept');
     expect(tick.input.launch).toBe(false);
     expect(tick.input.special).toBe(false);
   });
 
-  test('finish pursuit reach is tunable without changing the neutral commit range', () => {
+  test('a legacy reach multiplier cannot override an unsafe finish forecast', () => {
     const state = createInitialState({ seed: 455 });
     state.players.P1.pos = { x: 0, y: 0 };
     state.players.P2.pos = { x: 40, y: 0 };
@@ -1781,10 +1786,10 @@ describe('sim AI behaviour framework', () => {
     );
 
     expect(baseline.input.dunk).toBe(false);
-    expect(baseline.decision.candidates.dunk.reason).toBe('out_of_range');
-    expect(extended.input.dunk).toBe(true);
+    expect(baseline.decision.candidates.dunk.reason).toBe('no_safe_intercept');
+    expect(extended.input.dunk).toBe(false);
     expect(extended.input.launch).toBe(false);
-    expect(extended.decision.selectedReason).toBe('zero_fuel_finish_window');
+    expect(extended.decision.candidates.dunk.reason).toBe('no_safe_intercept');
   });
 
   test('AI treats low fuel as setup rather than an exact-zero finishing window', () => {

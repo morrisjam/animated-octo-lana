@@ -7,6 +7,7 @@ import {
   type RankedInputCommitmentSubmission,
 } from './rankedInputCommitment';
 import type { PlayerFrameInput } from './types';
+import { encodeRankedPlayerInput } from './rankedProof';
 
 const SESSION_ID = '11111111-1111-4111-8111-111111111111';
 const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222';
@@ -131,6 +132,69 @@ describe('ranked input commitments', () => {
       recorder.recordInput(0, frame, inputForFrame(frame));
     }
     expect(() => recorder.finalizeRound(0, 119)).toThrow(/reached committed frame/);
+  });
+
+  test('keeps a deep speculative tail unsealed until the canonical round end is known', async () => {
+    const submissions: RankedInputCommitmentSubmission[] = [];
+    const recorder = createRecorder(submissions);
+    recorder.startRound(0);
+    // CI generated 5349 inputs before correcting the winner back to frame 4710.
+    for (let frame = 0; frame < 5349; frame += 1) {
+      recorder.recordInput(0, frame, inputForFrame(frame), Math.max(-1, frame - 654));
+    }
+    recorder.finalizeRound(0, 4710);
+    await recorder.flush();
+    expect(submissions.at(-1)).toMatchObject({ endFrame: 4710, roundFinal: true });
+    expect(submissions.every((chunk) => chunk.endFrame <= 4710)).toBe(true);
+    expect(recorder.getDiagnostics().committedFrames).toBe(4711);
+    for (const chunk of submissions) {
+      const inputs = Array.from({ length: chunk.endFrame - chunk.startFrame + 1 }, (_, offset) => {
+        const input = inputForFrame(chunk.startFrame + offset);
+        return encodeRankedPlayerInput(input);
+      });
+      expect(chunk.chunkDigest).toBe(await digestRankedInputCommitmentChunk(chunk, inputs));
+    }
+  });
+
+  test('does not seal an exact chunk boundary that may be the canonical winning frame', async () => {
+    const submissions: RankedInputCommitmentSubmission[] = [];
+    const recorder = createRecorder(submissions);
+    recorder.startRound(0);
+    for (let frame = 0; frame < 1000; frame += 1) {
+      recorder.recordInput(0, frame, inputForFrame(frame), Math.min(119, frame - 1));
+    }
+    recorder.finalizeRound(0, 119);
+    await recorder.flush();
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]).toMatchObject({ startFrame: 0, endFrame: 119, roundFinal: true });
+    recorder.startRound(1);
+    recorder.recordInput(1, 0, inputForFrame(0), -1);
+    recorder.finalizeRound(1, 0);
+    await recorder.flush();
+    expect(submissions[1]).toMatchObject({ epoch: 1, startFrame: 0, endFrame: 0, roundFinal: true });
+  });
+
+  test('catches up live chunk submission when a stalled canonical prefix advances', async () => {
+    const submissions: RankedInputCommitmentSubmission[] = [];
+    const recorder = createRecorder(submissions);
+    recorder.startRound(0);
+    for (let frame = 0; frame < 1000; frame += 1) recorder.recordInput(0, frame, inputForFrame(frame), -1);
+    recorder.recordInput(0, 1000, inputForFrame(1000), 999);
+    expect(recorder.getDiagnostics().queuedChunks).toBe(7);
+    recorder.finalizeRound(0, 1000);
+    await recorder.flush();
+    expect(submissions.map((chunk) => chunk.startFrame)).toEqual([0, 120, 240, 360, 480, 600, 720, 840, 960]);
+    expect(submissions.at(-1)).toMatchObject({ endFrame: 1000, roundFinal: true });
+  });
+
+  test('rejects invalid canonical watermarks without capturing the input', () => {
+    const recorder = createRecorder([]);
+    recorder.startRound(0);
+    for (const watermark of [NaN, Infinity, -2, 0, 0.5]) {
+      expect(() => recorder.recordInput(0, 0, inputForFrame(0), watermark)).toThrow(/canonicalThrough/);
+    }
+    recorder.recordInput(0, 0, inputForFrame(0), -1);
+    recorder.finalizeRound(0, 0);
   });
 
   test('rejects non-contiguous local frame capture', () => {

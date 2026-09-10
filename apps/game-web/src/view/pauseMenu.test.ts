@@ -58,14 +58,16 @@ function createOrdinaryBoostFlow(): NonNullable<BalanceLabFlowModel['ordinaryBoo
 }
 
 describe('pause menu AI behavior controls', () => {
-  test('exposes every numeric AI behavior tuning field exactly once', () => {
+  test('exposes every active numeric AI behavior tuning field exactly once', () => {
     const defaults = createDefaultAiBehaviorTuning();
     const expectedKeys = Object.keys(defaults)
-      .filter((key) => key !== 'schemaVersion')
+      .filter((key) => key !== 'schemaVersion' && key !== 'finishPursuitReachScale')
       .sort();
     const actualKeys = AI_BEHAVIOR_TUNING_FIELDS.map((field) => field.key).sort();
 
     expect(actualKeys).toEqual(expectedKeys);
+    expect(actualKeys).not.toContain('finishPursuitReachScale');
+    expect(defaults.finishPursuitReachScale).toBe(0.7);
     expect(new Set(actualKeys).size).toBe(actualKeys.length);
     for (const field of AI_BEHAVIOR_TUNING_FIELDS) {
       expect(defaults[field.key]).toBeGreaterThanOrEqual(field.min);

@@ -250,7 +250,12 @@ export class RankedInputCommitmentRecorder {
     this.pendingRound = { epoch, startFrame: 0, inputs: [] };
   }
 
-  public recordInput(epoch: number, frame: number, input: PlayerFrameInput): void {
+  public recordInput(
+    epoch: number,
+    frame: number,
+    input: PlayerFrameInput,
+    canonicalThrough?: number,
+  ): void {
     if (this.failure) {
       throw this.failure;
     }
@@ -262,9 +267,16 @@ export class RankedInputCommitmentRecorder {
     if (frame !== expectedFrame) {
       throw new Error(`Ranked input commitment expected frame ${expectedFrame}, received ${frame}.`);
     }
-    if (
+    if (canonicalThrough !== undefined && (
+      !Number.isSafeInteger(canonicalThrough) || canonicalThrough < -1 || canonicalThrough >= frame
+    )) throw new TypeError('canonicalThrough must identify an already simulated frame or -1.');
+    while (
       round.inputs.length
-      === RANKED_INPUT_COMMITMENT_MAX_FRAMES + RANKED_INPUT_COMMITMENT_ROLLBACK_GUARD_FRAMES
+      >= RANKED_INPUT_COMMITMENT_MAX_FRAMES + RANKED_INPUT_COMMITMENT_ROLLBACK_GUARD_FRAMES
+      // Preserve the latest canonical frame for a possible round-final chunk.
+      // A fixed speculative guard alone cannot bound delayed terminal corrections.
+      && (canonicalThrough === undefined
+        || round.startFrame + RANKED_INPUT_COMMITMENT_MAX_FRAMES - 1 < canonicalThrough)
     ) {
       this.queueInputPrefix(RANKED_INPUT_COMMITMENT_MAX_FRAMES, false);
     }

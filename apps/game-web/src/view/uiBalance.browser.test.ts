@@ -243,7 +243,14 @@ describe.skipIf(!executablePath)('UI balance browser regressions', () => {
         }
         return { state, replay: recorder.buildPayload(), telemetry: telemetry.toSummary() };
       };
-      const samples = [record(1), record(60)];
+      // Adaptive decisions can reverse which startup setting finishes first.
+      // This UI regression needs a terminal baseline and a shorter terminal candidate.
+      const samples = [record(1), record(60)]
+        .sort((a, b) => b.replay.inputTimeline.length - a.replay.inputTimeline.length);
+      if (samples.some((sample) => !sample.state.winner)
+        || samples[0].replay.inputTimeline.length <= samples[1].replay.inputTimeline.length) {
+        throw new Error('Expected two completed recordings with distinct lengths.');
+      }
       let sampleIndex = 0;
       const harness = window.uiBalanceTest;
       harness.advanceSample = () => { sampleIndex += 1; };
@@ -264,6 +271,8 @@ describe.skipIf(!executablePath)('UI balance browser regressions', () => {
       harness.pause!.openBalanceLab();
     });
     await page.getByRole('button', { name: 'Capture Run As Baseline', exact: true }).click();
+    expect(await page.locator('[data-ai-behavior-key="finishPursuitReachScale"]').count()).toBe(0);
+    expect(await page.locator('.balance-ai-editor').textContent()).toContain('preserved in imports but has no effect');
     await page.evaluate(() => {
       window.uiBalanceTest.advanceSample!();
       window.uiBalanceTest.pause!.openBalanceLab();

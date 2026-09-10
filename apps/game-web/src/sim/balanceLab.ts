@@ -3646,7 +3646,7 @@ function buildBalanceLabLoopStages(
         'dunkRecoveryDurationSeconds',
         'dunkRecoveryMoveSpeed',
       ],
-      relatedAiBehavior: ['finishPursuitReachScale', 'dunkWeightScale'],
+      relatedAiBehavior: ['dunkWeightScale'],
       relatedCharacterControls: ['launch', 'dunk'],
       relatedPlayerIds: zeroFuelPlayers,
     },
@@ -4841,7 +4841,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       severity: 'critical',
       title: 'Zero-fuel stall',
       detail: 'A fighter has spent at least 30% of the round empty, but neither side has converted a dunk. Review chase, launch release, and finish windows.',
-      relatedAiBehavior: ['launchWeightScale', 'finishPursuitReachScale', 'dunkWeightScale'],
+      relatedAiBehavior: ['launchWeightScale', 'dunkWeightScale'],
       relatedCharacterControls: ['launch', 'dunk'],
       relatedPlayerIds: zeroFuelPlayers,
     });
@@ -4855,7 +4855,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       severity: 'warning',
       title: 'Launches do not become finishes',
       detail: `${totalLaunchHits} launch hits have connected without a single accepted dunk start. Review finish recognition, chase spacing, and dunk commitment.`,
-      relatedAiBehavior: ['finishPursuitReachScale', 'dunkWeightScale', 'reactionDelayScale'],
+      relatedAiBehavior: ['dunkWeightScale', 'reactionDelayScale'],
       relatedCharacterControls: ['launch', 'dunk'],
       relatedPlayerIds: launchHitPlayers,
     });
@@ -4867,7 +4867,7 @@ export function buildBalanceLabFlowModel(summary: MatchTelemetrySummary): Balanc
       severity: 'critical',
       title: 'Round finish risk',
       detail: 'No dunk has connected after 45 seconds. The loop is generating activity without progressing toward its win condition.',
-      relatedAiBehavior: ['launchWeightScale', 'finishPursuitReachScale', 'dunkWeightScale'],
+      relatedAiBehavior: ['launchWeightScale', 'dunkWeightScale'],
       relatedCharacterControls: ['launch', 'dunk'],
       relatedPlayerIds: ['P1', 'P2'],
     });

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { CameraZoomState } from './cameraTracking';
 import type { PlayersById, RenderSnapshot } from '../sim/types';
 import { ARENA_RADIUS } from '../sim/constants';
 import { DEFAULT_CHARACTER_LOADOUT } from '../sim/characters';
@@ -60,6 +61,8 @@ export interface SceneContext {
   lookAtTarget: THREE.Vector3;
   cameraPlayerTracks: PlayersById<THREE.Vector2>;
   launchCameraActive: boolean;
+  cameraZoomState: CameraZoomState | null;
+  cameraRenderedPitchDegrees: number;
   cameraPitchDegrees: number;
   cameraLaunchPitchBoostDegrees: number;
   cameraLookAtYOffset: number;
@@ -856,6 +859,8 @@ export function createScene(canvas: HTMLCanvasElement, options?: SceneOptions): 
       P2: new THREE.Vector2(30, -6),
     },
     launchCameraActive: false,
+    cameraZoomState: null,
+    cameraRenderedPitchDegrees: 8,
     cameraPitchDegrees: 8,
     cameraLaunchPitchBoostDegrees: 1.5,
     cameraLookAtYOffset: 2.2,

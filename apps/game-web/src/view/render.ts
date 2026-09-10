@@ -28,7 +28,13 @@ import { disposeStageModelRuntime } from './stageModelRuntime';
 import {
   resolvePlayerIndicatorPresentation,
 } from './actionReadability';
-import { cameraDampingAlpha, fitCombatCameraDistance, syncCameraTrackToWorld } from './cameraTracking';
+import {
+  advanceCameraZoom,
+  cameraDampingAlpha,
+  fitCombatCameraDistance,
+  forecastCameraBoundary,
+  syncCameraTrackToWorld,
+} from './cameraTracking';
 
 const LIVE_PROJECTILE_IDS = new Set<number>();
 
@@ -291,47 +297,85 @@ function updateProjectileMeshes(context: SceneContext, snapshot: RenderSnapshot)
 // Prefer close combat framing, but let the containment fit pull back as far
 // as necessary for both fighters and the current viewport.
 const NEUTRAL_CAMERA_MIN_Z = 52;
-const LAUNCH_CAMERA_MIN_Z = 60;
+export type CombatCameraContext = Pick<SceneContext,
+  'camera' | 'cameraTarget' | 'lookAtTarget' | 'cameraPlayerTracks' | 'launchCameraActive'
+  | 'cameraZoomState' | 'cameraRenderedPitchDegrees' | 'cameraPitchDegrees'
+  | 'cameraLaunchPitchBoostDegrees' | 'cameraLookAtYOffset'>;
 
-function updateCamera(context: SceneContext, snapshot: RenderSnapshot, deltaSeconds: number, reset: boolean): void {
+export function updateCamera(context: CombatCameraContext, snapshot: RenderSnapshot, deltaSeconds: number, reset: boolean): void {
   const launchActive = snapshot.players.P1.helpless > 0 || snapshot.players.P2.helpless > 0;
-  if (!launchActive && context.launchCameraActive) {
-    context.cameraPlayerTracks.P1.set(snapshot.players.P1.pos.x, snapshot.players.P1.pos.y);
-    context.cameraPlayerTracks.P2.set(snapshot.players.P2.pos.x, snapshot.players.P2.pos.y);
-  }
   context.launchCameraActive = launchActive;
+  const forecasts = (['P1', 'P2'] as const).map((id) => forecastCameraBoundary(
+    snapshot.players[id].pos,
+    context.cameraPlayerTracks[id],
+    reset ? 0 : deltaSeconds,
+    snapshot.players[id].helpless > 0 || snapshot.players[id].superBoost > 0,
+  ));
 
   syncCameraTrackToWorld(context.cameraPlayerTracks.P1, snapshot.players.P1.pos.x, snapshot.players.P1.pos.y);
   syncCameraTrackToWorld(context.cameraPlayerTracks.P2, snapshot.players.P2.pos.x, snapshot.players.P2.pos.y);
   const p1 = context.cameraPlayerTracks.P1;
   const p2 = context.cameraPlayerTracks.P2;
-  const midX = (p1.x + p2.x) * 0.5;
-  const midY = (p1.y + p2.y) * 0.5;
-  const minZ = launchActive ? LAUNCH_CAMERA_MIN_Z : NEUTRAL_CAMERA_MIN_Z;
+  let minX = Math.min(p1.x, p2.x);
+  let maxX = Math.max(p1.x, p2.x);
+  let minY = Math.min(p1.y, p2.y);
+  let maxY = Math.max(p1.y, p2.y);
+  for (const forecast of forecasts) {
+    if (!forecast) continue;
+    const weight = forecast.weight ** 2;
+    minX = Math.min(minX, minX + (forecast.destination.x - minX) * weight);
+    maxX = Math.max(maxX, maxX + (forecast.destination.x - maxX) * weight);
+    minY = Math.min(minY, minY + (forecast.destination.y - minY) * weight);
+    maxY = Math.max(maxY, maxY + (forecast.destination.y - maxY) * weight);
+  }
+  // Make room on the arrival side before the wrap; otherwise chasing the
+  // departure side forces an unnecessarily huge zoom on narrow viewports.
+  const framingX = (minX + maxX) * 0.5;
+  const framingY = (minY + maxY) * 0.5;
 
   // Stage-authored pitch changes presentation only; simulation coordinates remain strictly 2D.
-  const cameraPitchDegrees = resolveStageCameraPitchDegrees(
+  const targetPitchDegrees = resolveStageCameraPitchDegrees(
     context.cameraPitchDegrees,
     context.cameraLaunchPitchBoostDegrees,
     launchActive,
   );
+  context.cameraRenderedPitchDegrees = reset ? targetPitchDegrees
+    : context.cameraRenderedPitchDegrees + (targetPitchDegrees - context.cameraRenderedPitchDegrees)
+      * cameraDampingAlpha(deltaSeconds, 3);
+  const cameraPitchDegrees = context.cameraRenderedPitchDegrees;
   const alpha = reset ? 1 : cameraDampingAlpha(deltaSeconds);
-  context.lookAtTarget.x += (midX - context.lookAtTarget.x) * alpha;
-  context.lookAtTarget.y += (midY + context.cameraLookAtYOffset - context.lookAtTarget.y) * alpha;
+  context.lookAtTarget.x += (framingX - context.lookAtTarget.x) * alpha;
+  context.lookAtTarget.y += (framingY + context.cameraLookAtYOffset - context.lookAtTarget.y) * alpha;
   context.lookAtTarget.z = 0;
   const pitch = THREE.MathUtils.degToRad(cameraPitchDegrees);
-  // Refit around the smoothed target as well: a warp must never leave the
-  // fighters outside the frame while the camera catches up.
-  const requiredDistance = fitCombatCameraDistance({
+  const fitOptions = {
     players: [p1, p2],
     center: context.lookAtTarget,
     pitchDegrees: cameraPitchDegrees,
     verticalFovDegrees: context.camera.fov,
     aspect: context.camera.aspect,
-    minDistance: minZ / Math.cos(pitch),
+    minDistance: NEUTRAL_CAMERA_MIN_Z / Math.cos(pitch)
+      / Math.min(1, Math.max(0.1, context.camera.aspect)),
+  };
+  const combatDistance = fitCombatCameraDistance(fitOptions);
+  let desiredDistance = combatDistance;
+  for (const forecast of forecasts) {
+    if (!forecast) continue;
+    const boundaryDistance = fitCombatCameraDistance({
+      ...fitOptions,
+      players: [p1, p2, forecast.destination],
+    });
+    desiredDistance = Math.max(desiredDistance,
+      combatDistance + (boundaryDistance - combatDistance) * forecast.weight);
+  }
+  // Allow the ordinary framing inset to absorb camera lag. Only the outer
+  // safety frame forces an immediate pullback after an unexpected teleport.
+  const safetyDistance = fitCombatCameraDistance({
+    ...fitOptions, horizontalInset: 0.94, verticalInset: 0.84,
   });
-  const previousDistance = context.camera.position.distanceTo(context.lookAtTarget);
-  const distance = Math.max(requiredDistance, previousDistance + (requiredDistance - previousDistance) * alpha);
+  context.cameraZoomState = advanceCameraZoom(reset ? null : context.cameraZoomState,
+    desiredDistance, safetyDistance, deltaSeconds);
+  const distance = context.cameraZoomState.distance;
   context.cameraTarget.set(context.lookAtTarget.x,
     context.lookAtTarget.y - Math.sin(pitch) * distance, Math.cos(pitch) * distance);
   context.camera.position.copy(context.cameraTarget);
